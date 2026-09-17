@@ -1,0 +1,16 @@
+{
+  "name": "packaging-filling-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Русскоязычная PWA для журналов фасовочного участка",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test",
+    "check": "node --check src/app.js && node --check service-worker.js && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+
