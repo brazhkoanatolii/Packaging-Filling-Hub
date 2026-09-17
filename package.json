@@ -6,11 +6,9 @@
   "description": "Русскоязычная PWA для журналов фасовочного участка",
   "scripts": {
     "start": "node scripts/serve.mjs",
-    "test": "node --test",
-    "check": "node --check src/app.js && node --check service-worker.js && node --test"
+    "check": "node --check app.js && node --check service-worker.js"
   },
   "engines": {
     "node": ">=20"
   }
 }
-

@@ -37,5 +37,5 @@ npm run check
 
 Интерфейс обращается к сервисам, сервисы — к репозиториям, а репозитории — к поставщикам данных. UI не читает Google Sheets или IndexedDB напрямую. Это позволяет подключать новые журналы и заменить демонстрационный источник на защищённый корпоративный API без копирования бизнес-логики.
 
-Подробности: [docs/architecture.md](docs/architecture.md) и [docs/google-integration.md](docs/google-integration.md).
+Подробности: [ARCHITECTURE.md](ARCHITECTURE.md) и [GOOGLE-INTEGRATION.md](GOOGLE-INTEGRATION.md).
 
