@@ -108,7 +108,10 @@ function pfhV2Record_(visible, metadata) {
 }
 
 function pfhV2Sheet_() {
-  const spreadsheet = SpreadsheetApp.openById(PFH_V2_SPREADSHEET_ID);
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet || spreadsheet.getId() !== PFH_V2_SPREADSHEET_ID) {
+    throw new Error("Скрипт открыт не из рабочей таблицы журнала");
+  }
   const sheet = spreadsheet.getSheetByName(PFH_V2_SHEET_NAME);
   if (!sheet) throw new Error(`Лист «${PFH_V2_SHEET_NAME}» не найден`);
   return sheet;
