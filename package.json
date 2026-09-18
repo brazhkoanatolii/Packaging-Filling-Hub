@@ -1,16 +1,16 @@
 {
   "name": "packaging-filling-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Русскоязычная PWA для журналов фасовочного участка",
   "scripts": {
     "start": "node scripts/serve.mjs",
+    "start:gateway": "node server/google-workspace-gateway.mjs",
     "test": "node --test",
-    "check": "node --check src/app.js && node --check service-worker.js && node --test"
+    "check": "node --check src/app.js && node --check src/providers/google-sheets-gateway-provider.js && node --check server/google-workspace-gateway.mjs && node --check service-worker.js && node --test"
   },
   "engines": {
     "node": ">=20"
   }
 }
-

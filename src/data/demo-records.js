@@ -17,7 +17,7 @@ function demo(id, date, actual, performer, note) {
     scaleName: "WTC 600 (F10)",
     nominal: 50,
     actual,
-    deviation: Number((actual - 50).toFixed(3)),
+    deviation: Number((50 - actual).toFixed(3)),
     condition: "Рабочие",
     result: Math.abs(actual - 50) <= 0.05 ? "В пределах допуска" : "Вне допуска",
     performer,
@@ -33,4 +33,3 @@ function demo(id, date, actual, performer, note) {
     source: "demo"
   };
 }
-

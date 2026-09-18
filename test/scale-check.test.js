@@ -32,6 +32,17 @@ test("нулевое значение не считается пустым", () 
   assert.equal(value.result, "Вне допуска");
 });
 
+test("отклонение считается так же, как в Google Sheets: номинал минус факт", () => {
+  const value = validateScaleCheck({
+    date: "2026-09-18",
+    scaleName: "WTC 600 (F10)",
+    actual: 49.98,
+    condition: "Рабочие",
+    performer: "Anatolii Brazhko"
+  }, journal);
+  assert.equal(value.deviation, 0.02);
+});
+
 test("исполнитель обязателен перед каждой записью", () => {
   assert.throws(() => validateScaleCheck({
     date: "2026-09-17",
@@ -50,4 +61,3 @@ test("дата формируется в часовом поясе Europe/Vilniu
   const nearMidnightUtc = new Date("2026-01-01T22:30:00.000Z");
   assert.equal(getVilniusDate(nearMidnightUtc), "2026-01-02");
 });
-

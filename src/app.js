@@ -3,6 +3,7 @@ import { formatDate, formatDateTime } from "./domain/scale-check.js";
 import { createDemoRecords } from "./data/demo-records.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { DemoGoogleSheetsProvider } from "./providers/demo-google-sheets-provider.js";
+import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
 import { JournalRepository } from "./repositories/journal-repository.js";
 import { AuthService } from "./services/auth-service.js";
 import { JournalService } from "./services/journal-service.js";
@@ -33,13 +34,20 @@ bootstrap().catch(error => renderFatalError(error));
 
 async function bootstrap() {
   store = await new IndexedDbDataProvider().init();
-  const remoteProvider = new DemoGoogleSheetsProvider(store);
+  const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store);
   shiftService = new ShiftService(store);
   journalService = new JournalService(repository, journal);
 
-  await repository.init(createDemoRecords());
+  await repository.init(remoteProvider.mode === "demo" ? createDemoRecords() : []);
+  if (navigator.onLine) {
+    try {
+      await repository.refresh();
+    } catch (error) {
+      console.warn("Источник Google пока недоступен", error);
+    }
+  }
   state.account = await authService.current();
   state.shift = await shiftService.current();
   state.demoBannerDismissed = await store.preference("demoBannerDismissed", false);
@@ -51,6 +59,16 @@ async function bootstrap() {
   startAutomaticRefresh();
   registerServiceWorker();
   if (navigator.onLine) syncRecords({ silent: true });
+}
+
+function createRemoteProvider() {
+  if (APP_CONFIG.integration.mode === "gateway") {
+    return new GoogleSheetsGatewayProvider({
+      baseUrl: APP_CONFIG.integration.gatewayBaseUrl,
+      writesEnabled: APP_CONFIG.integration.googleWritesEnabled
+    });
+  }
+  return new DemoGoogleSheetsProvider(store);
 }
 
 function bindGlobalEvents() {
@@ -237,7 +255,7 @@ function renderLogin() {
             </button>
           `).join("")}
         </div>
-        <p class="privacy-note">Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google.</p>
+        <p class="privacy-note">${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
       </section>
     </main>`;
 }
@@ -429,10 +447,10 @@ function renderSettingsPage() {
   return `
     <div class="settings-grid">
       <section class="card settings-section">
-        <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill warning">Тестовый режим</span></div>
+        <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Подключено"}</span></div>
         ${settingRow("Рабочая таблица", journal.sheetName, "Подключение подготовлено")}
         ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
-        ${settingRow("Запись в Google", "Выключена", "До контролируемой проверки")}
+        ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}
         ${settingRow("Часовой пояс", APP_CONFIG.timeZone, "Дата и время заполняются автоматически")}
       </section>
       <section class="card settings-section">
@@ -566,6 +584,7 @@ function showFormError(form, error) {
 }
 
 function renderDemoBanner() {
+  if (APP_CONFIG.integration.mode !== "demo") return "";
   if (state.demoBannerDismissed) return "";
   return `<div class="demo-banner"><span class="demo-icon">i</span><p><strong>Безопасный тестовый режим.</strong> Здесь показаны демонстрационные записи. Связь с рабочей таблицей пока выключена.</p><button data-action="dismiss-demo" aria-label="Закрыть">×</button></div>`;
 }

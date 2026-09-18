@@ -1,12 +1,15 @@
+const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
+
 export const APP_CONFIG = Object.freeze({
   name: "Фасовочный участок",
-  version: "0.1.0",
+  version: "0.2.0",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
   integration: {
-    mode: "demo",
-    googleWritesEnabled: false,
+    mode: runtimeConfig.mode === "gateway" ? "gateway" : "demo",
+    googleWritesEnabled: runtimeConfig.googleWritesEnabled === true,
+    gatewayBaseUrl: runtimeConfig.gatewayBaseUrl ?? "",
     spreadsheetId: "1An019JRwrya4wl9EtqY4zNELfRNzaq26sidhQce3Tc8",
     sheetId: 1257425673,
     sheetName: "Контроль 50г"
@@ -50,4 +53,3 @@ export const JOURNALS = Object.freeze([
     tolerance: 0.05
   }
 ]);
-

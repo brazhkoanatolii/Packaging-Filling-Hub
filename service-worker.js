@@ -1,5 +1,23 @@
-const CACHE_NAME = "packaging-filling-hub-v0.1.0";
-const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./assets/icon.svg", "./styles.css", "./app.js"];
+const CACHE_NAME = "packaging-filling-hub-v0.2.0";
+const APP_SHELL = [
+  "./",
+  "./index.html",
+  "./runtime-config.js",
+  "./manifest.webmanifest",
+  "./assets/icon.svg",
+  "./src/styles.css",
+  "./src/app.js",
+  "./src/config/app-config.js",
+  "./src/domain/scale-check.js",
+  "./src/providers/indexed-db-data-provider.js",
+  "./src/providers/demo-google-sheets-provider.js",
+  "./src/providers/google-sheets-gateway-provider.js",
+  "./src/repositories/journal-repository.js",
+  "./src/services/auth-service.js",
+  "./src/services/shift-service.js",
+  "./src/services/journal-service.js",
+  "./src/data/demo-records.js"
+];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
   self.skipWaiting();

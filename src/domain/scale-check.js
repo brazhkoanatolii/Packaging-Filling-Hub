@@ -45,7 +45,7 @@ export function validateScaleCheck(input, journal) {
     scaleName: input.scaleName.trim(),
     nominal: journal.nominal,
     actual,
-    deviation: round(actual - journal.nominal, 3),
+    deviation: round(journal.nominal - actual, 3),
     condition: input.condition,
     result: calculateResult(actual, journal.nominal, journal.tolerance),
     performer: input.performer,
@@ -96,4 +96,3 @@ export function formatDateTime(value) {
     minute: "2-digit"
   }).format(new Date(value));
 }
-
