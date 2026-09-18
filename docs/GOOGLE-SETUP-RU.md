@@ -31,6 +31,14 @@
 
 Не копируйте содержимое `client_secret.json`, client secret или refresh token в сообщения.
 
+Для безопасной локальной настройки скачайте JSON настольного OAuth-клиента и выполните:
+
+```powershell
+npm run setup:google-oauth -- "C:\\путь\\к\\client_secret_....json"
+```
+
+Помощник откроет локальный обратный адрес, запросит только области `script.scriptapp` и `spreadsheets.currentonly`, а затем сохранит Client ID, Client secret и refresh token в исключённый из GitHub файл `.env`. После успешной настройки удалите скачанный JSON с секретом.
+
 ## Шаг 4. Локальная настройка — выполнит разработчик
 
 После появления проекта и OAuth-клиента:
