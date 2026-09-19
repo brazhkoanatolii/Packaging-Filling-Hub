@@ -1,4 +1,4 @@
-const CACHE_NAME = "packaging-filling-hub-v0.4.0";
+const CACHE_NAME = "packaging-filling-hub-v0.5.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const APP_SHELL = [
   "./src/styles.css",
   "./src/app.js",
   "./src/config/app-config.js",
+  "./src/config/workforce-config.js",
   "./src/domain/scale-check.js",
   "./src/providers/indexed-db-data-provider.js",
   "./src/providers/demo-google-sheets-provider.js",
@@ -15,6 +16,7 @@ const APP_SHELL = [
   "./src/repositories/journal-repository.js",
   "./src/services/auth-service.js",
   "./src/services/shift-service.js",
+  "./src/services/workforce-service.js",
   "./src/services/journal-service.js",
   "./src/data/demo-records.js"
 ];

@@ -23,6 +23,7 @@ export class ShiftService {
       employee: input.supervisor,
       supervisor: input.supervisor,
       shiftNumber,
+      shiftTeamId: String(input.shiftTeamId || ""),
       attendance: input.attendance.map(item => ({ employeeId: item.employeeId, status: item.status })),
       startedAt,
       endedAt: null,

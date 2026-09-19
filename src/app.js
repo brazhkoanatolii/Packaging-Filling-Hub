@@ -1,4 +1,5 @@
-import { ACCOUNTS, APP_CONFIG, EMPLOYEES, JOURNALS, LANGUAGES, MODULES, PERSONNEL, SCALES } from "./config/app-config.js";
+import { ACCOUNTS, APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
+import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS } from "./config/workforce-config.js";
 import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
 import { createDemoRecords } from "./data/demo-records.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
@@ -8,6 +9,7 @@ import { JournalRepository } from "./repositories/journal-repository.js";
 import { AuthService } from "./services/auth-service.js";
 import { JournalService } from "./services/journal-service.js";
 import { ShiftService } from "./services/shift-service.js";
+import { WorkforceService, getScheduleMonth } from "./services/workforce-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -27,6 +29,10 @@ const state = {
   lastRefresh: null,
   demoBannerDismissed: false,
   attendanceMonth: today().slice(0, 7),
+  attendanceView: "start",
+  settingsTab: "overview",
+  selectedShiftTeamId: null,
+  workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
   theme: "light"
 };
@@ -36,6 +42,7 @@ let authService;
 let shiftService;
 let repository;
 let journalService;
+let workforceService;
 let refreshTimer;
 let clockTimer;
 
@@ -47,6 +54,7 @@ async function bootstrap() {
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store);
   shiftService = new ShiftService(store);
+  workforceService = new WorkforceService(store);
   journalService = new JournalService(repository, journal);
 
   await repository.init(remoteProvider.mode === "demo" ? createDemoRecords() : []);
@@ -59,6 +67,8 @@ async function bootstrap() {
   }
   state.account = await authService.current();
   state.shift = await shiftService.current();
+  state.workforce = await workforceService.initialize();
+  state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
   state.demoBannerDismissed = await store.preference("demoBannerDismissed", false);
   state.language = normalizeLanguage(await store.preference("interfaceLanguage", "ru"));
   state.theme = (await store.preference("interfaceTheme", "light")) === "dark" ? "dark" : "light";
@@ -86,6 +96,7 @@ function createRemoteProvider() {
 function bindGlobalEvents() {
   root.addEventListener("click", handleClick);
   root.addEventListener("input", handleInput);
+  root.addEventListener("change", handleChange);
   root.addEventListener("submit", handleSubmit);
   window.addEventListener("online", async () => {
     render();
@@ -99,27 +110,56 @@ function bindGlobalEvents() {
 }
 
 function handleInput(event) {
-  if (event.target.matches("[data-personnel-search]")) {
-    const query = event.target.value.trim().toLocaleLowerCase(localeCode());
-    let visible = 0;
-    root.querySelectorAll("[data-personnel-card]").forEach(card => {
-      const matches = !query || card.dataset.search.includes(query);
-      card.hidden = !matches;
-      if (matches) visible += 1;
-    });
-    const counter = root.querySelector("[data-personnel-count]");
-    if (counter) counter.textContent = String(visible);
-  }
+  if (event.target.matches("[data-personnel-filter]")) filterPersonnelCards();
   if (event.target.matches("[data-attendance-status]")) updateAttendanceCounter(event.target.form);
+}
+
+async function handleChange(event) {
+  if (event.target.matches("[data-start-team]")) {
+    state.selectedShiftTeamId = event.target.value;
+    render();
+    return;
+  }
+  if (event.target.matches("[data-timesheet-cell]")) {
+    const select = event.target;
+    try {
+      await workforceService.saveAttendance({
+        date: select.dataset.date,
+        shiftTeamId: select.dataset.shiftTeamId,
+        employeeId: select.dataset.employeeId,
+        value: select.value,
+        overtime: select.dataset.overtime === "true"
+      });
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast("Табель сохранён.", "success");
+    } catch (error) {
+      toast(error.message || "Не удалось сохранить табель.", "error");
+    }
+  }
 }
 
 async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
+  if (form.dataset.form === "shift-settings") {
+    try {
+      const data = Object.fromEntries(new FormData(form));
+      await workforceService.saveShiftTeam(data);
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast("Настройки смены сохранены.", "success");
+    } catch (error) {
+      toast(error.message || "Не удалось сохранить настройки смены.", "error");
+    }
+    return;
+  }
   if (form.dataset.form !== "shift-attendance") return;
   const data = new FormData(form);
-  const attendance = PERSONNEL.map(employee => ({
+  const teamId = String(data.get("shiftTeamId") || state.selectedShiftTeamId || "");
+  const members = activePersonnel().filter(employee => employee.shiftTeamId === teamId);
+  const attendance = members.map(employee => ({
     employeeId: employee.id,
     status: String(data.get(`attendance-${employee.id}`) || "")
   }));
@@ -137,6 +177,7 @@ async function handleSubmit(event) {
     state.shift = await shiftService.start({
       supervisor: String(data.get("supervisor") || ""),
       shiftNumber: Number(data.get("shiftNumber")),
+      shiftTeamId: teamId,
       attendance
     });
     state.page = state.shift.requiresScaleControl ? "journals" : "dashboard";
@@ -171,10 +212,6 @@ async function handleClick(event) {
       return;
     }
     if (action === "navigate") {
-      if (isPageLocked(page)) {
-        toast(lockMessage(), "warning");
-        return;
-      }
       state.page = page;
       render();
       return;
@@ -226,6 +263,31 @@ async function handleClick(event) {
     if (action === "attendance-month") {
       state.attendanceMonth = shiftMonth(state.attendanceMonth, Number(actionElement.dataset.offset || 0));
       render();
+      return;
+    }
+    if (action === "attendance-view") {
+      state.attendanceView = actionElement.dataset.view;
+      render();
+      return;
+    }
+    if (action === "settings-tab") {
+      state.settingsTab = actionElement.dataset.tab;
+      render();
+      return;
+    }
+    if (action === "add-employee") {
+      openEmployeeDialog();
+      return;
+    }
+    if (action === "edit-employee") {
+      openEmployeeDialog(id);
+      return;
+    }
+    if (action === "toggle-employee") {
+      await workforceService.toggleEmployee(id);
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast("Статус сотрудника изменён.", "success");
       return;
     }
     if (action === "cycle-language") {
@@ -373,7 +435,7 @@ function renderApplication() {
           <div><strong>Packaging-</strong><strong>Filling-Hub</strong></div>
         </div>
         <nav class="main-nav" aria-label="Основное меню">
-          ${modulesForAccount().map(module => navItem(module.id, moduleLabel(module), moduleIcon(module.icon), 0, isPageLocked(module.id))).join("")}
+          ${modulesForAccount().map(module => navItem(module.id, moduleLabel(module), moduleIcon(module.icon))).join("")}
         </nav>
         <div class="sidebar-footer">
           <div class="signed-user">
@@ -395,6 +457,7 @@ function renderApplication() {
           </div>
         </header>
         ${renderDemoBanner()}
+        ${renderPreparationReminder()}
         <section class="page-content">
           ${renderPage()}
         </section>
@@ -469,17 +532,17 @@ function renderWorkflowPanel() {
   const weightsRequired = state.shift?.requiresScaleControl !== false;
   const weightsReady = attendanceReady && (!weightsRequired || Boolean(state.shift?.weightsCompletedAt));
   return `<section class="workflow-card card">
-    <div class="workflow-heading"><div><p class="eyebrow">Порядок начала работы</p><h2>Подготовка смены</h2></div><span class="status-pill ${weightsReady ? "success" : "warning"}">${weightsReady ? "Работа разрешена" : "Есть обязательный шаг"}</span></div>
+    <div class="workflow-heading"><div><p class="eyebrow">Порядок начала работы</p><h2>Подготовка смены</h2></div><span class="status-pill ${weightsReady ? "success" : "warning"}">${weightsReady ? "Подготовка завершена" : "Есть напоминание"}</span></div>
     <div class="workflow-steps">
       ${workflowStep(1, "Табель", attendanceReady, "Отметить сотрудников", "attendance")}
-      ${workflowStep(2, "Контроль весов", weightsReady, weightsRequired ? "Проверить F1–F13" : "Для второй смены не требуется", "journals", !attendanceReady)}
-      ${workflowStep(3, "Рабочие разделы", weightsReady, weightsReady ? "Доступны" : "Откроются после подготовки", "dashboard", !weightsReady)}
+      ${workflowStep(2, "Контроль весов", weightsReady, weightsRequired ? "Проверить F1–F13" : "Для второй смены не требуется", "journals")}
+      ${workflowStep(3, "Рабочие разделы", true, weightsReady ? "Можно продолжать" : "Доступны без блокировки", "dashboard")}
     </div>
   </section>`;
 }
 
-function workflowStep(number, title, done, note, page, locked = false) {
-  return `<button class="workflow-step ${done ? "done" : ""} ${locked ? "locked" : ""}" data-action="navigate" data-page="${page}" ${locked ? "disabled" : ""}><span>${done ? "✓" : number}</span><strong>${title}</strong><small>${note}</small></button>`;
+function workflowStep(number, title, done, note, page) {
+  return `<button class="workflow-step ${done ? "done" : ""}" data-action="navigate" data-page="${page}"><span>${done ? "✓" : number}</span><strong>${title}</strong><small>${note}</small></button>`;
 }
 
 function renderJournalsPage() {
@@ -487,7 +550,6 @@ function renderJournalsPage() {
   const checkedScales = new Set(todayRecords.map(record => record.scaleName));
   const failedToday = todayRecords.filter(record => record.result === "Вне допуска").length;
   return `
-    ${state.account.role === "senior" && state.shift?.requiresScaleControl && !state.shift?.weightsCompletedAt ? `<section class="scale-reminder"><span>!</span><div><strong>Обязательный контроль первой смены</strong><p>Проверьте все 13 весов. После сохранения полного обхода откроются остальные рабочие разделы.</p></div></section>` : ""}
     <section class="journal-header card">
       <div class="journal-title-block">
         <span class="journal-symbol large-symbol">13</span>
@@ -519,64 +581,137 @@ function renderJournalsPage() {
 }
 
 function renderAttendancePage() {
-  const days = monthDays(state.attendanceMonth);
-  const savedAttendance = new Map((state.shift?.attendance ?? []).map(item => [item.employeeId, item.status]));
-  const presentCount = PERSONNEL.filter(employee => (savedAttendance.get(employee.id) ?? "present") === "present").length;
   return `
-    <section class="card module-header">
-      <div><p class="eyebrow">Начало рабочей смены</p><h2>Кто сегодня на работе?</h2><p>Сначала выберите смену и отметьте сотрудников. Для первой смены следующим обязательным шагом станет контроль весов.</p></div>
-      <span class="status-pill ${state.shift?.active ? "success" : "warning"}">${state.shift?.active ? "Смена начата" : "Ожидает заполнения"}</span>
+    <section class="workforce-hero card">
+      <div><p class="eyebrow">Рабочее время и смены</p><h2>Табель участка</h2><p>График 2/2, фактические часы, причины отсутствия и начало смены — в одном разделе.</p></div>
+      <div class="workforce-hero-stat"><strong>${activePersonnel().filter(employee => employee.shiftTeamId !== "office").length}</strong><span>сотрудников<br>в сменах A и B</span></div>
+    </section>
+    ${renderAttendanceTabs()}
+    ${state.attendanceView === "schedule" ? renderScheduleView() : state.attendanceView === "timesheet" ? renderTimesheetView() : renderShiftStartView()}`;
+}
+
+function renderAttendanceTabs() {
+  const tabs = [
+    ["start", "Начало смены", "Кто сегодня работает"],
+    ["schedule", "График смен", "Цикл 2/2 и часы"],
+    ["timesheet", "Табель месяца", "Факт и отсутствие"]
+  ];
+  return `<nav class="workforce-tabs card" aria-label="Разделы табеля">${tabs.map(([view, label, note]) => `<button class="${state.attendanceView === view ? "active" : ""}" data-action="attendance-view" data-view="${view}"><strong>${label}</strong><small>${note}</small></button>`).join("")}</nav>`;
+}
+
+function renderShiftStartView() {
+  const team = teamById(state.shift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
+  const members = activePersonnel().filter(employee => employee.shiftTeamId === team?.id).sort(comparePersonnel);
+  const supervisors = members.filter(employee => employee.role === "senior-mechanic");
+  const savedAttendance = new Map((state.shift?.shiftTeamId === team?.id ? state.shift.attendance : []).map(item => [item.employeeId, item.status]));
+  const presentCount = members.filter(employee => (savedAttendance.get(employee.id) ?? "present") === "present").length;
+  const scheduled = team ? getScheduleMonth(team, ...monthParts(today())).some(day => day.date === today() && day.scheduled) : false;
+  return `
+    <section class="shift-day-banner ${scheduled ? "scheduled" : "substitution"}">
+      <span>${scheduled ? "Сегодня" : "Вне графика"}</span>
+      <div><strong>${escapeHtml(team?.name ?? "Смена")}${scheduled ? " работает по графику" : " может выйти на подмену"}</strong><small>Цикл 2 рабочих / 2 выходных · ${team?.shiftDurationHours ?? 12} ч на производстве · ${team?.accountingHours ?? 11} учётных часов</small></div>
+      <b>${escapeHtml(team?.code ?? "—")}</b>
     </section>
     <form class="card shift-attendance-card" data-form="shift-attendance">
       <div class="shift-form-head">
-        <div class="shift-form-controls">
-          <label class="field"><span>Номер смены</span><select name="shiftNumber" ${state.shift?.active ? "disabled" : ""}><option value="1" ${state.shift?.shiftNumber !== 2 ? "selected" : ""}>Первая смена</option><option value="2" ${state.shift?.shiftNumber === 2 ? "selected" : ""}>Вторая смена</option></select></label>
-          <label class="field"><span>Старший смены</span><select name="supervisor" required ${state.shift?.active ? "disabled" : ""}><option value="">Выберите имя и фамилию</option>${EMPLOYEES.map(employee => `<option ${employee === (state.shift?.supervisor ?? state.shift?.employee) ? "selected" : ""}>${escapeHtml(employee)}</option>`).join("")}</select></label>
-        </div>
-        <div class="attendance-counter"><strong data-attendance-present>${presentCount}</strong><span>из ${PERSONNEL.length}<small>на работе</small></span></div>
+        <div><p class="eyebrow">Шаг 1 · состав смены</p><h2>${state.shift?.active ? "Исправить присутствие" : "Начать рабочую смену"}</h2><p>Выберите бригаду и отметьте только тех, кто отсутствует.</p></div>
+        <div class="attendance-counter"><strong data-attendance-present>${presentCount}</strong><span>из ${members.length}<small>на работе</small></span></div>
+      </div>
+      <div class="shift-start-controls">
+        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${state.shift?.active ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)} · ${item.code}</option>`).join("")}</select></label>
+        <label class="field"><span>Смена по времени</span><select name="shiftNumber" ${state.shift?.active ? "disabled" : ""}><option value="1" ${state.shift?.shiftNumber !== 2 ? "selected" : ""}>Первая — нужен контроль весов</option><option value="2" ${state.shift?.shiftNumber === 2 ? "selected" : ""}>Вторая — контроль уже выполнен</option></select></label>
+        <label class="field"><span>Старший смены</span><select name="supervisor" required ${state.shift?.active ? "disabled" : ""}><option value="">Выберите сотрудника</option>${supervisors.map(employee => `<option ${employee.fullName === (state.shift?.supervisor ?? state.shift?.employee) ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select></label>
       </div>
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
-        ${PERSONNEL.map(employee => {
+        ${members.map(employee => {
           const status = savedAttendance.get(employee.id) ?? "present";
-          return `<label class="shift-person-row"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>Сотрудник участка</small></span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select></label>`;
+          return `<label class="shift-person-row"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select></label>`;
         }).join("")}
       </div>
-      <div class="shift-form-footer"><p>${state.shift?.active ? "Исправления сохраняются в текущей смене." : "По умолчанию все отмечены как присутствующие — измените только отсутствующих."}</p><button class="primary-button" type="submit">${state.shift?.active ? "Сохранить исправления" : "Сохранить табель и начать смену"}</button></div>
-    </form>
-    <section class="card attendance-card">
-      <div class="attendance-toolbar">
-        <button class="icon-button" data-action="attendance-month" data-offset="-1" aria-label="Предыдущий месяц">←</button>
-        <div><p class="eyebrow">Табель за месяц</p><h2>${escapeHtml(monthTitle(state.attendanceMonth))}</h2></div>
-        <button class="icon-button" data-action="attendance-month" data-offset="1" aria-label="Следующий месяц">→</button>
-      </div>
-      <div class="integration-note"><span>i</span><p>Месячный табель подготовлен для подключения к отдельной рабочей таблице. До настройки источника здесь отображается структура без выдуманных данных.</p></div>
-      <div class="attendance-scroll">
-        <table class="attendance-table">
-          <thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => `<th class="${day.isToday ? "today" : ""}"><strong>${day.day}</strong><small>${day.weekday}</small></th>`).join("")}</tr></thead>
-          <tbody>${PERSONNEL.map(employee => `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>Смена не указана</small></th>${days.map(day => `<td class="${day.isToday ? "today" : ""}"><button type="button" disabled title="Источник табеля не подключён">—</button></td>`).join("")}</tr>`).join("")}</tbody>
-        </table>
-      </div>
-      <div class="attendance-legend"><span><i class="legend-swatch full"></i>Полная смена</span><span><i class="legend-swatch partial"></i>Неполная смена</span><span><i class="legend-swatch absent"></i>Отсутствие</span></div>
-    </section>`;
+      <div class="shift-form-footer"><p>${state.shift?.active ? "Исправления сохраняются в активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${state.shift?.active ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
+    </form>`;
+}
+
+function renderScheduleView() {
+  const days = monthDays(state.attendanceMonth);
+  return `${renderWorkforceMonthToolbar("График смен", "Плановый цикл 2/2")}
+    <section class="schedule-summary-grid">
+      ${state.workforce.shiftTeams.map(team => {
+        const schedule = getScheduleMonth(team, ...monthParts(state.attendanceMonth));
+        const workDays = schedule.filter(day => day.scheduled).length;
+        return `<article class="schedule-summary-card card"><span class="team-orb">${team.code}</span><div><strong>${escapeHtml(team.name)}</strong><small>2 рабочих / 2 выходных</small></div><dl><div><dt>Смен</dt><dd>${workDays}</dd></div><div><dt>Часов</dt><dd>${workDays * team.accountingHours}</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === team.id).length}</dd></div></dl></article>`;
+      }).join("")}
+      <article class="schedule-summary-card office card"><span class="team-orb">5/2</span><div><strong>${OFFICE_SCHEDULE.name}</strong><small>Пн–Пт · праздничные дни нерабочие</small></div><dl><div><dt>День</dt><dd>8 ч</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === "office").length}</dd></div></dl></article>
+    </section>
+    <div class="schedule-groups">${state.workforce.shiftTeams.map(team => renderScheduleTeam(team, days)).join("")}</div>`;
+}
+
+function renderScheduleTeam(team, days) {
+  const schedule = new Map(getScheduleMonth(team, ...monthParts(state.attendanceMonth)).map(day => [day.date, day]));
+  const members = activePersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);
+  const scheduledDays = [...schedule.values()].filter(day => day.scheduled).length;
+  return `<section class="card schedule-team-card">
+    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>${team.shiftDurationHours} часов · к учёту ${team.accountingHours}</small></span></div><div><b>${scheduledDays}</b><small>рабочих смен</small></div></header>
+    <div class="attendance-scroll"><table class="attendance-table schedule-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Итого</th></tr></thead><tbody>${members.map(employee => `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${days.map(day => `<td class="${day.isToday ? "today" : ""} ${schedule.get(day.date)?.scheduled ? "is-scheduled" : "is-rest"}"><span>${schedule.get(day.date)?.scheduled ? team.code : "·"}</span></td>`).join("")}<td class="total-column"><strong>${scheduledDays * team.accountingHours}</strong></td></tr>`).join("")}</tbody></table></div>
+  </section>`;
+}
+
+function renderTimesheetView() {
+  const days = monthDays(state.attendanceMonth);
+  return `${renderWorkforceMonthToolbar("Табель рабочего времени", "Нажмите на ячейку, чтобы изменить часы или причину отсутствия")}
+    <section class="attendance-code-strip">${ATTENDANCE_CODES.map(item => `<span class="tone-${item.tone}"><b>${item.value}</b>${item.label}</span>`).join("")}</section>
+    <div class="schedule-groups">${state.workforce.shiftTeams.map(team => renderTimesheetTeam(team, days)).join("")}</div>`;
+}
+
+function renderTimesheetTeam(team, days) {
+  const schedule = new Map(getScheduleMonth(team, ...monthParts(state.attendanceMonth)).map(day => [day.date, day]));
+  const records = new Map(state.workforce.attendance.filter(item => item.shiftTeamId === team.id).map(item => [`${item.employeeId}:${item.date}`, item]));
+  const members = activePersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);
+  return `<section class="card schedule-team-card timesheet-team-card">
+    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>Фактические часы и причины отсутствия</small></span></div><span class="autosave-note">Сохраняется автоматически</span></header>
+    <div class="attendance-scroll"><table class="attendance-table timesheet-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Часы</th></tr></thead><tbody>${members.map(employee => renderTimesheetRow(employee, team, days, schedule, records)).join("")}</tbody></table></div>
+  </section>`;
+}
+
+function renderTimesheetRow(employee, team, days, schedule, records) {
+  let total = 0;
+  const cells = days.map(day => {
+    const record = records.get(`${employee.id}:${day.date}`);
+    const scheduled = schedule.get(day.date)?.scheduled;
+    const future = day.date > today();
+    if (!record && (!scheduled || future)) return `<td class="${day.isToday ? "today" : ""} ${future ? "is-future" : "is-rest"}">·</td>`;
+    const value = record?.value ?? String(team.accountingHours);
+    const hours = Number(value);
+    if (Number.isFinite(hours)) total += hours;
+    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}">${timesheetOptions(value, team.accountingHours)}</select></td>`;
+  }).join("");
+  return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
+}
+
+function renderWorkforceMonthToolbar(title, note) {
+  return `<section class="card workforce-month-toolbar"><button class="icon-button" data-action="attendance-month" data-offset="-1" aria-label="Предыдущий месяц">←</button><div><p class="eyebrow">${title}</p><h2>${escapeHtml(monthTitle(state.attendanceMonth))}</h2><small>${note}</small></div><button class="icon-button" data-action="attendance-month" data-offset="1" aria-label="Следующий месяц">→</button></section>`;
 }
 
 function renderPersonnelPage() {
+  const employees = personnel().sort(comparePersonnel);
   return `
-    <section class="card module-header personnel-header">
-      <div><p class="eyebrow">Справочник участка</p><h2>Персонал</h2><p>Быстрый поиск сотрудников и единый справочник для табеля, смен и журналов.</p></div>
-      <span class="count-badge"><b data-personnel-count>${PERSONNEL.length}</b> сотрудников</span>
+    <section class="workforce-hero card personnel-header">
+      <div><p class="eyebrow">Команда фасовочного участка</p><h2>Персонал</h2><p>Сотрудники, должности и принадлежность к смене из прежней программы.</p></div>
+      <div class="personnel-actions"><span class="count-badge"><b data-personnel-count>${employees.length}</b> сотрудников</span>${state.account.role === "manager" ? `<button class="primary-button" data-action="add-employee">+ Добавить сотрудника</button>` : ""}</div>
     </section>
     <section class="card personnel-filter-card">
-      <label class="personnel-search"><span>Поиск по имени и фамилии</span><input type="search" data-personnel-search placeholder="Начните вводить имя…" autocomplete="off"></label>
-      <div class="integration-note"><span>i</span><p>Из старого архива взята структура экрана, но полный список из 35 сотрудников не публикуется в GitHub. Сейчас показаны только уже настроенные в программе сотрудники.</p></div>
+      <label class="personnel-search"><span>Поиск</span><input type="search" data-personnel-filter data-personnel-search placeholder="Имя или фамилия…" autocomplete="off"></label>
+      <label class="field"><span>Смена</span><select data-personnel-filter data-personnel-team><option value="all">Все смены</option><option value="office">Администрация 5/2</option>${state.workforce.shiftTeams.map(team => `<option value="${team.id}">${escapeHtml(team.name)}</option>`).join("")}</select></label>
+      <label class="field"><span>Должность</span><select data-personnel-filter data-personnel-role><option value="all">Все должности</option>${Object.entries(ROLE_LABELS).map(([role, label]) => `<option value="${role}">${escapeHtml(label)}</option>`).join("")}</select></label>
     </section>
     <section class="personnel-grid">
-      ${PERSONNEL.map(employee => `<article class="personnel-card" data-personnel-card data-search="${attribute(employee.fullName.toLocaleLowerCase("ru-RU"))}">
-        <div class="personnel-card-top"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="active-dot" title="Активен"></span></div>
+      ${employees.map(employee => `<article class="personnel-card ${employee.active === false ? "inactive" : ""}" data-personnel-card data-search="${attribute(employee.fullName.toLocaleLowerCase("ru-RU"))}" data-team="${employee.shiftTeamId}" data-role="${employee.role}">
+        <div class="personnel-card-top"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="employee-team-badge">${escapeHtml(teamLabel(employee.shiftTeamId))}</span></div>
         <h3>${escapeHtml(employee.fullName)}</h3>
-        <p>Должность не указана</p>
-        <dl><div><dt>Смена</dt><dd>—</dd></div><div><dt>Статус</dt><dd>Активен</dd></div></dl>
+        <p>${escapeHtml(roleLabel(employee.role))}</p>
+        <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div></dl>
+        ${state.account.role === "manager" ? `<div class="personnel-card-actions"><button data-action="edit-employee" data-id="${employee.id}">Изменить</button><button data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div>` : ""}
       </article>`).join("")}
     </section>`;
 }
@@ -682,41 +817,75 @@ function renderOperation(operation) {
 function renderSettingsPage() {
   const language = LANGUAGES.find(item => item.code === state.language) ?? LANGUAGES[0];
   return `
-    <section class="card settings-intro">
-      <div><p class="eyebrow">Центр управления</p><h2>Настройки участка</h2><p>Начальник управляет источниками, персоналом, табелем, отпусками, интерфейсом и правами доступа из одного места.</p></div>
-      <span class="status-pill success">Полный доступ</span>
+    <section class="settings-hero card">
+      <div><p class="eyebrow">Центр управления</p><h2>Настройки участка</h2><p>Здесь действительно настраиваются сотрудники, смены и правила табеля. Изменения сохраняются локально и будут подключены к рабочему источнику.</p></div>
+      <span class="status-pill success">Только начальник</span>
     </section>
-    <div class="settings-grid">
-      <section class="card settings-section">
-        <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Подключено"}</span></div>
-        ${settingRow("Рабочая таблица", journal.sheetName, "Подключение подготовлено")}
-        ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
-        ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}
-        ${settingRow("Часовой пояс", APP_CONFIG.timeZone, "Дата и время заполняются автоматически")}
-      </section>
-      <section class="card settings-section">
-        <div class="section-heading"><div><p class="eyebrow">Интерфейс</p><h2>Язык и оформление</h2></div></div>
-        ${settingRow("Язык", language.name, "RU · EN · LT")}
-        ${settingRow("Тема", state.theme === "dark" ? "Тёмная" : "Светлая", "Переключается также в верхней панели")}
-        ${settingRow("Дата и время", APP_CONFIG.timeZone, "Часы отображаются постоянно")}
-      </section>
-      <section class="card settings-section wide">
-        <div class="section-heading"><div><p class="eyebrow">Основные справочники</p><h2>Персонал, табель и отпуска</h2></div></div>
-        <div class="settings-links">
-          ${settingsLink("personnel", "Персонал", `${EMPLOYEES.length} сотрудников`, personnelIcon())}
-          ${settingsLink("attendance", "Табель", "Смены и присутствие", attendanceIcon())}
-          ${settingsLink("vacations", "График отпусков", "Годовой календарь", moduleIcon("vacation"))}
-        </div>
-      </section>
-      <section class="card settings-section wide">
-        <div class="section-heading"><div><p class="eyebrow">Журналы</p><h2>Настроенные источники</h2></div><button class="secondary-button" disabled>+ Подключить журнал</button></div>
-        <div class="configured-journal"><span class="journal-symbol">50</span><span><strong>${journal.title}</strong><small>Лист «${journal.sheetName}» · чтение и запись · обе роли</small></span><span class="status-pill success">Готов к тесту</span></div>
-      </section>
-      <section class="card settings-section wide">
-        <div class="section-heading"><div><p class="eyebrow">Локальная очередь</p><h2>Синхронизация</h2></div><button class="secondary-button" data-action="navigate" data-page="sync">Открыть очередь</button></div>
-        ${settingRow("Ожидает отправки", String(state.operations.length), navigator.onLine ? "Интернет доступен" : "Отправим после появления сети")}
-      </section>
-    </div>`;
+    <nav class="settings-tabs card" aria-label="Разделы настроек">
+      ${settingsTabButton("overview", "Общие", settingsIcon())}
+      ${settingsTabButton("personnel", "Персонал", personnelIcon(), personnel().length)}
+      ${settingsTabButton("shifts", "Смены", attendanceIcon(), state.workforce.shiftTeams.length)}
+      ${settingsTabButton("timesheet", "Табель", moduleIcon("documents"))}
+    </nav>
+    ${state.settingsTab === "personnel" ? renderPersonnelSettings() : state.settingsTab === "shifts" ? renderShiftSettings() : state.settingsTab === "timesheet" ? renderTimesheetSettings() : `
+      <div class="settings-grid">
+        <section class="card settings-section">
+          <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Подключено"}</span></div>
+          ${settingRow("Рабочая таблица", journal.sheetName, "Подключение подготовлено")}
+          ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
+          ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}
+          ${settingRow("Часовой пояс", APP_CONFIG.timeZone, "Дата и время заполняются автоматически")}
+        </section>
+        <section class="card settings-section">
+          <div class="section-heading"><div><p class="eyebrow">Интерфейс</p><h2>Язык и оформление</h2></div></div>
+          ${settingRow("Язык", language.name, "RU · EN · LT")}
+          ${settingRow("Тема", state.theme === "dark" ? "Тёмная" : "Светлая", "Переключается также в верхней панели")}
+          ${settingRow("Дата и время", APP_CONFIG.timeZone, "Часы отображаются постоянно")}
+        </section>
+        <section class="card settings-section wide">
+          <div class="section-heading"><div><p class="eyebrow">Рабочая модель</p><h2>Персонал и графики перенесены</h2></div></div>
+          <div class="settings-links">
+            ${settingsLink("personnel", "Персонал", `${personnel().length} сотрудников`, personnelIcon())}
+            ${settingsLink("attendance", "Табель", "График 2/2 и фактические часы", attendanceIcon())}
+            ${settingsLink("vacations", "График отпусков", "Годовой календарь", moduleIcon("vacation"))}
+          </div>
+        </section>
+      </div>`}`;
+}
+
+function settingsTabButton(tab, label, icon, count = "") {
+  return `<button class="${state.settingsTab === tab ? "active" : ""}" data-action="settings-tab" data-tab="${tab}"><span>${icon}</span><strong>${label}</strong>${count !== "" ? `<b>${count}</b>` : ""}</button>`;
+}
+
+function renderPersonnelSettings() {
+  const employees = personnel().sort(comparePersonnel);
+  return `<section class="card settings-workforce-panel">
+    <header><div><p class="eyebrow">Справочник</p><h2>Сотрудники участка</h2><p>Имя, должность, смена и активность используются во всех формах программы.</p></div><button class="primary-button" data-action="add-employee">+ Добавить сотрудника</button></header>
+    <div class="settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Сотрудник</th><th>Должность</th><th>Смена</th><th>Статус</th><th></th></tr></thead><tbody>${employees.map(employee => `<tr class="${employee.active === false ? "inactive" : ""}"><td><strong>${escapeHtml(employee.fullName)}</strong></td><td>${escapeHtml(roleLabel(employee.role))}</td><td><span class="table-team">${escapeHtml(teamLabel(employee.shiftTeamId))}</span></td><td>${employee.active === false ? "В архиве" : "Активен"}</td><td><div class="row-actions"><button class="small-button" data-action="edit-employee" data-id="${employee.id}">Изменить</button><button class="small-button" data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div></td></tr>`).join("")}</tbody></table></div>
+  </section>`;
+}
+
+function renderShiftSettings() {
+  return `<div class="shift-settings-grid">${state.workforce.shiftTeams.map(team => `<form class="card shift-settings-card" data-form="shift-settings">
+    <input type="hidden" name="id" value="${team.id}">
+    <header><span class="team-orb">${team.code}</span><div><p class="eyebrow">Рабочая бригада</p><h2>${escapeHtml(team.name)}</h2></div></header>
+    <div class="form-grid">
+      ${formField(`team-name-${team.id}`, "Название", `<input id="team-name-${team.id}" name="name" value="${attribute(team.name)}" required>`, "Отображается в табеле", "full")}
+      ${formField(`team-anchor-${team.id}`, "Первый рабочий день цикла", `<input id="team-anchor-${team.id}" name="anchorDate" type="date" value="${team.anchorDate}" required>`)}
+      ${formField(`team-duration-${team.id}`, "Длительность смены", `<input id="team-duration-${team.id}" name="shiftDurationHours" type="number" min="1" max="24" value="${team.shiftDurationHours}" required>`, "часов на производстве")}
+      ${formField(`team-accounting-${team.id}`, "К учёту", `<input id="team-accounting-${team.id}" name="accountingHours" type="number" min="1" max="24" value="${team.accountingHours}" required>`, "часов в табеле")}
+    </div>
+    <div class="shift-settings-summary"><span><b>2</b> рабочих дня</span><span><b>2</b> выходных дня</span><span><b>${activePersonnel().filter(employee => employee.shiftTeamId === team.id).length}</b> сотрудников</span></div>
+    <footer><button class="primary-button" type="submit">Сохранить смену</button></footer>
+  </form>`).join("")}</div>`;
+}
+
+function renderTimesheetSettings() {
+  return `<div class="settings-grid">
+    <section class="card settings-section wide"><div class="section-heading"><div><p class="eyebrow">Коды табеля</p><h2>Причины отсутствия</h2></div><button class="secondary-button" data-action="navigate" data-page="attendance">Открыть табель</button></div><div class="attendance-code-settings">${ATTENDANCE_CODES.map(item => `<div class="tone-${item.tone}"><b>${item.value}</b><span><strong>${item.label}</strong><small>${item.value === "11" ? "Норма для смен A и B" : "Выбирается в ячейке табеля"}</small></span></div>`).join("")}</div></section>
+    <section class="card settings-section"><div class="section-heading"><div><p class="eyebrow">Администрация</p><h2>График 5/2</h2></div></div>${settingRow("Рабочий день", "8 часов", "Понедельник — пятница")}${settingRow("Праздники", "Литва", "По производственному календарю")}</section>
+    <section class="card settings-section"><div class="section-heading"><div><p class="eyebrow">Производство</p><h2>График 2/2</h2></div></div>${settingRow("Смена", "12 часов", "Фактическая длительность")}${settingRow("К учёту", "11 часов", "Норма табеля")}</section>
+  </div>`;
 }
 
 function openScaleWalkDialog() {
@@ -738,7 +907,7 @@ function openScaleWalkDialog() {
         <div id="walk-error" class="form-error" hidden></div>
         <div class="form-grid">
           ${formField("walk-date", "Дата проверки", `<input id="walk-date" name="date" type="date" value="${attribute(walk.date)}" required>`)}
-          ${formField("walk-performer", "Кто проводит проверку", `<select id="walk-performer" name="performer" required><option value="">Выберите имя и фамилию</option>${EMPLOYEES.map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново перед каждым обходом")}
+          ${formField("walk-performer", "Кто проводит проверку", `<select id="walk-performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново перед каждым обходом")}
         </div>
         <div class="walk-route">${SCALES.map(scale => `<span>${scale.code}</span>`).join("")}</div>
         <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Начать с F1</button></div>
@@ -947,7 +1116,7 @@ function openRecordDialog(id = null) {
         ${formField("scaleName", "Весы", `<select id="scaleName" name="scaleName" required>${journal.scaleOptions.map(option => `<option ${option === values.scaleName ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`)}
         ${formField("actual", "Фактический вес, г", `<input id="actual" name="actual" type="number" inputmode="decimal" step="0.001" min="0" value="${attribute(values.actual)}" placeholder="Например, 50,000" required />`, "Номинал: 50 г")}
         ${formField("condition", "Состояние весов", `<select id="condition" name="condition"><option ${values.condition === "Рабочие" ? "selected" : ""}>Рабочие</option><option ${values.condition === "Нерабочие" ? "selected" : ""}>Нерабочие</option></select>`)}
-        ${formField("performer", "Кто внёс данные", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${EMPLOYEES.map(employee => `<option ${employee === values.performer && !existing ? "selected" : ""}>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново для каждой записи", "full")}
+        ${formField("performer", "Кто внёс данные", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option ${employee === values.performer && !existing ? "selected" : ""}>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново для каждой записи", "full")}
         ${formField("note", "Примечание", `<textarea id="note" name="note" rows="3" placeholder="Необязательно">${escapeHtml(values.note)}</textarea>`, "", "full")}
       </div>
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${existing ? "Сохранить исправление" : "Добавить запись"}</button></div>
@@ -983,7 +1152,7 @@ function openAnnulDialog(id) {
       <div class="dialog-heading"><div><p class="eyebrow">Без удаления данных</p><h2>Аннулировать запись?</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
       <p class="dialog-lead">Запись ${formatDate(record.date)} · ${escapeHtml(record.scaleName)} останется в журнале и получит статус «Аннулировано».</p>
       <div id="form-error" class="form-error" hidden></div>
-      ${formField("performer", "Кто аннулирует", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${EMPLOYEES.map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`)}
+      ${formField("performer", "Кто аннулирует", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`)}
       ${formField("reason", "Причина", `<textarea id="reason" name="reason" rows="3" placeholder="Причина обязательна" required></textarea>`)}
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="danger-button">Аннулировать</button></div>
     </form>`);
@@ -999,6 +1168,40 @@ function openAnnulDialog(id) {
       await syncRecords({ silent: true });
     } catch (error) {
       showFormError(event.currentTarget, error);
+    }
+  });
+  dialog.showModal();
+}
+
+function openEmployeeDialog(id = null) {
+  const employee = id ? personnel().find(item => item.id === id) : null;
+  const dialog = createDialog(`
+    <form class="dialog-card employee-dialog" data-employee-form>
+      <div class="dialog-heading"><div><p class="eyebrow">Справочник персонала</p><h2>${employee ? "Изменить сотрудника" : "Новый сотрудник"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+      <p class="dialog-lead">Эти данные используются в графике смен, табеле и списке исполнителей.</p>
+      <div id="form-error" class="form-error" hidden></div>
+      <div class="form-grid">
+        ${formField("employee-full-name", "Имя и фамилия", `<input id="employee-full-name" name="fullName" value="${attribute(employee?.fullName ?? "")}" autocomplete="off" required>`, "Как в рабочих документах", "full")}
+        ${formField("employee-role", "Должность", `<select id="employee-role" name="role" required>${Object.entries(ROLE_LABELS).map(([role, label]) => `<option value="${role}" ${employee?.role === role ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select>`)}
+        ${formField("employee-team", "Смена", `<select id="employee-team" name="shiftTeamId" required><option value="office" ${employee?.shiftTeamId === "office" ? "selected" : ""}>Администрация · 5/2</option>${state.workforce.shiftTeams.map(team => `<option value="${team.id}" ${employee?.shiftTeamId === team.id ? "selected" : ""}>${escapeHtml(team.name)} · 2/2</option>`).join("")}</select>`)}
+      </div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
+    </form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const data = Object.fromEntries(new FormData(form));
+      await workforceService.saveEmployee({ ...data, id: employee?.id, active: employee?.active !== false });
+      state.workforce = await workforceService.snapshot();
+      dialog.close();
+      render();
+      toast("Сотрудник сохранён.", "success");
+    } catch (error) {
+      showFormError(form, error);
+      button.disabled = false;
     }
   });
   dialog.showModal();
@@ -1040,6 +1243,17 @@ function renderDemoBanner() {
   return `<div class="demo-banner"><span class="demo-icon">i</span><p><strong>Безопасный тестовый режим.</strong> Здесь показаны демонстрационные записи. Связь с рабочей таблицей пока выключена.</p><button data-action="dismiss-demo" aria-label="Закрыть">×</button></div>`;
 }
 
+function renderPreparationReminder() {
+  if (state.account?.role !== "senior") return "";
+  if (!state.shift?.active) {
+    return `<button class="preparation-reminder" data-action="navigate" data-page="attendance"><span>1</span><div><strong>Смена ещё не начата</strong><small>Заполните табель. Разделы доступны — это напоминание, а не блокировка.</small></div><b>Перейти →</b></button>`;
+  }
+  if (state.shift.requiresScaleControl && !state.shift.weightsCompletedAt) {
+    return `<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>13</span><div><strong>Не завершён контроль весов F1–F13</strong><small>Продолжить работу можно, но напоминание останется до сохранения полного обхода.</small></div><b>Проверить →</b></button>`;
+  }
+  return "";
+}
+
 function connectionBadge() {
   return `<span class="connection-badge ${navigator.onLine ? "online" : "offline"}" title="${state.operations.length ? `В очереди: ${state.operations.length}` : "Очередь пуста"}"><i></i>${navigator.onLine ? ui("online") : ui("offline")}${state.operations.length ? `<b>${state.operations.length}</b>` : ""}</span>`;
 }
@@ -1052,17 +1266,17 @@ function recordStatus(record) {
   return `<span class="status-pill success">Отправлено</span>`;
 }
 
-function navItem(page, label, icon, count = 0, locked = false) {
-  return `<button class="nav-item ${state.page === page ? "active" : ""} ${locked ? "locked" : ""}" data-action="navigate" data-page="${page}" ${locked ? `aria-disabled="true" title="${attribute(lockMessage())}"` : ""}>${icon}<span>${label}</span>${locked ? `<i class="nav-lock">•</i>` : count ? `<b>${count}</b>` : ""}</button>`;
+function navItem(page, label, icon, count = 0) {
+  return `<button class="nav-item ${state.page === page ? "active" : ""}" data-action="navigate" data-page="${page}">${icon}<span>${label}</span>${count ? `<b>${count}</b>` : ""}</button>`;
 }
 
 function renderMobileNav() {
   return `<nav class="mobile-nav" aria-label="Мобильное меню">
     ${navItem("dashboard", moduleLabelById("dashboard"), dashboardIcon())}
     ${navItem("attendance", moduleLabelById("attendance"), attendanceIcon())}
-    ${navItem("journals", moduleLabelById("journals"), journalIcon(), 0, isPageLocked("journals"))}
-    ${navItem("documents", moduleLabelById("documents"), moduleIcon("documents"), 0, isPageLocked("documents"))}
-    ${state.account.role === "manager" ? navItem("settings", moduleLabelById("settings"), settingsIcon()) : navItem("personnel", moduleLabelById("personnel"), personnelIcon(), 0, isPageLocked("personnel"))}
+    ${navItem("journals", moduleLabelById("journals"), journalIcon())}
+    ${navItem("documents", moduleLabelById("documents"), moduleIcon("documents"))}
+    ${state.account.role === "manager" ? navItem("settings", moduleLabelById("settings"), settingsIcon()) : navItem("personnel", moduleLabelById("personnel"), personnelIcon())}
   </nav>`;
 }
 
@@ -1107,6 +1321,79 @@ function moduleLabelById(id) {
   return moduleLabel(MODULES.find(module => module.id === id));
 }
 
+function personnel() {
+  return [...(state.workforce?.personnel ?? [])];
+}
+
+function activePersonnel() {
+  return personnel().filter(employee => employee.active !== false);
+}
+
+function employeeNames() {
+  return activePersonnel().map(employee => employee.fullName).sort((left, right) => left.localeCompare(right, "ru"));
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] ?? "Должность не указана";
+}
+
+function teamById(id) {
+  return state.workforce?.shiftTeams?.find(team => team.id === id) ?? null;
+}
+
+function teamLabel(id) {
+  if (id === "office") return "5/2";
+  return teamById(id)?.code ?? "—";
+}
+
+function scheduledTeam(date = today()) {
+  const [year, monthIndex] = monthParts(date);
+  return state.workforce?.shiftTeams?.find(team => getScheduleMonth(team, year, monthIndex).some(day => day.date === date && day.scheduled)) ?? null;
+}
+
+function comparePersonnel(left, right) {
+  const teamOrder = { "shift-team-a": 0, "shift-team-b": 1, office: 2 };
+  const roleOrder = { "senior-mechanic": 0, "mechanic-operator": 1, packer: 2, "head-of-area": 3, "production-manager": 4, administrator: 5, "warehouse-manager": 6 };
+  return (teamOrder[left.shiftTeamId] ?? 9) - (teamOrder[right.shiftTeamId] ?? 9) || (roleOrder[left.role] ?? 9) - (roleOrder[right.role] ?? 9) || left.fullName.localeCompare(right.fullName, "ru");
+}
+
+function monthParts(value) {
+  const [year, month] = String(value).split("-").map(Number);
+  return [year, month - 1];
+}
+
+function dayHeader(day) {
+  return `<th class="${day.isToday ? "today" : ""}"><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small></th>`;
+}
+
+function attendanceTone(value, expectedHours = 11) {
+  const configured = ATTENDANCE_CODES.find(item => item.value === String(value));
+  if (configured) return configured.tone;
+  const hours = Number(value);
+  return Number.isFinite(hours) && hours < Number(expectedHours) ? "partial" : "worked";
+}
+
+function timesheetOptions(selected, expectedHours = 11) {
+  const current = String(selected ?? expectedHours);
+  const hours = Array.from({ length: 24 }, (_, index) => index + 1).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${value === Number(expectedHours) ? `Полная смена · ${value} ч` : `${value} ч`}</option>`).join("");
+  const reasons = ATTENDANCE_CODES.filter(item => item.value !== String(expectedHours)).map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value} · ${escapeHtml(item.label)}</option>`).join("");
+  return `<optgroup label="Часы">${hours}</optgroup><optgroup label="Причины отсутствия">${reasons}</optgroup>`;
+}
+
+function filterPersonnelCards() {
+  const query = (root.querySelector("[data-personnel-search]")?.value ?? "").trim().toLocaleLowerCase(localeCode());
+  const team = root.querySelector("[data-personnel-team]")?.value ?? "all";
+  const role = root.querySelector("[data-personnel-role]")?.value ?? "all";
+  let visible = 0;
+  root.querySelectorAll("[data-personnel-card]").forEach(card => {
+    const matches = (!query || card.dataset.search.includes(query)) && (team === "all" || card.dataset.team === team) && (role === "all" || card.dataset.role === role);
+    card.hidden = !matches;
+    if (matches) visible += 1;
+  });
+  const counter = root.querySelector("[data-personnel-count]");
+  if (counter) counter.textContent = String(visible);
+}
+
 function ui(key) {
   return SHELL_TEXT[state.language]?.[key] ?? SHELL_TEXT.ru[key] ?? key;
 }
@@ -1117,19 +1404,6 @@ function normalizeLanguage(value) {
 
 function localeCode() {
   return LANGUAGES.find(language => language.code === state.language)?.locale ?? APP_CONFIG.locale;
-}
-
-function isPageLocked(page) {
-  if (state.account?.role !== "senior") return false;
-  if (["dashboard", "attendance"].includes(page)) return false;
-  if (!state.shift?.active) return true;
-  if (page === "journals") return false;
-  return Boolean(state.shift.requiresScaleControl && !state.shift.weightsCompletedAt);
-}
-
-function lockMessage() {
-  if (!state.shift?.active) return "Сначала начните смену через табель.";
-  return "Сначала завершите контроль всех 13 весов.";
 }
 
 function startClock() {

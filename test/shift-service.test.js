@@ -17,8 +17,9 @@ const attendance = [
 
 test("первая смена требует контроль всех 13 весов", async () => {
   const service = new ShiftService(createStore());
-  const shift = await service.start({ supervisor: "Старший", shiftNumber: 1, attendance });
+  const shift = await service.start({ supervisor: "Старший", shiftNumber: 1, shiftTeamId: "shift-team-a", attendance });
   assert.equal(shift.requiresScaleControl, true);
+  assert.equal(shift.shiftTeamId, "shift-team-a");
   assert.equal(shift.weightsCompletedAt, null);
 
   assert.equal((await service.completeScaleControl(12)).weightsCompletedAt, null);

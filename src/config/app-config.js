@@ -2,7 +2,7 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.4.0",
+  version: "0.5.0",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
@@ -53,22 +53,6 @@ export const ACCOUNTS = Object.freeze([
     description: "Работа со сменой и разрешёнными журналами"
   }
 ]);
-
-export const PERSONNEL = Object.freeze([
-  "Albert Krevski",
-  "Vladislav Balašov",
-  "Viktor Minin",
-  "Vitalii Paliienko",
-  "Anatolii Brazhko"
-].map((fullName, index) => Object.freeze({
-  id: `employee-${String(index + 1).padStart(2, "0")}`,
-  fullName,
-  role: null,
-  shift: null,
-  active: true
-})));
-
-export const EMPLOYEES = Object.freeze(PERSONNEL.map(employee => employee.fullName));
 
 export const SCALES = Object.freeze(Array.from({ length: 13 }, (_, index) => {
   const number = index + 1;
