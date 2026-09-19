@@ -11,6 +11,8 @@ const port = numberFromEnvironment("PORT", 4173);
 const host = process.env.HOST || "127.0.0.1";
 const writesEnabled = process.env.GOOGLE_WRITES_ENABLED === "true";
 const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
+const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
+const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
 const maximumBodyBytes = 1024 * 1024;
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -34,7 +36,9 @@ createServer(async (request, response) => {
         mode: "gateway",
         googleWritesEnabled: writesEnabled,
         gatewayBaseUrl: "",
-        workstationRole
+        workstationRole,
+        workstationId,
+        workstationLabel
       })});`);
     }
 
@@ -46,6 +50,8 @@ createServer(async (request, response) => {
         writesEnabled,
         workstationRole,
         workstationConfigured: workstationRole !== null,
+        workstationId,
+        workstationLabel,
         missing: missingGoogleSettings()
       });
     }
@@ -79,6 +85,7 @@ createServer(async (request, response) => {
   }
 }).listen(port, host, () => {
   console.log(`Packaging-Filling-Hub: http://${host}:${port}`);
+  console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
 });
 
@@ -230,6 +237,20 @@ function normalizeWorkstationRole(value) {
   if (!value) return null;
   if (["manager", "senior"].includes(value)) return value;
   throw new Error("WORKSTATION_ROLE должен иметь значение manager или senior");
+}
+
+function normalizeWorkstationId(value) {
+  if (!value) return null;
+  const result = String(value).trim().toLowerCase();
+  if (/^[a-z0-9][a-z0-9-]{1,63}$/.test(result)) return result;
+  throw new Error("WORKSTATION_ID должен содержать латинские буквы, цифры и дефисы");
+}
+
+function normalizeWorkstationLabel(value) {
+  if (!value) return null;
+  const result = String(value).trim();
+  if (result.length <= 80) return result;
+  throw new Error("WORKSTATION_LABEL не должен превышать 80 символов");
 }
 
 function loadEnvironment(filePath) {

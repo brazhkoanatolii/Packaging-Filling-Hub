@@ -1,9 +1,11 @@
 import { getVilniusDate, makeId, validateScaleCheck } from "../domain/scale-check.js";
 
 export class JournalService {
-  constructor(repository, journal) {
+  constructor(repository, journal, { workstationId = null, workstationLabel = null } = {}) {
     this.repository = repository;
     this.journal = journal;
+    this.workstationId = workstationId;
+    this.workstationLabel = workstationLabel;
   }
 
   list() {
@@ -43,7 +45,7 @@ export class JournalService {
     return this.repository.save(record, {
       type: "create",
       expectedVersion: 0,
-      actor: `${values.performer} (${account.title})`
+      actor: this.#actor(values.performer, account)
     });
   }
 
@@ -55,7 +57,7 @@ export class JournalService {
     return this.repository.save({ ...current, ...values }, {
       type: "update",
       expectedVersion: current.version,
-      actor: `${values.performer} (${account.title})`
+      actor: this.#actor(values.performer, account)
     });
   }
 
@@ -71,7 +73,7 @@ export class JournalService {
     }, {
       type: "annul",
       expectedVersion: current.version,
-      actor: `${performer} (${account.title})`
+      actor: this.#actor(performer, account)
     });
   }
 
@@ -84,5 +86,12 @@ export class JournalService {
       performer: "",
       note: ""
     };
+  }
+
+  #actor(performer, account) {
+    const device = this.workstationLabel || this.workstationId;
+    return device
+      ? `${performer} (${account.title}; ${device})`
+      : `${performer} (${account.title})`;
   }
 }

@@ -48,6 +48,15 @@ if ($role -notin @("manager", "senior")) {
 } else {
   Write-Host "[OK] Роль компьютера: $role" -ForegroundColor Green
 }
+$workstationId = $environment["WORKSTATION_ID"]
+$workstationLabel = $environment["WORKSTATION_LABEL"]
+if ($workstationId -notmatch "^[a-z0-9][a-z0-9-]{1,63}$") {
+  $failures.Add("Не назначен корректный идентификатор рабочего места")
+} elseif (-not $workstationLabel) {
+  $failures.Add("Не задано название рабочего места")
+} else {
+  Write-Host "[OK] Устройство: $workstationLabel ($workstationId)" -ForegroundColor Green
+}
 
 $port = if ($environment["PORT"]) { $environment["PORT"] } else { "4173" }
 $healthUrl = "http://127.0.0.1:$port/api/health"
@@ -55,6 +64,9 @@ try {
   $health = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 3
   if ($health.ok -ne $true) { throw "шлюз вернул ошибку" }
   Write-Host "[OK] Локальная программа запущена, версия $($health.version)" -ForegroundColor Green
+  if ($health.workstationId -ne $workstationId -or $health.workstationLabel -ne $workstationLabel) {
+    $failures.Add("Запущенный шлюз использует другое рабочее место; перезапустите программу")
+  }
   if (-not $health.configured) {
     $warnings.Add("Google OAuth и/или Apps Script ещё не настроены: $($health.missing -join ', ')")
   } else {

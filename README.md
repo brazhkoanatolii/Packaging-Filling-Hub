@@ -36,9 +36,9 @@ PWA для электронных журналов фасовочного уча
 npm run build:windows
 ```
 
-В папке `dist` появятся архив версии и файл контрольной суммы SHA256. На компьютере начальника запускается `INSTALL-MANAGER.cmd`, на компьютере старшего механика — `INSTALL-SENIOR-MECHANIC.cmd`. Установщик создаёт локальную копию, ярлык и автозапуск, но сохраняет существующий `.env` при обновлениях.
+В папке `dist` появятся архив версии и файл контрольной суммы SHA256. На компьютере начальника запускается `INSTALL-MANAGER.cmd`, на компьютере старшего механика — `INSTALL-SENIOR-MECHANIC.cmd`, дома — `INSTALL-HOME-MANAGER.cmd`. Установщик создаёт локальную копию, ярлык и автозапуск, но сохраняет существующий `.env` при обновлениях.
 
-Пошаговая инструкция: [README-INSTALLATION-RU.md](README-INSTALLATION-RU.md). Точный статус готовности: [docs/DEPLOYMENT-READINESS-RU.md](docs/DEPLOYMENT-READINESS-RU.md).
+Пошаговая инструкция: [README-INSTALLATION-RU.md](README-INSTALLATION-RU.md). Работа из дома: [HOME-WORK-RU.md](HOME-WORK-RU.md). Точный статус готовности: [docs/DEPLOYMENT-READINESS-RU.md](docs/DEPLOYMENT-READINESS-RU.md).
 
 ## Запуск для разработки
 

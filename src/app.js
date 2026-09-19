@@ -55,7 +55,10 @@ async function bootstrap() {
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
   shiftService = new ShiftService(store);
   workforceService = new WorkforceService(store);
-  journalService = new JournalService(repository, journal);
+  journalService = new JournalService(repository, journal, {
+    workstationId: APP_CONFIG.workstationId,
+    workstationLabel: APP_CONFIG.workstationLabel
+  });
 
   await repository.init(remoteProvider.mode === "demo" ? createDemoRecords() : []);
   if (navigator.onLine) {
@@ -406,7 +409,7 @@ function renderLogin() {
       </section>
       <section class="login-panel" aria-label="Выбор учётной записи">
         <div class="panel-heading">
-          <span class="mode-pill">${productionMode ? "Рабочее место" : "Тестовый режим"}</span>
+          <span class="mode-pill">${productionMode ? escapeHtml(APP_CONFIG.workstationLabel || "Рабочее место") : "Тестовый режим"}</span>
           <h2>Кто работает?</h2>
           <p>${APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
         </div>
@@ -442,7 +445,7 @@ function renderApplication() {
         <div class="sidebar-footer">
           <div class="signed-user">
             <span class="avatar">${state.account.role === "manager" ? "НУ" : "СМ"}</span>
-            <span><strong>${state.account.title}</strong><small>${ui("account")}</small></span>
+            <span><strong>${state.account.title}</strong><small>${escapeHtml(APP_CONFIG.workstationLabel || ui("account"))}</small></span>
           </div>
           <button class="text-button" data-action="logout">${ui("logout")}</button>
         </div>

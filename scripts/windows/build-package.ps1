@@ -26,6 +26,8 @@ try {
     "package.json",
     ".env.example",
     "README-INSTALLATION-RU.md",
+    "HOME-WORK-RU.md",
+    "INSTALL-HOME-MANAGER.cmd",
     "INSTALL-MANAGER.cmd",
     "INSTALL-SENIOR-MECHANIC.cmd",
     "VERIFY-INSTALLATION.cmd"

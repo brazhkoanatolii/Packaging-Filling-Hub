@@ -2,12 +2,18 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.6.0",
+  version: "0.6.1",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
   workstationRole: ["manager", "senior"].includes(runtimeConfig.workstationRole)
     ? runtimeConfig.workstationRole
+    : null,
+  workstationId: typeof runtimeConfig.workstationId === "string"
+    ? runtimeConfig.workstationId
+    : null,
+  workstationLabel: typeof runtimeConfig.workstationLabel === "string"
+    ? runtimeConfig.workstationLabel
     : null,
   integration: {
     mode: runtimeConfig.mode === "gateway" ? "gateway" : "demo",

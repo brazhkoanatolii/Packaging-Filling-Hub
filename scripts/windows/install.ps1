@@ -3,6 +3,8 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("manager", "senior")]
   [string]$Workstation,
+  [string]$WorkstationId = "",
+  [string]$WorkstationLabel = "",
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Packaging-Filling-Hub"),
   [switch]$NoStart,
   [switch]$NoShortcuts
@@ -21,6 +23,20 @@ function Set-EnvironmentValue {
 }
 
 $ErrorActionPreference = "Stop"
+$WorkstationId = $WorkstationId.Trim().ToLowerInvariant()
+$WorkstationLabel = $WorkstationLabel.Trim()
+if (-not $WorkstationId) {
+  $WorkstationId = if ($Workstation -eq "manager") { "manager-work" } else { "senior-work" }
+}
+if (-not $WorkstationLabel) {
+  $WorkstationLabel = if ($Workstation -eq "manager") { "Рабочий компьютер начальника" } else { "Рабочий компьютер старшего механика" }
+}
+if ($WorkstationId -notmatch "^[a-z0-9][a-z0-9-]{1,63}$") {
+  throw "Идентификатор рабочего места должен содержать только латинские буквы, цифры и дефисы."
+}
+if ($WorkstationLabel.Length -gt 80) {
+  throw "Название рабочего места не должно превышать 80 символов."
+}
 $sourceRoot = [System.IO.Path]::GetFullPath((Resolve-Path (Join-Path $PSScriptRoot "..\..")))
 $targetRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -44,7 +60,7 @@ if ($sourceRoot -ne $targetRoot) {
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     Copy-Item -Path (Join-Path $sourceRoot "$directory\*") -Destination $destination -Recurse -Force
   }
-  foreach ($file in @("index.html", "manifest.webmanifest", "runtime-config.js", "service-worker.js", "package.json", ".env.example", "README-INSTALLATION-RU.md")) {
+  foreach ($file in @("index.html", "manifest.webmanifest", "runtime-config.js", "service-worker.js", "package.json", ".env.example", "README-INSTALLATION-RU.md", "HOME-WORK-RU.md")) {
     Copy-Item -LiteralPath (Join-Path $sourceRoot $file) -Destination (Join-Path $targetRoot $file) -Force
   }
 }
@@ -54,6 +70,8 @@ if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) {
   Copy-Item -LiteralPath (Join-Path $targetRoot ".env.example") -Destination $environmentPath
 }
 Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ROLE" -Value $Workstation
+Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ID" -Value $WorkstationId
+Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_LABEL" -Value $WorkstationLabel
 Set-EnvironmentValue -Path $environmentPath -Name "HOST" -Value "127.0.0.1"
 
 New-Item -ItemType Directory -Path (Join-Path $targetRoot "logs") -Force | Out-Null
@@ -88,5 +106,6 @@ Write-Host ""
 Write-Host "Packaging-Filling-Hub установлен." -ForegroundColor Green
 Write-Host "Папка: $targetRoot"
 Write-Host "Рабочее место: $roleTitle"
+Write-Host "Устройство: $WorkstationLabel ($WorkstationId)"
 if (-not $NoShortcuts) { Write-Host "Ярлык создан на рабочем столе; локальный шлюз добавлен в автозапуск." }
 Write-Host "Google проверяется отдельно командой VERIFY-INSTALLATION.cmd."

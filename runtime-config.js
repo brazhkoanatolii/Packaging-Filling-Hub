@@ -2,5 +2,7 @@ globalThis.__PACKAGING_FILLING_CONFIG__ = Object.freeze({
   mode: "demo",
   googleWritesEnabled: false,
   gatewayBaseUrl: "",
-  workstationRole: null
+  workstationRole: null,
+  workstationId: null,
+  workstationLabel: null
 });
