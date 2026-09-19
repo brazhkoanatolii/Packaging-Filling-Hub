@@ -107,7 +107,7 @@ function updateEnvironment(filePath, values) {
 }
 
 function respond(response, statusCode, message) {
-  const body = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Фасовочный участок</title><body style="font:20px system-ui;max-width:720px;margin:64px auto;padding:24px"><h1>Фасовочный участок</h1><p>${escapeHtml(message)}</p></body></html>`;
+  const body = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Packaging-Filling-Hub</title><body style="font:20px system-ui;max-width:720px;margin:64px auto;padding:24px"><h1>Packaging-Filling-Hub</h1><p>${escapeHtml(message)}</p></body></html>`;
   response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   response.end(body);
 }

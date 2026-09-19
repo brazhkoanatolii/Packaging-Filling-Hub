@@ -1,13 +1,13 @@
 {
-  "name": "Фасовочный участок",
-  "short_name": "Фасовочный",
+  "name": "Packaging-Filling-Hub",
+  "short_name": "Packaging Hub",
   "description": "Электронные журналы фасовочного участка",
   "lang": "ru",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f3f5f3",
-  "theme_color": "#16312b",
+  "theme_color": "#0f2742",
   "icons": [
     {
       "src": "./assets/icon.svg",
@@ -17,4 +17,3 @@
     }
   ]
 }
-

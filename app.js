@@ -2,7 +2,7 @@
 
 // ---- src/config/app-config.js ----
 const APP_CONFIG = Object.freeze({
-  name: "Фасовочный участок",
+  name: "Packaging-Filling-Hub",
   version: "0.1.0",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
@@ -739,9 +739,9 @@ function renderLogin() {
   return `
     <main class="login-shell">
       <section class="login-brand" aria-labelledby="login-title">
-        <div class="brand-mark large" aria-hidden="true">ФУ</div>
+        <div class="brand-mark large" aria-hidden="true">▦</div>
         <p class="eyebrow">Электронные журналы производства</p>
-        <h1 id="login-title">Фасовочный участок</h1>
+        <h1 id="login-title">Packaging-Filling-Hub</h1>
         <p class="login-lead">Заполняйте журналы быстро, продолжайте работу без интернета и не переносите данные вручную.</p>
         <ul class="feature-list">
           <li><span>✓</span> Google Sheets остаётся главным источником</li>
@@ -777,8 +777,8 @@ function renderApplication() {
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-row">
-          <div class="brand-mark">ФУ</div>
-          <div><strong>Фасовочный</strong><small>участок</small></div>
+          <div class="brand-mark" aria-hidden="true">▦</div>
+          <div><strong>Packaging-</strong><small>Filling-Hub</small></div>
         </div>
         <nav class="main-nav" aria-label="Основное меню">
           ${navItem("dashboard", "Обзор", dashboardIcon())}

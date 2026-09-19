@@ -6,6 +6,8 @@ import {
   getVilniusDate,
   validateScaleCheck
 } from "../src/domain/scale-check.js";
+import { MODULES, SCALES } from "../src/config/app-config.js";
+import { JournalService } from "../src/services/journal-service.js";
 
 const journal = { nominal: 50, tolerance: 0.05 };
 
@@ -60,4 +62,28 @@ test("исполнитель обязателен перед каждой зап
 test("дата формируется в часовом поясе Europe/Vilnius", () => {
   const nearMidnightUtc = new Date("2026-01-01T22:30:00.000Z");
   assert.equal(getVilniusDate(nearMidnightUtc), "2026-01-02");
+});
+
+test("быстрый обход содержит все 13 весов из рабочего листа", () => {
+  assert.equal(SCALES.length, 13);
+  assert.deepEqual(SCALES.map(scale => scale.name), Array.from({ length: 13 }, (_, index) => `WTC 600 (F${index + 1})`));
+});
+
+test("разделы расположены в согласованном рабочем порядке", () => {
+  assert.deepEqual(MODULES.map(module => module.id), [
+    "dashboard", "attendance", "journals", "packaging", "maintenance", "nonconformities",
+    "specifications", "production", "spare-parts", "cyclones", "documents", "personnel",
+    "vacations", "settings"
+  ]);
+  assert.equal(MODULES.find(module => module.id === "vacations").managerOnly, true);
+  assert.equal(MODULES.find(module => module.id === "settings").managerOnly, true);
+});
+
+test("пакет весов полностью проверяется до создания первой записи", async () => {
+  const saved = [];
+  const repository = { async save(record) { saved.push(record); return record; } };
+  const service = new JournalService(repository, { id: "scale-check-50g", nominal: 50, tolerance: 0.05 });
+  const valid = { date: "2026-09-18", scaleName: "WTC 600 (F1)", actual: 50, condition: "Рабочие", performer: "Тест" };
+  await assert.rejects(service.createBatch([valid, { ...valid, scaleName: "WTC 600 (F2)", actual: "" }], { title: "Старший механик" }), ValidationError);
+  assert.equal(saved.length, 0);
 });

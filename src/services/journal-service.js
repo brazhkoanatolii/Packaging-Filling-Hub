@@ -12,6 +12,20 @@ export class JournalService {
 
   async create(input, account) {
     const values = validateScaleCheck(input, this.journal);
+    return this.#createValidated(values, account);
+  }
+
+  async createBatch(inputs, account) {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new Error("Добавьте хотя бы одно показание");
+    }
+    const values = inputs.map(input => validateScaleCheck(input, this.journal));
+    const records = [];
+    for (const item of values) records.push(await this.#createValidated(item, account));
+    return records;
+  }
+
+  async #createValidated(values, account) {
     const now = new Date().toISOString();
     const record = {
       id: makeId("scale"),
@@ -72,4 +86,3 @@ export class JournalService {
     };
   }
 }
-

@@ -70,7 +70,7 @@ createServer(async (request, response) => {
     });
   }
 }).listen(port, host, () => {
-  console.log(`Фасовочный участок: http://${host}:${port}`);
+  console.log(`Packaging-Filling-Hub: http://${host}:${port}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
 });
 
