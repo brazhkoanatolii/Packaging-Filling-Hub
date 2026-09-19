@@ -1,4 +1,4 @@
-import { ACCOUNTS, APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
+import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
 import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS } from "./config/workforce-config.js";
 import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
 import { createDemoRecords } from "./data/demo-records.js";
@@ -52,7 +52,7 @@ async function bootstrap() {
   store = await new IndexedDbDataProvider().init();
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
-  authService = new AuthService(store);
+  authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
   shiftService = new ShiftService(store);
   workforceService = new WorkforceService(store);
   journalService = new JournalService(repository, journal);
@@ -389,6 +389,8 @@ function render() {
 }
 
 function renderLogin() {
+  const accounts = authService.availableAccounts();
+  const productionMode = APP_CONFIG.integration.mode === "gateway";
   return `
     <main class="login-shell">
       <section class="login-brand" aria-labelledby="login-title">
@@ -404,12 +406,12 @@ function renderLogin() {
       </section>
       <section class="login-panel" aria-label="Выбор учётной записи">
         <div class="panel-heading">
-          <span class="mode-pill">Тестовый режим</span>
+          <span class="mode-pill">${productionMode ? "Рабочее место" : "Тестовый режим"}</span>
           <h2>Кто работает?</h2>
-          <p>Выберите рабочую учётную запись. Пароли будут включены перед установкой.</p>
+          <p>${APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
         </div>
         <div class="account-list">
-          ${ACCOUNTS.map(account => `
+          ${accounts.map(account => `
             <button class="account-card" data-action="login" data-account-id="${account.id}">
               <span class="account-icon">${account.role === "manager" ? "НУ" : "СМ"}</span>
               <span class="account-copy">
@@ -830,7 +832,7 @@ function renderSettingsPage() {
     ${state.settingsTab === "personnel" ? renderPersonnelSettings() : state.settingsTab === "shifts" ? renderShiftSettings() : state.settingsTab === "timesheet" ? renderTimesheetSettings() : `
       <div class="settings-grid">
         <section class="card settings-section">
-          <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Подключено"}</span></div>
+          <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Рабочий шлюз"}</span></div>
           ${settingRow("Рабочая таблица", journal.sheetName, "Подключение подготовлено")}
           ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
           ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}

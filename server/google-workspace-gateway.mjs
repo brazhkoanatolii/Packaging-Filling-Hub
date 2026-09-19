@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 const projectRoot = normalize(join(fileURLToPath(new URL(".", import.meta.url)), ".."));
 loadEnvironment(join(projectRoot, ".env"));
 
+const appVersion = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")).version;
 const port = numberFromEnvironment("PORT", 4173);
 const host = process.env.HOST || "127.0.0.1";
 const writesEnabled = process.env.GOOGLE_WRITES_ENABLED === "true";
+const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const maximumBodyBytes = 1024 * 1024;
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -18,6 +20,8 @@ const types = {
   ".svg": "image/svg+xml",
   ".webmanifest": "application/manifest+json; charset=utf-8"
 };
+const publicFiles = new Set(["index.html", "manifest.webmanifest", "service-worker.js"]);
+const publicDirectories = ["assets/", "src/"];
 
 let tokenCache = null;
 
@@ -29,15 +33,19 @@ createServer(async (request, response) => {
       return sendJavaScript(response, `globalThis.__PACKAGING_FILLING_CONFIG__ = Object.freeze(${JSON.stringify({
         mode: "gateway",
         googleWritesEnabled: writesEnabled,
-        gatewayBaseUrl: ""
+        gatewayBaseUrl: "",
+        workstationRole
       })});`);
     }
 
     if (url.pathname === "/api/health" && request.method === "GET") {
       return sendJson(response, 200, {
         ok: true,
+        version: appVersion,
         configured: missingGoogleSettings().length === 0,
         writesEnabled,
+        workstationRole,
+        workstationConfigured: workstationRole !== null,
         missing: missingGoogleSettings()
       });
     }
@@ -122,8 +130,18 @@ function serveStatic(pathname, response) {
   const relativePath = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
   let filePath = resolve(projectRoot, relativePath);
   const rel = relative(projectRoot, filePath);
-  const blocked = rel.startsWith(`..${sep}`) || rel === ".." || rel.startsWith(".git") || rel === ".env" || rel.startsWith(`.env${sep}`);
-  if (blocked || !existsSync(filePath) || statSync(filePath).isDirectory()) filePath = join(projectRoot, "index.html");
+  const publicPath = rel.split(sep).join("/");
+  const outsideProject = rel.startsWith(`..${sep}`) || rel === "..";
+  const allowed = publicFiles.has(publicPath) || publicDirectories.some(directory => publicPath.startsWith(directory));
+  if (outsideProject || !allowed || !existsSync(filePath) || statSync(filePath).isDirectory()) {
+    response.writeHead(404, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff"
+    });
+    response.end("Страница не найдена");
+    return;
+  }
   response.writeHead(200, {
     "Content-Type": types[extname(filePath)] || "application/octet-stream",
     "Cache-Control": extname(filePath) === ".html" ? "no-cache" : "public, max-age=300",
@@ -206,6 +224,12 @@ function numberFromEnvironment(name, fallback) {
   const value = Number(process.env[name] || fallback);
   if (Number.isInteger(value) && value > 0 && value <= 65535) return value;
   throw new Error(`${name} должен быть корректным номером порта`);
+}
+
+function normalizeWorkstationRole(value) {
+  if (!value) return null;
+  if (["manager", "senior"].includes(value)) return value;
+  throw new Error("WORKSTATION_ROLE должен иметь значение manager или senior");
 }
 
 function loadEnvironment(filePath) {
