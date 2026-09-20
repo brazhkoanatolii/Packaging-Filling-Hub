@@ -2,7 +2,7 @@ import { ATTENDANCE_CODES, SHIFT_TEAMS, WORKFORCE_PERSONNEL } from "../config/wo
 
 const PERSONNEL_KEY = "workforcePersonnel";
 const PERSONNEL_SOURCE_VERSION_KEY = "workforcePersonnelSourceVersion";
-const PERSONNEL_SOURCE_VERSION = 2;
+const PERSONNEL_SOURCE_VERSION = 3;
 const TEAMS_KEY = "workforceShiftTeams";
 const ATTENDANCE_KEY = "workforceAttendance";
 
@@ -49,6 +49,8 @@ export class WorkforceService {
       role: String(input.role),
       shiftTeamId: String(input.shiftTeamId || "office"),
       active: input.active !== false,
+      pakNumber: String(input.pakNumber || "").trim(),
+      pakCode: String(input.pakCode || "").trim(),
       birthday: String(input.birthday || ""),
       hireDate: String(input.hireDate || ""),
       phone: String(input.phone || "").trim(),

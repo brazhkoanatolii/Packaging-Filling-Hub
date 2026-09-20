@@ -42,12 +42,14 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0006", "Serhii Rybalka", "mechanic-operator", "shift-team-a"],
   ["employee-0007", "Volodymyr Nazarenko", "mechanic-operator", "shift-team-a"],
   ["employee-0008", "Ievhenii Bevz", "mechanic-operator", "shift-team-a"],
-  ["employee-0009", "Hanna Khalypenko", "packer", "shift-team-a"],
-  ["employee-0010", "Gražina Stankevič", "packer", "shift-team-a"],
-  ["employee-0011", "Alina Macutkevič", "packer", "shift-team-a"],
-  ["employee-0012", "Alicija Girčienė", "packer", "shift-team-a"],
-  ["employee-0013", "Ilona Curikova", "packer", "shift-team-a"],
-  ["employee-0014", "Karina Ivaškevičiūtė", "packer", "shift-team-a"],
+  ["employee-0009", "Hanna Khalypenko", "packer", "shift-team-a", true, "PAK 3", "1-A"],
+  ["employee-0010", "Gražina Stankevič", "packer", "shift-team-a", true, "PAK 6", "1-C"],
+  ["employee-0011", "Alina Macutkevič", "packer", "shift-team-a", true, "PAK 7", "1-D"],
+  ["employee-0012", "Alicija Girčienė", "packer", "shift-team-a", true, "PAK 9", "1-F"],
+  ["employee-0013", "Ilona Curikova", "packer", "shift-team-a", true, "PAK 1", "1-G"],
+  ["employee-0014", "Karina Ivaškevičiūtė", "packer", "shift-team-a", true, "PAK 12", "1-O"],
+  ["employee-0015", "Danuta Jankovskaja", "packer", "shift-team-a", true, "PAK 2", "1-H"],
+  ["employee-0016", "Tatjana Vasilevska", "packer", "shift-team-a", true, "PAK 5", "1-I"],
   ["employee-0017", "Viktor Minin", "senior-mechanic", "shift-team-b"],
   ["employee-0019", "Maksim Tsikhenia", "mechanic-operator", "shift-team-b"],
   ["employee-0020", "Vitalii Paliienko", "mechanic", "shift-team-b"],
@@ -55,12 +57,15 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0022", "Serhii Serikov", "mechanic-operator", "shift-team-b"],
   ["employee-0023", "Roman Vasylets", "mechanic-operator", "shift-team-b"],
   ["employee-0024", "Oleksandr Varchenko", "mechanic-operator", "shift-team-b"],
-  ["employee-0025", "Renata Kazlauskienė", "packer", "shift-team-b"],
-  ["employee-0026", "Kamila Babič", "packer", "shift-team-b"],
-  ["employee-0027", "Irena Jurevič", "packer", "shift-team-b"],
-  ["employee-0028", "Anžela Butėnienė", "packer", "shift-team-b"],
-  ["employee-0029", "Alina Andriushchenko", "packer", "shift-team-b"]
-].map(([id, fullName, role, shiftTeamId, active = true]) => Object.freeze({ id, fullName, role, shiftTeamId, active })));
+  ["employee-0025", "Renata Kazlauskienė", "packer", "shift-team-b", true, "PAK 4", "1-J"],
+  ["employee-0026", "Kamila Babič", "packer", "shift-team-b", true, "PAK 14", "1-P"],
+  ["employee-0027", "Irena Jurevič", "packer", "shift-team-b", true, "PAK 15", "1-Q"],
+  ["employee-0028", "Anžela Butėnienė", "packer", "shift-team-b", true, "PAK 16", "1-R"],
+  ["employee-0029", "Alina Andriushchenko", "packer", "shift-team-b", true, "PAK 19", "1-S"],
+  ["employee-0030", "Malgožata Blinstrubaitė", "packer", "shift-team-b", true, "PAK 13", "1-T"],
+  ["employee-0031", "Jolanta Blinstrubaitė", "packer", "shift-team-b", true, "PAK 18", "1-U"],
+  ["employee-0032", "Viktoriia Hryhorenko", "packer", "shift-team-b", true, "PAK 17", "1-V"]
+].map(([id, fullName, role, shiftTeamId, active = true, pakNumber = "", pakCode = ""]) => Object.freeze({ id, fullName, role, shiftTeamId, active, pakNumber, pakCode })));
 
 export const SHIFT_TEAMS = Object.freeze([
   Object.freeze({ id: "shift-team-a", code: "A", name: "Смена A", anchorDate: "2026-07-01", cycleLengthDays: 4, workDayOffsets: [0, 1], shiftDurationHours: 12, accountingHours: 11, active: true }),
