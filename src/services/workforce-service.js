@@ -12,7 +12,9 @@ export class WorkforceService {
 
   async initialize() {
     if (this.repository) return this.repository.initialize();
-    if (!await this.store.preference(PERSONNEL_KEY)) await this.store.setPreference(PERSONNEL_KEY, clone(WORKFORCE_PERSONNEL));
+    const storedPersonnel = await this.store.preference(PERSONNEL_KEY);
+    if (!storedPersonnel) await this.store.setPreference(PERSONNEL_KEY, clone(WORKFORCE_PERSONNEL));
+    else await this.store.setPreference(PERSONNEL_KEY, migratePersonnel(storedPersonnel));
     if (!await this.store.preference(TEAMS_KEY)) await this.store.setPreference(TEAMS_KEY, clone(SHIFT_TEAMS));
     if (!await this.store.preference(ATTENDANCE_KEY)) await this.store.setPreference(ATTENDANCE_KEY, []);
     return this.snapshot();
@@ -150,6 +152,14 @@ function parseDate(value) {
 function utcDay(value) { return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()); }
 function dateKey(value) { return [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"), String(value.getDate()).padStart(2, "0")].join("-"); }
 function clone(value) { return structuredClone(value); }
+function migratePersonnel(personnel) {
+  return personnel.map(person => {
+    if (person.id === "employee-0001" && person.role === "senior-mechanic") return { ...person, role: "mechanic" };
+    if (person.id === "employee-0018") return { ...person, active: false };
+    if (person.id === "employee-0020" && person.role === "mechanic-operator") return { ...person, role: "mechanic" };
+    return person;
+  });
+}
 function numberBetween(value, minimum, maximum, message) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < minimum || number > maximum) throw new Error(message);

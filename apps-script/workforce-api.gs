@@ -8,8 +8,10 @@ const WF_BOOKS = Object.freeze({
   vacations: '1zenc0sBGtD8KHQdrBxULsoA9jSaUcZeW83XIiz5YxSo'
 });
 const WF_YEARS = [2025, 2026, 2027, 2028, 2029];
-const WF_ROLES = { 'head-of-area':'Начальник участка', 'production-manager':'Начальник производства', administrator:'Администратор', 'warehouse-manager':'Начальник склада', 'senior-mechanic':'Старший механик', 'mechanic-operator':'Механик-оператор', packer:'Упаковщик' };
+const WF_ROLES = { 'head-of-area':'Начальник участка', 'production-manager':'Начальник производства', administrator:'Администратор', 'warehouse-manager':'Начальник склада', 'senior-mechanic':'Старший механик', mechanic:'Механик', 'mechanic-operator':'Механик-оператор', packer:'Упаковщик' };
 const WF_STATUSES = ['Не запланирован','Запланирован','Согласован','Использован','Аннулирован'];
+const WF_ABSENCE_CODES = ['A','L','NS','N','MA','NA','PA','G','AV','PV','M','TN','D','SK','VV','PB','ND','NP','NN'];
+const WF_ATTENDANCE_CODES = ['K'].concat(WF_ABSENCE_CODES);
 
 function getWorkforceSnapshot(options) {
   const master = SpreadsheetApp.openById(WF_BOOKS.personnel);
@@ -93,7 +95,7 @@ function wfSaveAttendance_(people,teams,op) {
  if(employee.shiftTeamId==='office')throw new Error('В табель фасовочного участка можно вносить только сотрудников смен.');
  if(!teams.some(t=>t.id===p.shiftTeamId))throw new Error('Смена не найдена');
  if(p.id!==date+':'+p.shiftTeamId+':'+p.employeeId)throw new Error('Некорректный ID табеля');
- const value=String(p.value||'');if(!/^(?:[1-9]|1[0-9]|2[0-4]|A|L|NA|M|PB|PV)$/.test(value))throw new Error('Недопустимое значение табеля');
+ const value=String(p.value||'');if(!/^(?:[1-9]|1[0-9]|2[0-4])$/.test(value)&&!WF_ATTENDANCE_CODES.includes(value))throw new Error('Недопустимое значение табеля');
  const s=SpreadsheetApp.openById(WF_BOOKS.attendance).getSheetByName(String(year));
  const found=wfRows_(s,44).find(r=>String(r.values[38])===p.employeeId&&Number(r.values[0])===month);
  const currentValue=found?String(found.values[day+2]||''):'', currentOvertime=found?String(found.values[42]).split(',').includes(String(day)):false;
@@ -104,7 +106,7 @@ function wfSaveAttendance_(people,teams,op) {
    const vals=Array(44).fill('');vals[0]=month;vals[1]=employee.fullName;vals[2]=teams.find(t=>t.id===p.shiftTeamId).name;vals[38]=employee.id;vals[43]=p.shiftTeamId;
    for(let d=new Date(year,month,0).getDate()+1;d<=31;d++)vals[d+2]='—';
    s.getRange(row,1,1,44).setValues([vals]);
-   s.getRange(row,35,1,3).setFormulas([['=SUM(D'+row+':AH'+row+')','=COUNTIF(D'+row+':AH'+row+',">0")',['A','L','NA','M','PB','PV'].map(c=>'COUNTIF(D'+row+':AH'+row+',"'+c+'")').join('+').replace(/^/,'=')]]);
+   s.getRange(row,35,1,3).setFormulas([['=SUM(D'+row+':AH'+row+')','=COUNTIF(D'+row+':AH'+row+',">0")',WF_ABSENCE_CODES.map(c=>'COUNTIF(D'+row+':AH'+row+',"'+c+'")').join('+').replace(/^/,'=')]]);
  }
  s.getRange(row,day+3).setValue(/^\d+$/.test(value)?Number(value):value);
  const days=new Set(String(found?.values[42]||'').split(',').filter(Boolean));if(p.overtime===true)days.add(String(day));else days.delete(String(day));

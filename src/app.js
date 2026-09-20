@@ -179,8 +179,10 @@ async function handleSubmit(event) {
     return;
   }
   try {
+    await saveShiftAttendanceToTimesheet(teamId, attendance);
     if (state.shift?.active) {
       state.shift = await shiftService.updateAttendance(attendance);
+      state.workforce = await workforceService.snapshot();
       render();
       toast("Табель смены обновлён.", "success");
       return;
@@ -191,6 +193,7 @@ async function handleSubmit(event) {
       shiftTeamId: teamId,
       attendance
     });
+    state.workforce = await workforceService.snapshot();
     state.page = state.shift.requiresScaleControl ? "journals" : "dashboard";
     render();
     if (state.shift.requiresScaleControl) {
@@ -627,10 +630,11 @@ function renderJournalsPage() {
 }
 
 function renderAttendancePage() {
+  const teamCounts = state.workforce.shiftTeams.map(team => ({ code: team.code, count: activePersonnel().filter(employee => employee.shiftTeamId === team.id).length }));
   return `
     <section class="workforce-hero card">
       <div><p class="eyebrow">Рабочее время и смены</p><h2>Табель участка</h2><p>График 2/2, фактические часы, причины отсутствия и начало смены — в одном разделе.</p></div>
-      <div class="workforce-hero-stat"><strong>${activePersonnel().filter(employee => employee.shiftTeamId !== "office").length}</strong><span>сотрудников<br>в сменах A и B</span></div>
+      <div class="workforce-hero-stat"><div><strong>${teamCounts.find(team => team.code === "A")?.count ?? 0}</strong><span>в смене A</span></div><div><strong>${teamCounts.find(team => team.code === "B")?.count ?? 0}</strong><span>в смене B</span></div></div>
     </section>
     ${renderAttendanceTabs()}
     ${state.attendanceView === "schedule" ? renderScheduleView() : state.attendanceView === "timesheet" ? renderTimesheetView() : renderShiftStartView()}`;
@@ -650,7 +654,7 @@ function renderShiftStartView() {
   const members = activePersonnel().filter(employee => employee.shiftTeamId === team?.id).sort(comparePersonnel);
   const supervisors = members.filter(employee => employee.role === "senior-mechanic");
   const savedAttendance = new Map((state.shift?.shiftTeamId === team?.id ? state.shift.attendance : []).map(item => [item.employeeId, item.status]));
-  const presentCount = members.filter(employee => (savedAttendance.get(employee.id) ?? "present") === "present").length;
+  const presentCount = members.filter(employee => attendanceCode(savedAttendance.get(employee.id)) === "11").length;
   const scheduled = team ? getScheduleMonth(team, ...monthParts(today())).some(day => day.date === today() && day.scheduled) : false;
   return `
     <section class="shift-day-banner ${scheduled ? "scheduled" : "substitution"}">
@@ -671,7 +675,7 @@ function renderShiftStartView() {
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
         ${members.map(employee => {
-          const status = savedAttendance.get(employee.id) ?? "present";
+          const status = attendanceCode(savedAttendance.get(employee.id));
           return `<label class="shift-person-row"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select></label>`;
         }).join("")}
       </div>
@@ -1521,8 +1525,8 @@ function attendanceTone(value, expectedHours = 11) {
 
 function timesheetOptions(selected, expectedHours = 11) {
   const current = String(selected ?? expectedHours);
-  const hours = Array.from({ length: 24 }, (_, index) => index + 1).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${value === Number(expectedHours) ? `Полная смена · ${value} ч` : `${value} ч`}</option>`).join("");
-  const reasons = ATTENDANCE_CODES.filter(item => item.value !== String(expectedHours)).map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value} · ${escapeHtml(item.label)}</option>`).join("");
+  const hours = Array.from({ length: 24 }, (_, index) => index + 1).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${value}</option>`).join("");
+  const reasons = ATTENDANCE_CODES.filter(item => !item.isWork).map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value}</option>`).join("");
   return `<optgroup label="Часы">${hours}</optgroup><optgroup label="Причины отсутствия">${reasons}</optgroup>`;
 }
 
@@ -1578,21 +1582,29 @@ function headerTime(value = new Date()) {
 }
 
 function attendanceStatusOptions(selected) {
-  const statuses = [
-    ["present", "На работе"],
-    ["absent", "Нет на работе"],
-    ["vacation", "Отпуск"],
-    ["sick", "Больничный"],
-    ["day-off", "Выходной"]
-  ];
-  return statuses.map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+  const current = attendanceCode(selected);
+  return ATTENDANCE_CODES.filter(item => item.value !== "K").map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value} · ${escapeHtml(item.label)}</option>`).join("");
 }
 
 function updateAttendanceCounter(form) {
   if (!form) return;
   const counter = form.querySelector("[data-attendance-present]");
   if (!counter) return;
-  counter.textContent = String([...form.querySelectorAll("[data-attendance-status]")].filter(select => select.value === "present").length);
+  counter.textContent = String([...form.querySelectorAll("[data-attendance-status]")].filter(select => select.value === "11").length);
+}
+
+function attendanceCode(value) {
+  return ({ present: "11", vacation: "A", sick: "L", absent: "PB", "day-off": "ND" })[String(value || "")] ?? String(value || "11");
+}
+
+async function saveShiftAttendanceToTimesheet(teamId, attendance) {
+  const date = today();
+  await withWorkforceActor(async () => {
+    for (const item of attendance) {
+      await workforceService.saveAttendance({ date, shiftTeamId: teamId, employeeId: item.employeeId, value: attendanceCode(item.status) });
+    }
+  });
+  if (workforceRepository) await syncWorkforce();
 }
 
 function showInlineFormError(form, message) {

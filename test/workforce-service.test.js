@@ -11,12 +11,14 @@ function createStore() {
   };
 }
 
-test("перенесён полный состав старой программы", () => {
+test("перенесён актуальный состав участка", () => {
   assert.equal(WORKFORCE_PERSONNEL.length, 35);
   assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.shiftTeamId === "shift-team-a").length, 16);
-  assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.shiftTeamId === "shift-team-b").length, 15);
+  assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.shiftTeamId === "shift-team-b" && employee.active).length, 14);
   assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.shiftTeamId === "office").length, 4);
-  assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.role === "senior-mechanic").length, 4);
+  assert.equal(WORKFORCE_PERSONNEL.filter(employee => employee.role === "senior-mechanic" && employee.active).length, 2);
+  assert.equal(WORKFORCE_PERSONNEL.find(employee => employee.id === "employee-0001").role, "mechanic");
+  assert.equal(WORKFORCE_PERSONNEL.find(employee => employee.id === "employee-0018").active, false);
 });
 
 test("график смен A и B повторяет цикл 2 через 2", () => {
@@ -60,4 +62,11 @@ test("администрация не попадает в табель и гра
     service.saveVacation({ employeeId: "employee-admin-0001", year: 2026, startDate: "2026-06-01", endDate: "2026-06-14", status: "Запланирован" }),
     /только сотрудника участка/
   );
+});
+
+test("литовские коды отсутствия сохраняются в табеле", async () => {
+  const service = new WorkforceService(createStore());
+  await service.initialize();
+  const record = await service.saveAttendance({ date: "2026-09-19", shiftTeamId: "shift-team-a", employeeId: "employee-0002", value: "NS" });
+  assert.equal(record.value, "NS");
 });

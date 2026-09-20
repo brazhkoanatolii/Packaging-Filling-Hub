@@ -4,18 +4,33 @@ export const ROLE_LABELS = Object.freeze({
   administrator: "Администратор",
   "warehouse-manager": "Начальник склада",
   "senior-mechanic": "Старший механик",
+  mechanic: "Механик",
   "mechanic-operator": "Механик-оператор",
   packer: "Упаковщик"
 });
 
 export const ATTENDANCE_CODES = Object.freeze([
-  { value: "11", label: "Полная смена", tone: "worked" },
-  { value: "A", label: "Отпуск", tone: "vacation" },
-  { value: "L", label: "Больничный", tone: "sick" },
-  { value: "NA", label: "Неоплачиваемый отпуск", tone: "unpaid" },
-  { value: "M", label: "Материнский день", tone: "mother-day" },
+  { value: "11", label: "На работе · полная смена", tone: "worked", isWork: true },
+  { value: "A", label: "Ежегодный отпуск", tone: "vacation" },
+  { value: "L", label: "Болезнь или травма", tone: "sick" },
+  { value: "NS", label: "Уход за больным", tone: "sick" },
+  { value: "N", label: "Неоплачиваемая нетрудоспособность", tone: "unpaid" },
+  { value: "MA", label: "Оплачиваемый учебный отпуск", tone: "vacation" },
+  { value: "NA", label: "Неоплачиваемый учебный отпуск", tone: "unpaid" },
+  { value: "PA", label: "Неоплачиваемый отпуск", tone: "unpaid" },
+  { value: "G", label: "Отпуск по беременности и родам", tone: "parental" },
+  { value: "AV", label: "Уход за ребёнком до 1 года", tone: "parental" },
+  { value: "PV", label: "Уход за ребёнком от 1 до 3 лет", tone: "parental" },
+  { value: "M", label: "Дополнительный день отдыха", tone: "mother-day" },
+  { value: "TN", label: "Мамин / папин день", tone: "mother-day" },
+  { value: "D", label: "День донора", tone: "mother-day" },
+  { value: "K", label: "Командировка", tone: "worked", isWork: true },
+  { value: "SK", label: "Стажировка или повышение квалификации", tone: "mother-day" },
+  { value: "VV", label: "Государственные или общественные обязанности", tone: "mother-day" },
   { value: "PB", label: "Прогул", tone: "unauthorized" },
-  { value: "PV", label: "Отпуск по уходу", tone: "parental" }
+  { value: "ND", label: "Отсутствие с разрешения администрации", tone: "unpaid" },
+  { value: "NP", label: "Отсутствие по уважительной причине", tone: "unpaid" },
+  { value: "NN", label: "Отстранение от работы", tone: "unpaid" }
 ]);
 
 export const WORKFORCE_PERSONNEL = Object.freeze([
@@ -23,7 +38,7 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-admin-0002", "Serhii Yurinov", "production-manager", "office"],
   ["employee-admin-0003", "Hanna Brazhko", "administrator", "office"],
   ["employee-admin-0004", "Daiva Vaškelienė", "warehouse-manager", "office"],
-  ["employee-0001", "Albert Krevski", "senior-mechanic", "shift-team-a"],
+  ["employee-0001", "Albert Krevski", "mechanic", "shift-team-a"],
   ["employee-0002", "Vladislav Balašov", "senior-mechanic", "shift-team-a"],
   ["employee-0003", "Valdemar Stacino", "mechanic-operator", "shift-team-a"],
   ["employee-0004", "Bohdan Nevmerzhytskyi", "mechanic-operator", "shift-team-a"],
@@ -40,9 +55,9 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0015", "Danuta Jankovskaja", "packer", "shift-team-a"],
   ["employee-0016", "Tatjana Vasilevska", "packer", "shift-team-a"],
   ["employee-0017", "Viktor Minin", "senior-mechanic", "shift-team-b"],
-  ["employee-0018", "Volodymyr Honcharenko", "senior-mechanic", "shift-team-b"],
+  ["employee-0018", "Volodymyr Honcharenko", "senior-mechanic", "shift-team-b", false],
   ["employee-0019", "Maksim Tsikhenia", "mechanic-operator", "shift-team-b"],
-  ["employee-0020", "Vitalii Paliienko", "mechanic-operator", "shift-team-b"],
+  ["employee-0020", "Vitalii Paliienko", "mechanic", "shift-team-b"],
   ["employee-0021", "Rolandas Asanovas", "mechanic-operator", "shift-team-b"],
   ["employee-0022", "Serhii Serikov", "mechanic-operator", "shift-team-b"],
   ["employee-0023", "Roman Vasylets", "mechanic-operator", "shift-team-b"],
@@ -54,7 +69,7 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0029", "Alina Andriushchenko", "packer", "shift-team-b"],
   ["employee-0030", "Malgožata Blinstrubaitė", "packer", "shift-team-b"],
   ["employee-0031", "Jolanta Blinstrubaitė", "packer", "shift-team-b"]
-].map(([id, fullName, role, shiftTeamId]) => Object.freeze({ id, fullName, role, shiftTeamId, active: true })));
+].map(([id, fullName, role, shiftTeamId, active = true]) => Object.freeze({ id, fullName, role, shiftTeamId, active })));
 
 export const SHIFT_TEAMS = Object.freeze([
   Object.freeze({ id: "shift-team-a", code: "A", name: "Смена A", anchorDate: "2026-07-01", cycleLengthDays: 4, workDayOffsets: [0, 1], shiftDurationHours: 12, accountingHours: 11, active: true }),
