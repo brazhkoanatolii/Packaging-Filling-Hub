@@ -17,7 +17,20 @@ export class WorkforceService {
     else await this.store.setPreference(PERSONNEL_KEY, migratePersonnel(storedPersonnel));
     if (!await this.store.preference(TEAMS_KEY)) await this.store.setPreference(TEAMS_KEY, clone(SHIFT_TEAMS));
     if (!await this.store.preference(ATTENDANCE_KEY)) await this.store.setPreference(ATTENDANCE_KEY, []);
+    await this.refreshPersonnel({ silent: true });
     return this.snapshot();
+  }
+
+  async refreshPersonnel({ silent = false } = {}) {
+    if (!this.personnelProvider || !navigator.onLine) return await this.store.preference(PERSONNEL_KEY, clone(WORKFORCE_PERSONNEL));
+    try {
+      const personnel = await this.personnelProvider.list();
+      await this.store.setPreference(PERSONNEL_KEY, personnel);
+      return personnel;
+    } catch (error) {
+      if (!silent) throw error;
+      return await this.store.preference(PERSONNEL_KEY, clone(WORKFORCE_PERSONNEL));
+    }
   }
 
   async snapshot() {

@@ -359,8 +359,8 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-    const checks = await Promise.allSettled([repository.refresh(), syncWorkforce()]);
-    const failed = checks.find(item => item.status === "rejected");
+  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce()]);
+  const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
     render();

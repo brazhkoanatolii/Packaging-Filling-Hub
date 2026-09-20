@@ -12,6 +12,53 @@ const PFH_V2_VISIBLE_COLUMN_COUNT = 10;
 const PFH_V2_META_START_COLUMN = 27; // AA
 const PFH_V2_META_COLUMN_COUNT = 6; // AA:AF
 const PFH_V2_ANNULLED_PATTERN = /^\[АННУЛИРОВАНО:\s*(.*?)\](?:\s*([\s\S]*))?$/;
+const PFH_PERSONNEL_SPREADSHEET_ID = "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04";
+const PFH_PERSONNEL_SHEET_NAME = "Персонал";
+const PFH_PERSONNEL_HEADER_ROW = 5;
+
+/** Единый справочник сотрудников для программы и всех журналов. */
+function listPersonnel() {
+  const sheet = pfhPersonnelSheet_();
+  const count = Math.max(0, sheet.getLastRow() - PFH_PERSONNEL_HEADER_ROW);
+  if (!count) return { ok: true, personnel: [] };
+  const values = sheet.getRange(PFH_PERSONNEL_HEADER_ROW + 1, 1, count, 4).getDisplayValues();
+  return { ok: true, personnel: values.filter(row => String(row[0]).trim()).map(pfhPersonnelFromRow_) };
+}
+
+/** Добавляет или обновляет только строку справочника, не меняя файл и структуру. */
+function savePersonnel(input) {
+  const payload = input || {};
+  const fullName = String(payload.fullName || "").trim();
+  if (fullName.length < 2) throw new Error("Укажите имя и фамилию");
+  const sheet = pfhPersonnelSheet_();
+  const count = Math.max(0, sheet.getLastRow() - PFH_PERSONNEL_HEADER_ROW);
+  const names = count ? sheet.getRange(PFH_PERSONNEL_HEADER_ROW + 1, 1, count, 1).getDisplayValues().flat().map(String) : [];
+  const original = String(payload.originalFullName || fullName).trim();
+  const position = names.findIndex(name => name.trim() === original);
+  const row = position >= 0 ? PFH_PERSONNEL_HEADER_ROW + 1 + position : Math.max(sheet.getLastRow() + 1, PFH_PERSONNEL_HEADER_ROW + 1);
+  sheet.getRange(row, 1, 1, 4).setValues([[fullName, String(payload.role || "").trim(), String(payload.shift || "").trim(), payload.active === false ? "Не работает" : "Работает"]]);
+  SpreadsheetApp.flush();
+  return { ok: true, employee: pfhPersonnelFromRow_([fullName, payload.role, payload.shift, payload.active === false ? "Не работает" : "Работает"]) };
+}
+
+function pfhPersonnelSheet_() {
+  const spreadsheet = SpreadsheetApp.openById(PFH_PERSONNEL_SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName(PFH_PERSONNEL_SHEET_NAME);
+  if (!sheet) throw new Error(`Лист «${PFH_PERSONNEL_SHEET_NAME}» не найден`);
+  return sheet;
+}
+
+function pfhPersonnelFromRow_(row) {
+  const name = String(row[0] || "").trim();
+  const role = pfhPersonnelRole_(row[1]);
+  const shiftTeamId = String(row[2] || "").trim() === "Смена B" ? "shift-team-b" : "shift-team-a";
+  return { id: `person-${Utilities.base64EncodeWebSafe(name).replace(/=+$/g, "")}`, fullName: name, role: role, shiftTeamId: shiftTeamId, active: String(row[3] || "").trim() !== "Не работает" };
+}
+
+function pfhPersonnelRole_(value) {
+  const label = String(value || "").trim();
+  return ({ "Старший механик": "senior-mechanic", "Механик": "mechanic", "Механик-оператор": "mechanic-operator", "Упаковщик": "packer" })[label] || "mechanic-operator";
+}
 
 /** Возвращает все записи, доступные программе. */
 function listScaleRecords() {
