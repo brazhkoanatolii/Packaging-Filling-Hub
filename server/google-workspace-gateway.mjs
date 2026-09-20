@@ -83,17 +83,6 @@ createServer(async (request, response) => {
       return sendJson(response, result?.conflict ? 409 : 200, result);
     }
 
-    if (url.pathname === "/api/personnel" && request.method === "GET") {
-      const result = await runAppsScript("listPersonnel");
-      return sendJson(response, 200, result);
-    }
-
-    if (url.pathname === "/api/personnel" && request.method === "POST") {
-      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google пока выключена начальником участка" });
-      const result = await runAppsScript("savePersonnel", [await readJsonBody(request)]);
-      return sendJson(response, 200, result);
-    }
-
     if (url.pathname.startsWith("/api/")) {
       return sendJson(response, 404, { ok: false, message: "Команда шлюза не найдена" });
     }
