@@ -91,3 +91,22 @@ test("литовские коды отсутствия сохраняются в
   const record = await service.saveAttendance({ date: "2026-09-19", shiftTeamId: "shift-team-a", employeeId: "employee-0002", value: "NS" });
   assert.equal(record.value, "NS");
 });
+
+test("подменный выход сохраняется в табеле отдельной записью целевой смены", async () => {
+  const service = new WorkforceService(createStore());
+  await service.initialize();
+
+  const record = await service.saveAttendance({
+    date: "2026-09-19",
+    shiftTeamId: "shift-team-b",
+    employeeId: "employee-0002",
+    value: "11",
+    substitutionReason: "Подработка",
+    homeShiftTeamId: "shift-team-a"
+  });
+
+  assert.equal(record.id, "2026-09-19:shift-team-b:employee-0002");
+  assert.equal(record.value, "11");
+  assert.equal(record.substitutionReason, "Подработка");
+  assert.equal(record.homeShiftTeamId, "shift-team-a");
+});

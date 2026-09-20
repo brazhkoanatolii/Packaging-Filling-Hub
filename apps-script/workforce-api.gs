@@ -28,7 +28,8 @@ function getWorkforceSnapshot(options) {
       if(!value || value==='—') continue;
       const date=year+'-'+('0'+v[0]).slice(-2)+'-'+('0'+day).slice(-2);
       const overtime=String(v[42]).split(',').includes(String(day));
-      attendance.push({id:date+':'+shiftTeamId+':'+employee.id,date,employeeId:employee.id,shiftTeamId,value,overtime,revision:wfToken_([value,overtime]),updatedAt:wfIso_(v[40]),updatedBy:String(v[41]||'')});
+      const substitute=wfSubstituteForDay_(v[37],day);
+      attendance.push({id:date+':'+shiftTeamId+':'+employee.id,date,employeeId:employee.id,shiftTeamId,value,overtime,substitutionReason:substitute?.reason||'',homeShiftTeamId:substitute?.homeShiftTeamId||'',revision:wfToken_([value,overtime,substitute?.reason||'',substitute?.homeShiftTeamId||'']),updatedAt:wfIso_(v[40]),updatedBy:String(v[41]||'')});
     }
   }));
   const book=SpreadsheetApp.openById(WF_BOOKS.vacations);
@@ -98,21 +99,23 @@ function wfSaveAttendance_(people,teams,op) {
  if(p.id!==date+':'+p.shiftTeamId+':'+p.employeeId)throw new Error('Некорректный ID табеля');
  const value=String(p.value||'');if(!/^(?:[1-9]|1[0-9]|2[0-4])$/.test(value)&&!WF_ATTENDANCE_CODES.includes(value))throw new Error('Недопустимое значение табеля');
  const s=SpreadsheetApp.openById(WF_BOOKS.attendance).getSheetByName(String(year));
- const found=wfRows_(s,44).find(r=>String(r.values[38])===p.employeeId&&Number(r.values[0])===month);
+ const found=wfRows_(s,44).find(r=>String(r.values[38])===p.employeeId&&Number(r.values[0])===month&&(String(r.values[43]||'')===p.shiftTeamId||String(r.values[2]||'')===teams.find(t=>t.id===p.shiftTeamId)?.name));
  const currentValue=found?String(found.values[day+2]||''):'', currentOvertime=found?String(found.values[42]).split(',').includes(String(day)):false;
- const revision=currentValue&&currentValue!=='—'?wfToken_([currentValue,currentOvertime]):'empty';
+ const currentSubstitute=found?wfSubstituteForDay_(found.values[37],day):null;
+ const revision=currentValue&&currentValue!=='—'?wfToken_([currentValue,currentOvertime,currentSubstitute?.reason||'',currentSubstitute?.homeShiftTeamId||'']):'empty';
  if(revision!==op.expectedRevision)return wfConflict_();
  const row=found?found.row:Math.max(6,s.getLastRow()+1);
  if(!found){
-   const vals=Array(44).fill('');vals[0]=month;vals[1]=employee.fullName;vals[2]=teams.find(t=>t.id===p.shiftTeamId).name;vals[38]=employee.id;vals[43]=p.shiftTeamId;
+   const vals=Array(44).fill('');vals[0]=month;vals[1]=employee.fullName;vals[2]=teams.find(t=>t.id===p.shiftTeamId).name;vals[37]=wfMergeSubstituteNote_('',day,p.substitutionReason,p.homeShiftTeamId);vals[38]=employee.id;vals[43]=p.shiftTeamId;
    for(let d=new Date(year,month,0).getDate()+1;d<=31;d++)vals[d+2]='—';
    s.getRange(row,1,1,44).setValues([vals]);
    s.getRange(row,35,1,3).setFormulas([['=SUM(D'+row+':AH'+row+')','=COUNTIF(D'+row+':AH'+row+',">0")',WF_ABSENCE_CODES.map(c=>'COUNTIF(D'+row+':AH'+row+',"'+c+'")').join('+').replace(/^/,'=')]]);
  }
  s.getRange(row,day+3).setValue(/^\d+$/.test(value)?Number(value):value);
+ if(found&&p.substitutionReason)s.getRange(row,38).setValue(wfMergeSubstituteNote_(found.values[37],day,p.substitutionReason,p.homeShiftTeamId));
  const days=new Set(String(found?.values[42]||'').split(',').filter(Boolean));if(p.overtime===true)days.add(String(day));else days.delete(String(day));
  s.getRange(row,40,1,4).setValues([[(Number(found?.values[39])||0)+1,new Date(),op.actor.performer,Array.from(days).join(',')]]);
- return {ok:true,record:{...p,value,overtime:p.overtime===true,revision:wfToken_([value,p.overtime===true]),updatedBy:op.actor.performer,updatedAt:new Date().toISOString()}};
+ return {ok:true,record:{...p,value,overtime:p.overtime===true,substitutionReason:String(p.substitutionReason||''),homeShiftTeamId:String(p.homeShiftTeamId||''),revision:wfToken_([value,p.overtime===true,String(p.substitutionReason||''),String(p.homeShiftTeamId||'')]),updatedBy:op.actor.performer,updatedAt:new Date().toISOString()}};
 }
 function wfSaveVacation_(people,teams,op) {
  const p=op.record,year=Number(p.year),person=people.find(e=>e.id===p.employeeId);
@@ -130,6 +133,26 @@ function wfSaveVacation_(people,teams,op) {
  s.getRange(row,1,1,12).setValues([values]);s.getRange(row,3,1,2).setNumberFormat('dd.MM.yyyy');
  s.getRange(row,5).setFormula('=IF(AND(ISNUMBER(C'+row+'),ISNUMBER(D'+row+')),IF(D'+row+'>=C'+row+',D'+row+'-C'+row+'+1,"Проверьте даты"),"")');
  return {ok:true,record:wfVacation_(values,year)};
+}
+function wfSubstituteForDay_(note,day){
+ const match=String(note||'').match(/Подменный выход \(штатная смена ([AB])\):\s*([^\n]+)/);
+ if(!match)return null;
+ const item=match[2].split(';').map(v=>v.trim()).find(v=>v.indexOf(String(day)+' — ')===0);
+ if(!item)return null;
+ return {homeShiftTeamId:'shift-team-'+match[1].toLowerCase(),reason:item.slice((String(day)+' — ').length).trim()};
+}
+function wfMergeSubstituteNote_(note,day,reason,homeShiftTeamId){
+ if(!reason)return String(note||'');
+ const homeCode=String(homeShiftTeamId||'').replace('shift-team-','').toUpperCase();
+ if(!['A','B'].includes(homeCode))throw new Error('Для подменного выхода укажите штатную смену сотрудника');
+ const current=String(note||'');
+ const match=current.match(/Подменный выход \(штатная смена ([AB])\):\s*([^\n]+)/);
+ const entries=match&&match[1]===homeCode?match[2].split(';').map(v=>v.trim()).filter(Boolean):[];
+ const withoutDay=entries.filter(v=>v.indexOf(String(day)+' — ')!==0);
+ withoutDay.push(String(day)+' — '+String(reason));
+ withoutDay.sort((a,b)=>Number(a.split(' ')[0])-Number(b.split(' ')[0]));
+ const label='Подменный выход (штатная смена '+homeCode+'): '+withoutDay.join('; ');
+ return match?current.replace(match[0],label):(current?current+'\n':'')+label;
 }
 function wfRows_(sheet,width){if(!sheet)throw new Error('В Google отсутствует нужная вкладка');return sheet.getLastRow()<6?[]:sheet.getRange(6,1,sheet.getLastRow()-5,width).getValues().map((values,i)=>({row:i+6,values}));}
 function wfPerson_(v,teams){return {id:String(v[7]),fullName:String(v[0]),role:Object.keys(WF_ROLES).find(k=>WF_ROLES[k]===v[1])||'',shiftTeamId:teams.find(t=>t.name===v[2])?.id||String(v[11]||''),active:v[5]==='Работает',note:String(v[6]||''),pakNumber:String(v[3]||''),pakCode:String(v[4]||''),birthday:wfDay_(v[12]),hireDate:wfDay_(v[13]),phone:String(v[14]||''),email:String(v[15]||''),revision:wfToken_(v),updatedAt:wfIso_(v[9])};}

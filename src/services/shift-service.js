@@ -24,7 +24,7 @@ export class ShiftService {
       supervisor: input.supervisor,
       shiftNumber,
       shiftTeamId: String(input.shiftTeamId || ""),
-      attendance: input.attendance.map(item => ({ employeeId: item.employeeId, status: item.status })),
+      attendance: input.attendance.map(normalizeAttendance),
       startedAt,
       endedAt: null,
       requiresScaleControl: shiftNumber === 1,
@@ -40,7 +40,7 @@ export class ShiftService {
     if (!Array.isArray(attendance) || !attendance.length) throw new Error("Отметьте присутствие сотрудников");
     const shift = {
       ...current,
-      attendance: attendance.map(item => ({ employeeId: item.employeeId, status: item.status })),
+      attendance: attendance.map(normalizeAttendance),
       attendanceUpdatedAt: new Date().toISOString()
     };
     await this.store.setPreference("activeShift", shift);
@@ -68,4 +68,17 @@ export class ShiftService {
     await this.store.setPreference("activeShift", shift);
     return shift;
   }
+}
+
+function normalizeAttendance(item) {
+  const attendance = {
+    employeeId: String(item.employeeId || ""),
+    status: String(item.status || "")
+  };
+  if (item.isSubstitute) {
+    attendance.isSubstitute = true;
+    attendance.substitutionReason = String(item.substitutionReason || "");
+    attendance.homeShiftTeamId = String(item.homeShiftTeamId || "");
+  }
+  return attendance;
 }

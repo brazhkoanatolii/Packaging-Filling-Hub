@@ -103,7 +103,18 @@ export class WorkforceService {
     if (this.repository && !snapshot.years.includes(Number(String(input.date).slice(0, 4)))) throw new Error("Этот год ещё не подключён. Табель создан на 2025–2029 годы.");
     const attendance = snapshot.attendance;
     const id = `${input.date}:${input.shiftTeamId}:${input.employeeId}`;
-    const record = { id, date: input.date, shiftTeamId: input.shiftTeamId, employeeId: input.employeeId, value, overtime: input.overtime === true, updatedAt: new Date().toISOString() };
+    const isSubstitute = Boolean(input.substitutionReason);
+    const record = {
+      id,
+      date: input.date,
+      shiftTeamId: input.shiftTeamId,
+      employeeId: input.employeeId,
+      value,
+      overtime: input.overtime === true,
+      substitutionReason: isSubstitute ? String(input.substitutionReason) : "",
+      homeShiftTeamId: isSubstitute ? String(input.homeShiftTeamId || employee.shiftTeamId) : "",
+      updatedAt: new Date().toISOString()
+    };
     const index = attendance.findIndex(item => item.id === id);
     if (index >= 0) attendance[index] = record;
     else attendance.push(record);

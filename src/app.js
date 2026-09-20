@@ -36,6 +36,7 @@ const state = {
   settingsTab: "overview",
   selectedShiftTeamId: null,
   shiftResponsible: null,
+  shiftGuests: [],
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
   theme: "light"
@@ -135,6 +136,7 @@ async function handleChange(event) {
   }
   if (event.target.matches("[data-start-team]")) {
     state.selectedShiftTeamId = event.target.value;
+    state.shiftGuests = [];
     render();
     return;
   }
@@ -210,10 +212,13 @@ async function handleSubmit(event) {
   if (form.dataset.form !== "shift-attendance") return;
   const data = new FormData(form);
   const teamId = String(data.get("shiftTeamId") || state.selectedShiftTeamId || "");
-  const members = activePersonnel().filter(employee => employee.shiftTeamId === teamId);
+  const members = shiftStartMembers(teamId);
   const attendance = members.map(employee => ({
     employeeId: employee.id,
-    status: String(data.get(`attendance-${employee.id}`) || "")
+    status: String(data.get(`attendance-${employee.id}`) || ""),
+    isSubstitute: employee.isSubstitute === true,
+    substitutionReason: employee.substitutionReason || "",
+    homeShiftTeamId: employee.homeShiftTeamId || ""
   }));
   if (attendance.some(item => !item.status)) {
     showInlineFormError(form, "Отметьте каждого сотрудника");
@@ -223,6 +228,7 @@ async function handleSubmit(event) {
     await saveShiftAttendanceToTimesheet(teamId, attendance);
     if (state.shift?.active) {
       state.shift = await shiftService.updateAttendance(attendance);
+      state.shiftGuests = [];
       state.workforce = await workforceService.snapshot();
       render();
       toast("Табель смены обновлён.", "success");
@@ -234,6 +240,7 @@ async function handleSubmit(event) {
       shiftTeamId: teamId,
       attendance
     });
+    state.shiftGuests = [];
     state.workforce = await workforceService.snapshot();
     state.page = state.shift.requiresScaleControl ? "journals" : "dashboard";
     render();
@@ -334,6 +341,19 @@ async function handleClick(event) {
     }
     if (["add-employee", "edit-employee", "toggle-employee"].includes(action) && state.account.role !== "manager") {
       toast("Редактировать справочник персонала может только начальник участка.", "error");
+      return;
+    }
+    if (action === "add-shift-guest") {
+      openShiftGuestDialog();
+      return;
+    }
+    if (action === "remove-shift-guest") {
+      if (state.shift?.active && state.shift.attendance?.some(item => item.employeeId === id && item.isSubstitute)) {
+        toast("Подменный выход уже сохранён. Для исправления обратитесь к начальнику участка.", "warning");
+        return;
+      }
+      state.shiftGuests = state.shiftGuests.filter(item => item.employeeId !== id);
+      render();
       return;
     }
     if (action === "add-employee") {
@@ -722,7 +742,7 @@ function renderAttendanceTabs() {
 
 function renderShiftStartView() {
   const team = teamById(state.shift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
-  const members = activePersonnel().filter(employee => employee.shiftTeamId === team?.id).sort(comparePersonnel);
+  const members = shiftStartMembers(team?.id);
   const responsibleName = state.shift?.supervisor ?? (state.shiftResponsible?.teamId === team?.id ? state.shiftResponsible.fullName : "");
   const responsibleInPrimaryList = members.some(employee => employee.fullName === responsibleName && ["senior-mechanic", "mechanic"].includes(employee.role));
   const savedAttendance = new Map((state.shift?.shiftTeamId === team?.id ? state.shift.attendance : []).map(item => [item.employeeId, item.status]));
@@ -740,7 +760,7 @@ function renderShiftStartView() {
         <div class="attendance-counter"><strong data-attendance-present>${presentCount}</strong><span>из ${members.length}<small>на работе</small></span></div>
       </div>
       <div class="shift-start-controls">
-        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${state.shift?.active ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)} · ${item.code}</option>`).join("")}</select></label>
+        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${state.shift?.active ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
         <label class="field"><span>Смена по времени</span><select name="shiftNumber" ${state.shift?.active ? "disabled" : ""}><option value="1" ${state.shift?.shiftNumber !== 2 ? "selected" : ""}>Первая — нужен контроль весов</option><option value="2" ${state.shift?.shiftNumber === 2 ? "selected" : ""}>Вторая — контроль уже выполнен</option></select></label>
         <label class="field"><span>Ответственный за смену</span><select name="supervisor" required ${state.shift?.active ? "disabled" : ""}><option value="">Выберите сотрудника</option>${members.filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role)).map(employee => `<option ${employee.fullName === responsibleName ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}${responsibleName && !responsibleInPrimaryList ? `<option value="${attribute(responsibleName)}" selected>Другой — ${escapeHtml(responsibleName)}</option>` : ""}</select></label>
       </div>
@@ -748,9 +768,12 @@ function renderShiftStartView() {
       <div class="shift-attendance-list">
         ${members.map(employee => {
           const status = attendanceCode(savedAttendance.get(employee.id));
-          return `<label class="shift-person-row"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select></label>`;
+          const substitution = employee.isSubstitute ? `<small class="substitute-badge">Подмена · ${escapeHtml(employee.substitutionReason)}</small>` : "";
+          const remove = employee.isSubstitute && !state.shift?.active ? `<button type="button" class="remove-shift-guest" data-action="remove-shift-guest" data-id="${attribute(employee.id)}" aria-label="Убрать ${attribute(employee.fullName)}">×</button>` : "";
+          return `<label class="shift-person-row ${employee.isSubstitute ? "is-substitute" : ""}"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substitution}</span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select>${remove}</label>`;
         }).join("")}
       </div>
+      <div class="shift-guest-actions"><button type="button" class="secondary-button" data-action="add-shift-guest">+ Добавить сотрудника другой смены</button><small>Выберите причину: подработка или производственная необходимость.</small></div>
       <div class="shift-form-footer"><p>${state.shift?.active ? "Исправления сохраняются в активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${state.shift?.active ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
     </form>`;
 }
@@ -791,7 +814,9 @@ function renderTimesheetView() {
 function renderTimesheetTeam(team, days) {
   const schedule = new Map(getScheduleMonth(team, ...monthParts(state.attendanceMonth)).map(day => [day.date, day]));
   const records = new Map(state.workforce.attendance.filter(item => item.shiftTeamId === team.id).map(item => [`${item.employeeId}:${item.date}`, item]));
-  const members = activePersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);
+  const regularMembers = activePersonnel().filter(employee => employee.shiftTeamId === team.id);
+  const substituteMembers = activePersonnel().filter(employee => employee.shiftTeamId !== team.id && [...records.values()].some(record => record.employeeId === employee.id && record.substitutionReason));
+  const members = [...regularMembers, ...substituteMembers].sort(comparePersonnel);
   return `<section class="card schedule-team-card timesheet-team-card">
     <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>Фактические часы и причины отсутствия</small></span></div><span class="autosave-note">Сохраняется автоматически</span></header>
     <div class="attendance-scroll"><table class="attendance-table timesheet-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Часы</th></tr></thead><tbody>${members.map(employee => renderTimesheetRow(employee, team, days, schedule, records)).join("")}</tbody></table></div>
@@ -800,6 +825,10 @@ function renderTimesheetTeam(team, days) {
 
 function renderTimesheetRow(employee, team, days, schedule, records) {
   let total = 0;
+  const substituteReasons = [...records.values()]
+    .filter(record => record.employeeId === employee.id && record.substitutionReason)
+    .map(record => record.substitutionReason);
+  const substituteNote = substituteReasons.length ? `<span class="substitute-badge">Подмена · ${escapeHtml([...new Set(substituteReasons)].join(", "))}</span>` : "";
   const cells = days.map(day => {
     const record = records.get(`${employee.id}:${day.date}`);
     const scheduled = schedule.get(day.date)?.scheduled;
@@ -810,7 +839,7 @@ function renderTimesheetRow(employee, team, days, schedule, records) {
     if (Number.isFinite(hours)) total += hours;
     return `<td class="timesheet-cell ${day.isToday ? "today" : ""} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}">${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
   }).join("");
-  return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
+  return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substituteNote}</th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
 }
 
 function renderWorkforceMonthToolbar(title, note) {
@@ -1396,6 +1425,39 @@ function openEmployeeDialog(id = null) {
   dialog.showModal();
 }
 
+function openShiftGuestDialog() {
+  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId;
+  const guests = activePersonnel()
+    .filter(employee => employee.shiftTeamId !== teamId && employee.shiftTeamId !== "office" && !state.shiftGuests.some(item => item.employeeId === employee.id))
+    .sort(comparePersonnel);
+  const dialog = createDialog(`
+    <form class="dialog-card small-dialog" data-shift-guest-form>
+      <div class="dialog-heading"><div><p class="eyebrow">Подменный выход</p><h2>Добавить сотрудника другой смены</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+      <p class="dialog-lead">Сотрудник будет учтён в текущей смене. В табеле сохранятся часы и причина выхода.</p>
+      <div class="form-grid">
+        ${formField("shift-guest", "Сотрудник", `<select id="shift-guest" name="employeeId" required><option value="">Выберите сотрудника</option>${guests.map(employee => `<option value="${attribute(employee.id)}">${escapeHtml(employee.fullName)} · ${escapeHtml(teamById(employee.shiftTeamId)?.name ?? "Другая смена")}</option>`).join("")}</select>`, "Только действующий персонал другой смены", "full")}
+        ${formField("shift-guest-reason", "Причина выхода", `<select id="shift-guest-reason" name="substitutionReason" required><option value="">Выберите причину</option><option>Подработка</option><option>Производственная необходимость</option></select>`, "Будет указана в журнале табеля", "full")}
+      </div>
+      <div id="shift-guest-error" class="form-error" hidden></div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Добавить в смену</button></div>
+    </form>`);
+  const form = dialog.querySelector("[data-shift-guest-form]");
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const employee = activePersonnel().find(item => item.id === String(data.get("employeeId") || ""));
+    const substitutionReason = String(data.get("substitutionReason") || "");
+    if (!employee || employee.shiftTeamId === teamId || !substitutionReason) {
+      showFormError(form, new Error("Выберите сотрудника другой смены и причину выхода"));
+      return;
+    }
+    state.shiftGuests = [...state.shiftGuests.filter(item => item.employeeId !== employee.id), { employeeId: employee.id, substitutionReason, homeShiftTeamId: employee.shiftTeamId }];
+    dialog.close();
+    render();
+  });
+  dialog.showModal();
+}
+
 function renderBirthdayReminders() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1637,6 +1699,26 @@ function responsibilityCandidates(teamId, roles) {
     .sort(comparePersonnel);
 }
 
+function shiftGuestEntries(teamId) {
+  const saved = state.shift?.active && state.shift.shiftTeamId === teamId
+    ? (state.shift.attendance || []).filter(item => item.isSubstitute)
+    : [];
+  return [...saved, ...state.shiftGuests]
+    .filter(item => item.homeShiftTeamId && item.homeShiftTeamId !== teamId)
+    .filter((item, index, list) => list.findIndex(other => other.employeeId === item.employeeId) === index);
+}
+
+function shiftStartMembers(teamId) {
+  const regular = activePersonnel().filter(employee => employee.shiftTeamId === teamId);
+  const guests = shiftGuestEntries(teamId)
+    .map(item => {
+      const employee = activePersonnel().find(person => person.id === item.employeeId);
+      return employee ? { ...employee, isSubstitute: true, substitutionReason: item.substitutionReason, homeShiftTeamId: item.homeShiftTeamId } : null;
+    })
+    .filter(Boolean);
+  return [...regular, ...guests].sort(comparePersonnel);
+}
+
 function loginShiftResponsibility(data) {
   const teamId = String(data.get("responsibleTeamId") || "");
   const selectedId = String(data.get("shiftResponsible") || "");
@@ -1759,7 +1841,14 @@ async function saveShiftAttendanceToTimesheet(teamId, attendance) {
   const date = today();
   await withWorkforceActor(async () => {
     for (const item of attendance) {
-      await workforceService.saveAttendance({ date, shiftTeamId: teamId, employeeId: item.employeeId, value: attendanceCode(item.status) });
+      await workforceService.saveAttendance({
+        date,
+        shiftTeamId: teamId,
+        employeeId: item.employeeId,
+        value: attendanceCode(item.status),
+        substitutionReason: item.isSubstitute ? item.substitutionReason : "",
+        homeShiftTeamId: item.isSubstitute ? item.homeShiftTeamId : ""
+      });
     }
   });
   if (workforceRepository) await syncWorkforce();
