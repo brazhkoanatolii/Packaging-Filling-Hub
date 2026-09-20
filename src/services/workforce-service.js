@@ -44,6 +44,10 @@ export class WorkforceService {
       role: String(input.role),
       shiftTeamId: String(input.shiftTeamId || "office"),
       active: input.active !== false,
+      birthday: String(input.birthday || ""),
+      hireDate: String(input.hireDate || ""),
+      phone: String(input.phone || "").trim(),
+      email: String(input.email || "").trim(),
       updatedAt: now
     };
     if (currentIndex >= 0) personnel[currentIndex] = { ...personnel[currentIndex], ...employee };

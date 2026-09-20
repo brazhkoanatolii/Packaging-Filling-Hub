@@ -16,7 +16,7 @@ const WF_ATTENDANCE_CODES = ['K'].concat(WF_ABSENCE_CODES);
 function getWorkforceSnapshot(options) {
   const master = SpreadsheetApp.openById(WF_BOOKS.personnel);
   const teams = wfRows_(master.getSheetByName('Смены'), 8).filter(r=>r.values[6]).map(r=>wfTeam_(r.values));
-  const personnel = wfRows_(master.getSheetByName('Персонал'), 10).filter(r=>r.values[5]).map(r=>wfPerson_(r.values, teams));
+  const personnel = wfRows_(master.getSheetByName('Персонал'), 14).filter(r=>r.values[5]).map(r=>wfPerson_(r.values, teams));
   const attendance = [], vacations = [];
   const timeBook = SpreadsheetApp.openById(WF_BOOKS.attendance);
   WF_YEARS.forEach(year => wfRows_(timeBook.getSheetByName(String(year)),44).forEach(row => {
@@ -53,7 +53,7 @@ function writeWorkforceOperation(operation) {
       return JSON.parse(saved[2]);
     }
     const teams=wfRows_(master.getSheetByName('Смены'),8).filter(r=>r.values[6]).map(r=>wfTeam_(r.values));
-    const people=wfRows_(master.getSheetByName('Персонал'),10).filter(r=>r.values[5]).map(r=>wfPerson_(r.values,teams));
+    const people=wfRows_(master.getSheetByName('Персонал'),14).filter(r=>r.values[5]).map(r=>wfPerson_(r.values,teams));
     if(!people.some(p=>p.active&&p.fullName===String(actor.performer||''))) throw new Error('Выберите исполнителя из действующего персонала');
     let result;
     if(kind==='personnel') result=wfSavePerson_(master,teams,op);
@@ -72,11 +72,12 @@ function writeWorkforceOperation(operation) {
 function wfSavePerson_(master,teams,op) {
  const s=master.getSheetByName('Персонал'), p=op.record;
  if(!WF_ROLES[p.role] || !teams.some(t=>t.id===p.shiftTeamId) || String(p.fullName||'').trim().length<2) throw new Error('Проверьте ФИО, должность и смену');
- const found=wfRows_(s,10).find(r=>String(r.values[5])===p.id), current=found?wfPerson_(found.values,teams):null;
+ const found=wfRows_(s,14).find(r=>String(r.values[5])===p.id), current=found?wfPerson_(found.values,teams):null;
  if(!wfMatches_(current,op)) return wfConflict_();
  const row=found?found.row:Math.max(6,s.getLastRow()+1), team=teams.find(t=>t.id===p.shiftTeamId);
- const vals=[wfText_(p.fullName),WF_ROLES[p.role],team.name,p.active===false?'Не работает':'Работает',wfText_(p.note||current?.note||''),String(p.id),(Number(found?.values[6])||0)+1,new Date(),op.actor.performer,p.shiftTeamId];
- s.getRange(row,1,1,10).setValues([vals]);
+ const vals=[wfText_(p.fullName),WF_ROLES[p.role],team.name,p.active===false?'Не работает':'Работает',wfText_(p.note||current?.note||''),String(p.id),(Number(found?.values[6])||0)+1,new Date(),op.actor.performer,p.shiftTeamId,wfDateOrEmpty_(p.birthday||current?.birthday||''),wfDateOrEmpty_(p.hireDate||current?.hireDate||''),wfText_(p.phone||current?.phone||''),wfText_(p.email||current?.email||'')];
+ s.getRange(row,1,1,14).setValues([vals]);
+ s.getRange(row,11,1,2).setNumberFormat('dd.MM.yyyy');
  return {ok:true,record:wfPerson_(vals,teams)};
 }
 function wfSaveTeam_(master,op) {
@@ -131,7 +132,7 @@ function wfSaveVacation_(people,teams,op) {
  return {ok:true,record:wfVacation_(values,year)};
 }
 function wfRows_(sheet,width){if(!sheet)throw new Error('В Google отсутствует нужная вкладка');return sheet.getLastRow()<6?[]:sheet.getRange(6,1,sheet.getLastRow()-5,width).getValues().map((values,i)=>({row:i+6,values}));}
-function wfPerson_(v,teams){return {id:String(v[5]),fullName:String(v[0]),role:Object.keys(WF_ROLES).find(k=>WF_ROLES[k]===v[1])||'',shiftTeamId:teams.find(t=>t.name===v[2])?.id||String(v[9]||''),active:v[3]==='Работает',note:String(v[4]||''),revision:wfToken_(v),updatedAt:wfIso_(v[7])};}
+function wfPerson_(v,teams){return {id:String(v[5]),fullName:String(v[0]),role:Object.keys(WF_ROLES).find(k=>WF_ROLES[k]===v[1])||'',shiftTeamId:teams.find(t=>t.name===v[2])?.id||String(v[9]||''),active:v[3]==='Работает',note:String(v[4]||''),birthday:wfDay_(v[10]),hireDate:wfDay_(v[11]),phone:String(v[12]||''),email:String(v[13]||''),revision:wfToken_(v),updatedAt:wfIso_(v[7])};}
 function wfTeam_(v){return {id:String(v[6]),name:String(v[0]),code:v[6]==='shift-team-a'?'A':v[6]==='shift-team-b'?'B':'5/2',anchorDate:wfDay_(v[1]),cycleLengthDays:Number(v[2]),workDayOffsets:String(v[3]).split(',').map(Number),shiftDurationHours:Number(v[4]),accountingHours:Number(v[5]),active:true,revision:wfToken_(v)};}
 function wfVacation_(v,year){return {id:String(v[7]),employeeId:String(v[8]),year,startDate:wfDay_(v[2]),endDate:wfDay_(v[3]),days:typeof v[4]==='number'?v[4]:null,status:String(v[5]),note:String(v[6]||''),revision:wfToken_([v[0],v[1],wfDay_(v[2]),wfDay_(v[3]),v[5],v[6],v[7],v[8],v[9]]),updatedAt:wfIso_(v[10]),updatedBy:String(v[11]||'')};}
 function wfMatches_(current,op){return (current?current.revision:'empty')===op.expectedRevision;}
@@ -140,5 +141,6 @@ function wfToken_(v){return Utilities.base64EncodeWebSafe(Utilities.computeDiges
 function wfDay_(v){return v instanceof Date?Utilities.formatDate(v,'Europe/Vilnius','yyyy-MM-dd'):String(v||'');}
 function wfIso_(v){return v instanceof Date?v.toISOString():String(v||'');}
 function wfDate_(value){const s=String(value||''),d=new Date(s+'T12:00:00Z');if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||!Number.isFinite(d.getTime())||d.toISOString().slice(0,10)!==s)throw new Error('Некорректная дата');return d;}
+function wfDateOrEmpty_(value){return String(value||'').trim()?wfDate_(value):'';}
 function wfText_(v){const s=String(v||'').trim();if(s.length>2000||/^[=+@]/.test(s))throw new Error('Некорректный текст');return s;}
 function wfLog_(book){let s=book.getSheetByName('_Синхронизация');if(!s){s=book.insertSheet('_Синхронизация');s.appendRow(['Request ID','Содержимое','Результат','Время']);s.hideSheet();}return s;}

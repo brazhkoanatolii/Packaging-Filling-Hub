@@ -532,6 +532,7 @@ function renderDashboard() {
   const within = active.filter(record => record.result === "В пределах допуска").length;
   const outside = active.filter(record => record.result === "Вне допуска").length;
   return `
+    ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
     ${state.account.role === "senior" ? renderWorkflowPanel() : ""}
     <div class="metric-grid">
@@ -1249,6 +1250,10 @@ function openEmployeeDialog(id = null) {
         ${formField("employee-full-name", "Имя и фамилия", `<input id="employee-full-name" name="fullName" value="${attribute(employee?.fullName ?? "")}" autocomplete="off" required>`, "Как в рабочих документах", "full")}
         ${formField("employee-role", "Должность", `<select id="employee-role" name="role" required>${Object.entries(ROLE_LABELS).map(([role, label]) => `<option value="${role}" ${employee?.role === role ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select>`)}
         ${formField("employee-team", "Смена", `<select id="employee-team" name="shiftTeamId" required><option value="office" ${employee?.shiftTeamId === "office" ? "selected" : ""}>Администрация · 5/2</option>${state.workforce.shiftTeams.map(team => `<option value="${team.id}" ${employee?.shiftTeamId === team.id ? "selected" : ""}>${escapeHtml(team.name)} · 2/2</option>`).join("")}</select>`)}
+        ${formField("employee-birthday", "Дата рождения", `<input id="employee-birthday" name="birthday" type="date" value="${attribute(employee?.birthday ?? "")}">`)}
+        ${formField("employee-hire-date", "Дата приёма", `<input id="employee-hire-date" name="hireDate" type="date" value="${attribute(employee?.hireDate ?? "")}">`)}
+        ${formField("employee-phone", "Телефон", `<input id="employee-phone" name="phone" type="tel" value="${attribute(employee?.phone ?? "")}" autocomplete="tel">`)}
+        ${formField("employee-email", "Электронная почта", `<input id="employee-email" name="email" type="email" value="${attribute(employee?.email ?? "")}" autocomplete="email">`)}
       </div>
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
     </form>`);
@@ -1270,6 +1275,21 @@ function openEmployeeDialog(id = null) {
     }
   });
   dialog.showModal();
+}
+
+function renderBirthdayReminders() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const notices = personnel().filter(employee => employee.active !== false && employee.birthday).map(employee => {
+    const birthday = new Date(employee.birthday);
+    if (!Number.isFinite(birthday.getTime())) return null;
+    let next = new Date(start.getFullYear(), birthday.getMonth(), birthday.getDate());
+    if (next < start) next.setFullYear(next.getFullYear() + 1);
+    const days = Math.round((next - start) / 86400000);
+    return days === 0 || days === 3 || days === 7 ? { employee, days } : null;
+  }).filter(Boolean);
+  if (!notices.length) return "";
+  return `<section class="card birthday-reminders"><p class="eyebrow">Напоминания начальника</p><h2>Дни рождения</h2>${notices.map(({ employee, days }) => `<div><strong>${escapeHtml(employee.fullName)}</strong><span>${days === 0 ? "Сегодня день рождения" : days === 3 ? "Через 3 дня" : "Через неделю"}</span></div>`).join("")}</section>`;
 }
 
 function renderWorkforceOperation(operation) {

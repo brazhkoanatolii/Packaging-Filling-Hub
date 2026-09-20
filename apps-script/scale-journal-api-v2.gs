@@ -21,7 +21,7 @@ function listPersonnel() {
   const sheet = pfhPersonnelSheet_();
   const count = Math.max(0, sheet.getLastRow() - PFH_PERSONNEL_HEADER_ROW);
   if (!count) return { ok: true, personnel: [] };
-  const values = sheet.getRange(PFH_PERSONNEL_HEADER_ROW + 1, 1, count, 4).getDisplayValues();
+  const values = sheet.getRange(PFH_PERSONNEL_HEADER_ROW + 1, 1, count, 14).getValues();
   return { ok: true, personnel: values.filter(row => String(row[0]).trim()).map(pfhPersonnelFromRow_) };
 }
 
@@ -37,8 +37,17 @@ function savePersonnel(input) {
   const position = names.findIndex(name => name.trim() === original);
   const row = position >= 0 ? PFH_PERSONNEL_HEADER_ROW + 1 + position : Math.max(sheet.getLastRow() + 1, PFH_PERSONNEL_HEADER_ROW + 1);
   sheet.getRange(row, 1, 1, 4).setValues([[fullName, String(payload.role || "").trim(), String(payload.shift || "").trim(), payload.active === false ? "Не работает" : "Работает"]]);
+  const priorPrivate = sheet.getRange(row, 11, 1, 4).getValues()[0];
+  const has = (name) => Object.prototype.hasOwnProperty.call(payload, name);
+  sheet.getRange(row, 11, 1, 4).setValues([[
+    has("birthday") ? pfhPersonnelDateOrEmpty_(payload.birthday) : priorPrivate[0],
+    has("hireDate") ? pfhPersonnelDateOrEmpty_(payload.hireDate) : priorPrivate[1],
+    has("phone") ? String(payload.phone || "").trim() : priorPrivate[2],
+    has("email") ? String(payload.email || "").trim() : priorPrivate[3]
+  ]]);
+  sheet.getRange(row, 11, 1, 2).setNumberFormat("dd.MM.yyyy");
   SpreadsheetApp.flush();
-  return { ok: true, employee: pfhPersonnelFromRow_([fullName, payload.role, payload.shift, payload.active === false ? "Не работает" : "Работает"]) };
+  return { ok: true, employee: pfhPersonnelFromRow_([fullName, payload.role, payload.shift, payload.active === false ? "Не работает" : "Работает", "", "", "", "", "", "", payload.birthday, payload.hireDate, payload.phone, payload.email]) };
 }
 
 function pfhPersonnelSheet_() {
@@ -52,7 +61,11 @@ function pfhPersonnelFromRow_(row) {
   const name = String(row[0] || "").trim();
   const role = pfhPersonnelRole_(row[1]);
   const shiftTeamId = String(row[2] || "").trim() === "Смена B" ? "shift-team-b" : "shift-team-a";
-  return { id: `person-${Utilities.base64EncodeWebSafe(name).replace(/=+$/g, "")}`, fullName: name, role: role, shiftTeamId: shiftTeamId, active: String(row[3] || "").trim() !== "Не работает" };
+  return { id: `person-${Utilities.base64EncodeWebSafe(name).replace(/=+$/g, "")}`, fullName: name, role: role, shiftTeamId: shiftTeamId, active: String(row[3] || "").trim() !== "Не работает", birthday: pfhV2Date_(row[10]), hireDate: pfhV2Date_(row[11]), phone: String(row[12] || "").trim(), email: String(row[13] || "").trim() };
+}
+
+function pfhPersonnelDateOrEmpty_(value) {
+  return String(value || "").trim() ? new Date(`${String(value).trim()}T12:00:00`) : "";
 }
 
 function pfhPersonnelRole_(value) {
