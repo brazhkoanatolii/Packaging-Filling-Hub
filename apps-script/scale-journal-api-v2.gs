@@ -36,7 +36,8 @@ function savePersonnel(input) {
   const original = String(payload.originalFullName || fullName).trim();
   const position = names.findIndex(name => name.trim() === original);
   const row = position >= 0 ? PFH_PERSONNEL_HEADER_ROW + 1 + position : Math.max(sheet.getLastRow() + 1, PFH_PERSONNEL_HEADER_ROW + 1);
-  sheet.getRange(row, 1, 1, 6).setValues([[fullName, String(payload.role || "").trim(), String(payload.shift || "").trim(), String(payload.pakNumber || "").trim(), String(payload.pakCode || "").trim(), payload.active === false ? "Не работает" : "Работает"]]);
+  const isPacker = String(payload.role || "").trim() === "packer";
+  sheet.getRange(row, 1, 1, 6).setValues([[fullName, String(payload.role || "").trim(), String(payload.shift || "").trim(), isPacker ? String(payload.pakNumber || "").trim() : "", isPacker ? String(payload.pakCode || "").trim() : "", payload.active === false ? "Не работает" : "Работает"]]);
   const priorPrivate = sheet.getRange(row, 13, 1, 4).getValues()[0];
   const has = (name) => Object.prototype.hasOwnProperty.call(payload, name);
   sheet.getRange(row, 13, 1, 4).setValues([[

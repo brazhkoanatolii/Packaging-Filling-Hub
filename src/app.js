@@ -801,7 +801,7 @@ function renderPersonnelPage() {
         <div class="personnel-card-top"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="employee-team-badge">${escapeHtml(teamLabel(employee.shiftTeamId))}</span></div>
         <h3>${escapeHtml(employee.fullName)}</h3>
         <p>${escapeHtml(roleLabel(employee.role))}</p>
-        <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div><div><dt>Номер PAK</dt><dd>${escapeHtml(employee.pakNumber || "—")}</dd></div><div><dt>Код</dt><dd>${escapeHtml(employee.pakCode || "—")}</dd></div></dl>
+        <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div>${employee.role === "packer" ? `<div><dt>Номер PAK</dt><dd>${escapeHtml(employee.pakNumber || "—")}</dd></div><div><dt>Код</dt><dd>${escapeHtml(employee.pakCode || "—")}</dd></div>` : ""}</dl>
         ${canEdit ? renderPersonnelPrivateDetails(employee) : `<p class="directory-note">Справочник · только просмотр</p>`}
         ${canEdit ? `<div class="personnel-card-actions"><button data-action="edit-employee" data-id="${employee.id}">Карточка</button><button data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div>` : ""}
       </article>`).join("")}
@@ -1325,8 +1325,7 @@ function openEmployeeDialog(id = null) {
         ${formField("employee-full-name", "Имя и фамилия", `<input id="employee-full-name" name="fullName" value="${attribute(employee?.fullName ?? "")}" autocomplete="off" required>`, "Как в рабочих документах", "full")}
         ${formField("employee-role", "Должность", `<select id="employee-role" name="role" required>${Object.entries(ROLE_LABELS).map(([role, label]) => `<option value="${role}" ${employee?.role === role ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select>`)}
         ${formField("employee-team", "Смена", `<select id="employee-team" name="shiftTeamId" required><option value="office" ${employee?.shiftTeamId === "office" ? "selected" : ""}>Администрация · 5/2</option>${state.workforce.shiftTeams.map(team => `<option value="${team.id}" ${employee?.shiftTeamId === team.id ? "selected" : ""}>${escapeHtml(team.name)} · 2/2</option>`).join("")}</select>`)}
-        ${formField("employee-pak-number", "Номер PAK", `<input id="employee-pak-number" name="pakNumber" value="${attribute(employee?.pakNumber ?? "")}" autocomplete="off">`)}
-        ${formField("employee-pak-code", "Код", `<input id="employee-pak-code" name="pakCode" value="${attribute(employee?.pakCode ?? "")}" autocomplete="off">`)}
+        <div class="pak-form-fields" data-pak-fields ${employee?.role === "packer" ? "" : "hidden"}>${formField("employee-pak-number", "Номер PAK", `<input id="employee-pak-number" name="pakNumber" value="${attribute(employee?.pakNumber ?? "")}" autocomplete="off">`)}${formField("employee-pak-code", "Код", `<input id="employee-pak-code" name="pakCode" value="${attribute(employee?.pakCode ?? "")}" autocomplete="off">`)}</div>
         ${formField("employee-birthday", "Дата рождения", `<input id="employee-birthday" name="birthday" type="date" value="${attribute(employee?.birthday ?? "")}">`)}
         ${formField("employee-hire-date", "Дата приёма", `<input id="employee-hire-date" name="hireDate" type="date" value="${attribute(employee?.hireDate ?? "")}">`)}
         ${formField("employee-phone", "Телефон", `<input id="employee-phone" name="phone" type="tel" value="${attribute(employee?.phone ?? "")}" autocomplete="tel">`)}
@@ -1334,6 +1333,15 @@ function openEmployeeDialog(id = null) {
       </div>
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
     </form>`);
+  const roleControl = dialog.querySelector("[name=role]");
+  const pakFields = dialog.querySelector("[data-pak-fields]");
+  const syncPakFields = () => {
+    const isPacker = roleControl.value === "packer";
+    pakFields.hidden = !isPacker;
+    pakFields.querySelectorAll("input").forEach(input => { input.disabled = !isPacker; if (!isPacker) input.value = ""; });
+  };
+  roleControl.addEventListener("change", syncPakFields);
+  syncPakFields();
   dialog.querySelector("form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;

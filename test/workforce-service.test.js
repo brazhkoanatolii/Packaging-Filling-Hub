@@ -42,12 +42,14 @@ test("персонал, настройки смен и табель сохран
   assert.equal(initial.shiftTeams.length, 2);
 
   await service.saveEmployee({ id: "employee-0001", fullName: "Albert Krevski", role: "senior-mechanic", shiftTeamId: "shift-team-b", pakNumber: "PAK 20", pakCode: "1-Z" });
+  await service.saveEmployee({ id: "employee-0009", fullName: "Hanna Khalypenko", role: "packer", shiftTeamId: "shift-team-a", pakNumber: "PAK 3", pakCode: "1-A" });
   await service.saveShiftTeam({ id: "shift-team-a", name: "Смена A · день", anchorDate: "2026-07-01", shiftDurationHours: 12, accountingHours: 10 });
   await service.saveAttendance({ date: "2026-09-19", shiftTeamId: "shift-team-a", employeeId: "employee-0002", value: "L" });
 
   const saved = await service.snapshot();
   assert.equal(saved.personnel.find(employee => employee.id === "employee-0001").shiftTeamId, "shift-team-b");
-  assert.equal(saved.personnel.find(employee => employee.id === "employee-0001").pakCode, "1-Z");
+  assert.equal(saved.personnel.find(employee => employee.id === "employee-0001").pakCode, "");
+  assert.equal(saved.personnel.find(employee => employee.id === "employee-0009").pakCode, "1-A");
   assert.equal(saved.shiftTeams.find(team => team.id === "shift-team-a").accountingHours, 10);
   assert.equal(saved.attendance[0].id, "2026-09-19:shift-team-a:employee-0002");
   assert.equal(saved.attendance[0].value, "L");
