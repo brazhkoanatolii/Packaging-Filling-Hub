@@ -1,6 +1,8 @@
 import { ATTENDANCE_CODES, SHIFT_TEAMS, WORKFORCE_PERSONNEL } from "../config/workforce-config.js";
 
 const PERSONNEL_KEY = "workforcePersonnel";
+const PERSONNEL_SOURCE_VERSION_KEY = "workforcePersonnelSourceVersion";
+const PERSONNEL_SOURCE_VERSION = 2;
 const TEAMS_KEY = "workforceShiftTeams";
 const ATTENDANCE_KEY = "workforceAttendance";
 
@@ -13,8 +15,11 @@ export class WorkforceService {
   async initialize() {
     if (this.repository) return this.repository.initialize();
     const storedPersonnel = await this.store.preference(PERSONNEL_KEY);
+    const sourceVersion = Number(await this.store.preference(PERSONNEL_SOURCE_VERSION_KEY, 0));
     if (!storedPersonnel) await this.store.setPreference(PERSONNEL_KEY, clone(WORKFORCE_PERSONNEL));
+    else if (sourceVersion < PERSONNEL_SOURCE_VERSION) await this.store.setPreference(PERSONNEL_KEY, reconcilePersonnelSource(storedPersonnel));
     else await this.store.setPreference(PERSONNEL_KEY, migratePersonnel(storedPersonnel));
+    await this.store.setPreference(PERSONNEL_SOURCE_VERSION_KEY, PERSONNEL_SOURCE_VERSION);
     if (!await this.store.preference(TEAMS_KEY)) await this.store.setPreference(TEAMS_KEY, clone(SHIFT_TEAMS));
     if (!await this.store.preference(ATTENDANCE_KEY)) await this.store.setPreference(ATTENDANCE_KEY, []);
     return this.snapshot();
@@ -162,6 +167,20 @@ function migratePersonnel(personnel) {
     if (person.id === "employee-0018") return { ...person, active: false };
     if (person.id === "employee-0020" && person.role === "mechanic-operator") return { ...person, role: "mechanic" };
     return person;
+  });
+}
+function reconcilePersonnelSource(personnel) {
+  const prior = new Map(personnel.map(person => [person.id, person]));
+  return WORKFORCE_PERSONNEL.map(person => {
+    const existing = prior.get(person.id) || {};
+    return {
+      ...existing,
+      ...clone(person),
+      birthday: String(existing.birthday || ""),
+      hireDate: String(existing.hireDate || ""),
+      phone: String(existing.phone || ""),
+      email: String(existing.email || "")
+    };
   });
 }
 function numberBetween(value, minimum, maximum, message) {

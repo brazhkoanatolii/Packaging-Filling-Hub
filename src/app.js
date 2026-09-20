@@ -818,55 +818,12 @@ function renderPersonnelPrivateDetails(employee) {
 }
 
 function renderStatisticsPage() {
-  const allEmployees = personnel();
-  const employees = activePersonnel();
-  const todayValue = today();
-  const currentMonth = todayValue.slice(0, 7);
-  const currentMonthAttendance = (state.workforce.attendance || []).filter(record => String(record.date || "").startsWith(currentMonth) && String(record.value || "") !== "");
-  const activeVacations = (state.workforce.vacations || []).filter(record => ["Запланирован", "Согласован", "Использован"].includes(record.status));
-  const profileComplete = employees.filter(employee => employee.birthday && employee.hireDate && employee.phone && employee.email).length;
-  const teams = [
-    { id: "office", name: "Администрация", code: "5/2" },
-    ...state.workforce.shiftTeams
-  ];
-  const roleRows = Object.entries(ROLE_LABELS).map(([role, label]) => ({
-    label,
-    active: employees.filter(employee => employee.role === role).length,
-    archived: allEmployees.filter(employee => employee.role === role && employee.active === false).length
-  })).filter(row => row.active || row.archived);
-
   return `
     <section class="settings-hero card">
       <div><p class="eyebrow">Сводные показатели участка</p><h2>Статистика</h2><p>Общие данные по персоналу, сменам, табелю и доступным журналам. Личные сведения сотрудников здесь не отображаются.</p></div>
       <span class="status-pill success">Только начальник</span>
     </section>
-    <section class="metric-grid">
-      ${metricCard("Сотрудников", employees.length, `${allEmployees.length - employees.length} в архиве`, "neutral")}
-      ${metricCard("Карточки заполнены", profileComplete, `из ${employees.length} активных`, profileComplete === employees.length ? "success" : "warning")}
-      ${metricCard("Отметок табеля", currentMonthAttendance.length, `за ${escapeHtml(monthTitle(currentMonth))}`, "neutral")}
-      ${metricCard("Периодов отпуска", activeVacations.length, "запланировано или согласовано", activeVacations.length ? "warning" : "success")}
-    </section>
-    <div class="settings-grid">
-      <section class="card settings-section">
-        <div class="section-heading"><div><p class="eyebrow">Состав смен</p><h2>Сотрудники по бригадам</h2></div></div>
-        ${teams.map(team => {
-          const count = employees.filter(employee => employee.shiftTeamId === team.id).length;
-          const leaders = employees.filter(employee => employee.shiftTeamId === team.id && ["senior-mechanic", "mechanic"].includes(employee.role)).length;
-          return settingRow(escapeHtml(team.name), `${count}`, leaders ? `${leaders} ответственных за техническую часть` : "Сотрудники участка");
-        }).join("")}
-      </section>
-      <section class="card settings-section">
-        <div class="section-heading"><div><p class="eyebrow">Качество справочника</p><h2>Заполнение карточек</h2></div></div>
-        ${settingRow("Дата рождения", `${employees.filter(employee => employee.birthday).length} из ${employees.length}`, "Нужно для напоминаний")}
-        ${settingRow("Дата приёма", `${employees.filter(employee => employee.hireDate).length} из ${employees.length}`, "Для истории стажа")}
-        ${settingRow("Телефон", `${employees.filter(employee => employee.phone).length} из ${employees.length}`, "Виден только начальнику")}
-        ${settingRow("Электронная почта", `${employees.filter(employee => employee.email).length} из ${employees.length}`, "Видна только начальнику")}
-      </section>
-      <section class="card settings-section wide">
-        <div class="section-heading"><div><p class="eyebrow">Должности</p><h2>Структура персонала</h2></div><span class="status-pill muted">Активные / архив</span></div>
-        <div class="settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Должность</th><th>Работают</th><th>В архиве</th></tr></thead><tbody>${roleRows.map(row => `<tr><td><strong>${escapeHtml(row.label)}</strong></td><td>${row.active}</td><td>${row.archived || "—"}</td></tr>`).join("") || "<tr><td colspan=\"3\">Данные пока не загружены.</td></tr>"}</tbody></table></div>
-      </section>
-    </div>`;
+    <section class="card empty-state"><span>◌</span><h3>Раздел подготовлен</h3><p>Показатели и графики добавим после того, как вы определите нужный состав статистики.</p></section>`;
 }
 
 function formatPersonnelDate(value) {

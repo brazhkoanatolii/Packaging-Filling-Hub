@@ -34,10 +34,6 @@ export const ATTENDANCE_CODES = Object.freeze([
 ]);
 
 export const WORKFORCE_PERSONNEL = Object.freeze([
-  ["employee-admin-0001", "Anatolii Brazhko", "head-of-area", "office"],
-  ["employee-admin-0002", "Serhii Yurinov", "production-manager", "office"],
-  ["employee-admin-0003", "Hanna Brazhko", "administrator", "office"],
-  ["employee-admin-0004", "Daiva Vaškelienė", "warehouse-manager", "office"],
   ["employee-0001", "Albert Krevski", "mechanic", "shift-team-a"],
   ["employee-0002", "Vladislav Balašov", "senior-mechanic", "shift-team-a"],
   ["employee-0003", "Valdemar Stacino", "mechanic-operator", "shift-team-a"],
@@ -52,10 +48,7 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0012", "Alicija Girčienė", "packer", "shift-team-a"],
   ["employee-0013", "Ilona Curikova", "packer", "shift-team-a"],
   ["employee-0014", "Karina Ivaškevičiūtė", "packer", "shift-team-a"],
-  ["employee-0015", "Danuta Jankovskaja", "packer", "shift-team-a"],
-  ["employee-0016", "Tatjana Vasilevska", "packer", "shift-team-a"],
   ["employee-0017", "Viktor Minin", "senior-mechanic", "shift-team-b"],
-  ["employee-0018", "Volodymyr Honcharenko", "senior-mechanic", "shift-team-b", false],
   ["employee-0019", "Maksim Tsikhenia", "mechanic-operator", "shift-team-b"],
   ["employee-0020", "Vitalii Paliienko", "mechanic", "shift-team-b"],
   ["employee-0021", "Rolandas Asanovas", "mechanic-operator", "shift-team-b"],
@@ -66,9 +59,7 @@ export const WORKFORCE_PERSONNEL = Object.freeze([
   ["employee-0026", "Kamila Babič", "packer", "shift-team-b"],
   ["employee-0027", "Irena Jurevič", "packer", "shift-team-b"],
   ["employee-0028", "Anžela Butėnienė", "packer", "shift-team-b"],
-  ["employee-0029", "Alina Andriushchenko", "packer", "shift-team-b"],
-  ["employee-0030", "Malgožata Blinstrubaitė", "packer", "shift-team-b"],
-  ["employee-0031", "Jolanta Blinstrubaitė", "packer", "shift-team-b"]
+  ["employee-0029", "Alina Andriushchenko", "packer", "shift-team-b"]
 ].map(([id, fullName, role, shiftTeamId, active = true]) => Object.freeze({ id, fullName, role, shiftTeamId, active })));
 
 export const SHIFT_TEAMS = Object.freeze([
