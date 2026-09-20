@@ -649,6 +649,18 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .attendance-code-settings span { display: flex; flex-direction: column; }
 .attendance-code-settings small { color: currentColor; opacity: .72; }
 
+.workforce-connection { display: flex; align-items: center; gap: 11px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid color-mix(in srgb,var(--green-600) 26%,var(--line)); border-radius: 13px; background: color-mix(in srgb,var(--green-100) 52%,var(--surface)); color: var(--green-700); font-size: .78rem; }
+.workforce-connection.warning { border-color: #e8c889; background: var(--amber-100); color: #73501e; }
+.workforce-connection > span { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: currentColor; color: #fff; font-weight: 900; }
+.workforce-connection p { flex: 1; margin: 0; }
+.linked-journal-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 16px; margin-top: 16px; }
+.linked-journal { display: flex; min-height: 174px; flex-direction: column; align-items: flex-start; padding: 22px; }
+.linked-journal h3 { margin: 0 0 8px; }
+.linked-journal p { margin: 0 0 20px; color: var(--ink-500); }
+.linked-journal .journal-link { margin-top: auto; }
+.journal-link { display: inline-flex; align-items: center; text-decoration: none; }
+.module-note { margin: 16px 0 0; color: var(--ink-500); font-size: .8rem; }
+
 :root[data-theme="dark"] body { background: var(--canvas); }
 :root[data-theme="dark"] .topbar,
 :root[data-theme="dark"] .mobile-nav { background: rgba(10,20,36,.95); }

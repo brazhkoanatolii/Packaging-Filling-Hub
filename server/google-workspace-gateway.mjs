@@ -61,6 +61,19 @@ createServer(async (request, response) => {
       return sendJson(response, 200, result);
     }
 
+    if (url.pathname === "/api/workforce" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      const result = await runAppsScript("getWorkforceSnapshot", [{ role: workstationRole }]);
+      return sendJson(response, result?.ok === false ? 400 : 200, result);
+    }
+    if (url.pathname === "/api/workforce" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена" });
+      const payload = await readJsonBody(request);
+      if (!workstationRole || (workstationRole !== "manager" && payload.kind !== "attendance")) return sendJson(response, 403, { ok: false, message: "Недостаточно прав" });
+      const result = await runAppsScript("writeWorkforceOperation", [{ ...payload, role: workstationRole }]);
+      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+
     if (url.pathname === "/api/scale-records" && request.method === "POST") {
       if (!writesEnabled) {
         return sendJson(response, 403, { ok: false, message: "Запись в Google пока выключена начальником участка" });

@@ -9,7 +9,7 @@ const credentialsPath = process.argv[2];
 const environmentPath = join(projectRoot, ".env");
 const oauthScopes = [
   "https://www.googleapis.com/auth/script.scriptapp",
-  "https://www.googleapis.com/auth/spreadsheets.currentonly"
+  "https://www.googleapis.com/auth/spreadsheets"
 ];
 
 if (!credentialsPath || !existsSync(credentialsPath)) {

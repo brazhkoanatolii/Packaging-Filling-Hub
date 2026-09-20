@@ -10,6 +10,9 @@ import { AuthService } from "./services/auth-service.js";
 import { JournalService } from "./services/journal-service.js";
 import { ShiftService } from "./services/shift-service.js";
 import { WorkforceService, getScheduleMonth } from "./services/workforce-service.js";
+import { WorkforceGatewayProvider } from "./providers/workforce-gateway-provider.js";
+import { WorkforceRepository } from "./repositories/workforce-repository.js";
+import { WORKSPACE_JOURNALS, WORKFORCE_YEARS } from "./config/workspace-journals.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -43,6 +46,8 @@ let shiftService;
 let repository;
 let journalService;
 let workforceService;
+let workforceRepository;
+let workforceActor = {};
 let refreshTimer;
 let clockTimer;
 
@@ -54,7 +59,10 @@ async function bootstrap() {
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
   shiftService = new ShiftService(store);
-  workforceService = new WorkforceService(store);
+  workforceRepository = APP_CONFIG.integration.mode === "gateway" ? new WorkforceRepository(store,
+    new WorkforceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl, writesEnabled: APP_CONFIG.integration.googleWritesEnabled }),
+    () => ({ ...workforceActor, workstationId: APP_CONFIG.workstationId, account: state.account?.id })) : null;
+  workforceService = new WorkforceService(store, workforceRepository);
   journalService = new JournalService(repository, journal, {
     workstationId: APP_CONFIG.workstationId,
     workstationLabel: APP_CONFIG.workstationLabel
@@ -126,13 +134,13 @@ async function handleChange(event) {
   if (event.target.matches("[data-timesheet-cell]")) {
     const select = event.target;
     try {
-      await workforceService.saveAttendance({
+      await withWorkforceActor(() => workforceService.saveAttendance({
         date: select.dataset.date,
         shiftTeamId: select.dataset.shiftTeamId,
         employeeId: select.dataset.employeeId,
         value: select.value,
         overtime: select.dataset.overtime === "true"
-      });
+      }));
       state.workforce = await workforceService.snapshot();
       render();
       toast("Табель сохранён.", "success");
@@ -149,7 +157,7 @@ async function handleSubmit(event) {
   if (form.dataset.form === "shift-settings") {
     try {
       const data = Object.fromEntries(new FormData(form));
-      await workforceService.saveShiftTeam(data);
+      await withWorkforceActor(() => workforceService.saveShiftTeam(data));
       state.workforce = await workforceService.snapshot();
       render();
       toast("Настройки смены сохранены.", "success");
@@ -287,12 +295,18 @@ async function handleClick(event) {
       return;
     }
     if (action === "toggle-employee") {
-      await workforceService.toggleEmployee(id);
+      await withWorkforceActor(() => workforceService.toggleEmployee(id));
       state.workforce = await workforceService.snapshot();
       render();
       toast("Статус сотрудника изменён.", "success");
       return;
     }
+    if (action === "workforce-accept-remote") {
+      await workforceRepository?.acceptRemote(id);
+      state.workforce = await workforceService.snapshot(); render(); return;
+    }
+    if (action === "edit-vacation") { openVacationDialog(id); return; }
+    if (action === "add-vacation") { openVacationDialog(); return; }
     if (action === "cycle-language") {
       const index = LANGUAGES.findIndex(language => language.code === state.language);
       state.language = LANGUAGES[(index + 1) % LANGUAGES.length].code;
@@ -327,6 +341,12 @@ async function reloadLocalState() {
   state.operations = await repository.pendingOperations();
 }
 
+async function syncWorkforce() {
+  if (!workforceRepository) return state.workforce;
+  state.workforce = await workforceRepository.sync();
+  return state.workforce;
+}
+
 async function refreshFromSource({ silent = false } = {}) {
   if (!navigator.onLine) {
     if (!silent) toast("Нет интернета. Показаны последние сохранённые данные.", "warning");
@@ -334,11 +354,12 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-    await repository.refresh();
+    const checks = await Promise.allSettled([repository.refresh(), syncWorkforce()]);
+    const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
     render();
-    if (!silent) toast("Данные обновлены.", "success");
+    if (!silent) toast(failed ? failed.reason.message : "Данные обновлены.", failed ? "warning" : "success");
   } finally {
     setBusy(false);
   }
@@ -353,12 +374,15 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const result = await repository.sync();
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce()]);
+    const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
+    const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
     render();
     if (!silent) {
-      if (result.conflicts) toast(`Обнаружено конфликтов: ${result.conflicts}.`, "warning");
+      if (failed) toast(failed.reason.message, "warning");
+      else if (result.conflicts) toast(`Обнаружено конфликтов: ${result.conflicts}.`, "warning");
       else if (result.sent) toast(`Отправлено записей: ${result.sent}.`, "success");
       else toast("Очередь синхронизации пуста.", "success");
     }
@@ -464,12 +488,26 @@ function renderApplication() {
         ${renderDemoBanner()}
         ${renderPreparationReminder()}
         <section class="page-content">
+          ${renderWorkforceConnection()}
           ${renderPage()}
         </section>
       </main>
       ${renderMobileNav()}
     </div>
     <div id="toast-region" class="toast-region" aria-live="assertive"></div>`;
+}
+
+function renderWorkforceConnection() {
+  if (!workforceRepository) return "";
+  const pending = state.workforce?.pending ?? [];
+  const conflicts = pending.filter(item => item.status === "conflict" || item.status === "error");
+  if (!pending.length && !state.workforce?.syncError) return "";
+  const message = state.workforce?.syncError
+    ? `Журналы персонала: ${state.workforce.syncError}`
+    : conflicts.length
+      ? `Журналы персонала: ${conflicts.length} измен. требуют внимания.`
+      : `Журналы персонала: ожидают отправки ${pending.length} измен.`;
+  return `<div class="workforce-connection ${conflicts.length || state.workforce?.syncError ? "warning" : ""}"><span>${conflicts.length || state.workforce?.syncError ? "!" : "↥"}</span><p>${escapeHtml(message)}</p>${conflicts.length ? `<button class="small-button" data-action="navigate" data-page="sync">Открыть синхронизацию</button>` : ""}</div>`;
 }
 
 function renderPage() {
@@ -479,6 +517,7 @@ function renderPage() {
   if (state.page === "sync") return renderSyncPage();
   if (state.page === "vacations" && state.account.role === "manager") return renderVacationsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
+  if (["maintenance", "cyclones"].includes(state.page)) return renderLinkedJournals(state.page);
   if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
   return renderDashboard();
 }
@@ -686,10 +725,10 @@ function renderTimesheetRow(employee, team, days, schedule, records) {
     const scheduled = schedule.get(day.date)?.scheduled;
     const future = day.date > today();
     if (!record && (!scheduled || future)) return `<td class="${day.isToday ? "today" : ""} ${future ? "is-future" : "is-rest"}">·</td>`;
-    const value = record?.value ?? String(team.accountingHours);
+    const value = record?.value ?? (workforceRepository ? "" : String(team.accountingHours));
     const hours = Number(value);
     if (Number.isFinite(hours)) total += hours;
-    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}">${timesheetOptions(value, team.accountingHours)}</select></td>`;
+    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}">${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
   }).join("");
   return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
 }
@@ -722,16 +761,26 @@ function renderPersonnelPage() {
 }
 
 function renderVacationsPage() {
-  return `
-    <section class="card module-header">
-      <div><p class="eyebrow">Только для начальника участка</p><h2>График отпусков</h2><p>Годовой план отпусков сотрудников с проверкой пересечений и последующим подключением рабочего источника.</p></div>
-      <span class="status-pill warning">Источник ещё не подключён</span>
-    </section>
-    <section class="card roadmap-card">
-      <div class="roadmap-icon">${moduleIcon("vacation")}</div>
-      <div><h2>Структура раздела подготовлена</h2><p>Из старой версии учтена логика годового календаря. Фамилии и рабочие даты из архива не публикуются — начальник подключит актуальный список через настройки.</p></div>
-      <button class="secondary-button" data-action="navigate" data-page="settings">Настроить источник</button>
-    </section>`;
+  const rows = [...(state.workforce.vacations || [])].sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
+  return `<section class="card module-header"><div><h2>График отпусков</h2><p>Одна запись — один период. Итоги считаются в календарных днях.</p></div><button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}</section>
+    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th><th></th></tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td><td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td></tr>`).join("") || '<tr><td colspan="7">Периоды пока не загружены.</td></tr>'}</tbody></table></section>`;
+}
+
+function renderLinkedJournals(page) {
+  const isRepair = page === "maintenance";
+  const primary = isRepair ? WORKSPACE_JOURNALS.repairs : WORKSPACE_JOURNALS.cyclones;
+  const secondary = isRepair ? WORKSPACE_JOURNALS.maintenance : null;
+  return `<section class="module-placeholder">
+    <div class="placeholder-hero card"><span class="placeholder-icon">${moduleIcon(isRepair ? "tools" : "cyclone")}</span><div><p class="eyebrow">Рабочий журнал Google Sheets</p><h2>${escapeHtml(isRepair ? "Ремонт и ТО станков" : "Очистка циклонов")}</h2><p>${isRepair ? "Журнал ремонта и журнал ТО разделены. В каждом есть собственная вкладка «Статистика»." : "Рабочий журнал ведётся в Google Sheets и открывается из программы."}</p></div><span class="status-pill success">Подключено</span></div>
+    <div class="linked-journal-grid"><article class="card linked-journal"><h3>${escapeHtml(primary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink(isRepair ? "repairs" : "cyclones", "Открыть журнал")}</article>${secondary ? `<article class="card linked-journal"><h3>${escapeHtml(secondary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink("maintenance", "Открыть журнал")}</article>` : ""}</div>
+    <p class="module-note">Следующим шагом можно добавить в этот раздел быстрые формы ввода с офлайн-очередью, не меняя устройство самих журналов.</p>
+  </section>`;
+}
+
+function journalLink(key, label = "Открыть в Google Sheets") {
+  const journal = WORKSPACE_JOURNALS[key];
+  if (!journal) return "";
+  return `<a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${journal.id}/edit" target="_blank" rel="noreferrer">${escapeHtml(label)} ↗</a>`;
 }
 
 function renderModulePlaceholder(page) {
@@ -789,6 +838,8 @@ function renderCompactRecords(records) {
 function renderSyncPage() {
   const conflicts = state.operations.filter(item => item.state === "conflict");
   const pending = state.operations.filter(item => item.state === "pending");
+  const workforcePending = state.workforce?.pending ?? [];
+  const workforceConflicts = workforcePending.filter(item => item.status === "conflict" || item.status === "error");
   return `
     <div class="sync-summary card">
       <div class="sync-illustration ${navigator.onLine ? "online" : "offline"}">${syncLargeIcon()}</div>
@@ -800,13 +851,13 @@ function renderSyncPage() {
       <button class="primary-button" data-action="sync" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Отправляем…" : "Синхронизировать"}</button>
     </div>
     <div class="metric-grid three">
-      ${metricCard("В очереди", pending.length, "Ожидает отправки", pending.length ? "warning" : "neutral")}
-      ${metricCard("Конфликты", conflicts.length, conflicts.length ? "Нужно выбрать версию" : "Конфликтов нет", conflicts.length ? "danger" : "success")}
+       ${metricCard("В очереди", pending.length + workforcePending.length, "Ожидает отправки", pending.length + workforcePending.length ? "warning" : "neutral")}
+       ${metricCard("Конфликты", conflicts.length + workforceConflicts.length, conflicts.length + workforceConflicts.length ? "Нужно выбрать версию" : "Конфликтов нет", conflicts.length + workforceConflicts.length ? "danger" : "success")}
       ${metricCard("Последнее обновление", state.lastRefresh ? formatDateTime(state.lastRefresh) : "—", "Автоматически каждые 60 секунд", "neutral", true)}
     </div>
     <section class="card queue-card">
       <div class="section-heading"><div><p class="eyebrow">Локальная очередь</p><h2>Неотправленные изменения</h2></div></div>
-      ${state.operations.length ? `<div class="queue-list">${state.operations.map(renderOperation).join("")}</div>` : `<div class="empty-state"><span>✓</span><h3>Всё отправлено</h3><p>На этом компьютере нет ожидающих изменений.</p></div>`}
+       ${state.operations.length || workforcePending.length ? `<div class="queue-list">${state.operations.map(renderOperation).join("")}${workforcePending.map(renderWorkforceOperation).join("")}</div>` : `<div class="empty-state"><span>✓</span><h3>Всё отправлено</h3><p>На этом компьютере нет ожидающих изменений.</p></div>`}
     </section>`;
 }
 
@@ -1199,7 +1250,7 @@ function openEmployeeDialog(id = null) {
     button.disabled = true;
     try {
       const data = Object.fromEntries(new FormData(form));
-      await workforceService.saveEmployee({ ...data, id: employee?.id, active: employee?.active !== false });
+      await withWorkforceActor(() => workforceService.saveEmployee({ ...data, id: employee?.id, active: employee?.active !== false }));
       state.workforce = await workforceService.snapshot();
       dialog.close();
       render();
@@ -1210,6 +1261,81 @@ function openEmployeeDialog(id = null) {
     }
   });
   dialog.showModal();
+}
+
+function renderWorkforceOperation(operation) {
+  const conflict = operation.status === "conflict" || operation.status === "error";
+  const labels = { personnel: "Персонал", shiftTeams: "Смены", attendance: "Табель", vacations: "График отпусков" };
+  return `<div class="queue-item"><span class="queue-icon ${conflict ? "conflict" : "pending"}">${conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(labels[operation.kind] || "Журнал")}</strong><small>${escapeHtml(operation.actor?.performer || "Автор не указан")} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}</small></span><span class="status-pill ${conflict ? "danger" : "warning"}">${conflict ? "Конфликт" : "В очереди"}</span>${conflict ? `<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(operation.requestId)}">Оставить версию Google</button>` : ""}</div>`;
+}
+
+function openVacationDialog(id = null) {
+  const vacation = id ? (state.workforce.vacations || []).find(item => item.id === id) : null;
+  const dialog = createDialog(`
+    <form class="dialog-card employee-dialog" data-vacation-form>
+      <div class="dialog-heading"><div><p class="eyebrow">График отпусков</p><h2>${vacation ? "Изменить период" : "Новый период"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+      <p class="dialog-lead">Один период — одна строка в рабочем журнале. Дни считаются автоматически.</p>
+      <div id="form-error" class="form-error" hidden></div>
+      <div class="form-grid">
+        ${formField("vacation-year", "Год", `<select id="vacation-year" name="year" required>${WORKFORCE_YEARS.map(year => `<option value="${year}" ${Number(vacation?.year || WORKFORCE_YEARS[0]) === year ? "selected" : ""}>${year}</option>`).join("")}</select>`)}
+        ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
+        ${formField("vacation-start", "Начало", `<input id="vacation-start" name="startDate" type="date" value="${attribute(vacation?.startDate || "")}" required>`)}
+        ${formField("vacation-end", "Окончание", `<input id="vacation-end" name="endDate" type="date" value="${attribute(vacation?.endDate || "")}" required>`)}
+        ${formField("vacation-status", "Статус", `<select id="vacation-status" name="status" required>${["Запланирован", "Согласован", "Использован", "Аннулирован"].map(status => `<option ${vacation?.status === status ? "selected" : ""}>${status}</option>`).join("")}</select>`)}
+        ${formField("vacation-note", "Примечание / причина", `<textarea id="vacation-note" name="note" rows="2" placeholder="Для аннулирования причина обязательна">${escapeHtml(vacation?.note || "")}</textarea>`, "Необязательно, кроме аннулирования", "full")}
+      </div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
+    </form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      await withWorkforceActor(() => workforceService.saveVacation({ ...Object.fromEntries(new FormData(form)), id: vacation?.id }));
+      state.workforce = await workforceService.snapshot();
+      dialog.close();
+      render();
+      toast("Период отпуска сохранён.", "success");
+    } catch (error) {
+      showFormError(form, error);
+      button.disabled = false;
+    }
+  });
+  dialog.showModal();
+}
+
+function withWorkforceActor(action) {
+  if (!workforceRepository) return action();
+  return chooseWorkforceActor().then(async performer => {
+    workforceActor = { performer };
+    return action();
+  });
+}
+
+function chooseWorkforceActor() {
+  const names = employeeNames();
+  if (!names.length) return Promise.reject(new Error("Сначала добавьте сотрудника в журнал «Персонал»"));
+  return new Promise((resolve, reject) => {
+    const dialog = createDialog(`
+      <form class="dialog-card small-dialog" data-performer-form>
+        <div class="dialog-heading"><div><p class="eyebrow">Автор записи</p><h2>Кто вносит данные?</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+        <p class="dialog-lead">Имя будет записано в Google Sheets вместе с изменением.</p>
+        ${formField("workforce-performer", "Имя и фамилия", `<select id="workforce-performer" name="performer" required><option value="">Выберите себя</option>${names.map(name => `<option ${name === workforceActor.performer ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>`)}
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Продолжить</button></div>
+      </form>`);
+    let completed = false;
+    dialog.addEventListener("close", () => { if (!completed) reject(new Error("Не выбран автор записи")); });
+    dialog.querySelector("form").addEventListener("submit", event => {
+      event.preventDefault();
+      const performer = String(new FormData(event.currentTarget).get("performer") || "");
+      if (!performer) return;
+      completed = true;
+      dialog.close();
+      resolve(performer);
+    });
+    dialog.showModal();
+  });
 }
 
 function createDialog(content) {
