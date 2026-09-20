@@ -344,6 +344,11 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .account-arrow { color: var(--green-600); font-size: 1.3rem; }
 .login-password { display: grid; gap: 4px; margin-top: 11px; color: var(--ink-500); font-size: .72rem; }
 .login-password input { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); color: var(--ink-900); }
+.login-responsibility { display: grid; gap: 5px; margin-top: 13px; padding: 10px; border: 1px solid color-mix(in srgb, var(--green-600) 26%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--green-100) 40%, var(--surface)); }
+.login-responsibility-title { color: var(--green-700); font-size: .76rem; font-weight: 850; }
+.login-responsibility small { margin: 0; font-size: .68rem; }
+.login-responsibility select { width: 100%; min-height: 35px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--ink-900); }
+.login-responsibility label { display: grid; gap: 4px; margin-top: 3px; color: var(--ink-500); font-size: .7rem; }
 .account-login-button { min-height: 38px; padding: 8px 13px; border: 1px solid var(--blue-500); border-radius: 10px; background: var(--blue-500); color: white; font-weight: 800; }
 .login-error { color: #c33a32 !important; }
 .privacy-note { max-width: 580px; margin: 18px 0 0; color: var(--ink-500); font-size: .73rem; }
