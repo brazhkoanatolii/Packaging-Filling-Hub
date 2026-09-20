@@ -75,7 +75,7 @@ test("разделы расположены в согласованном раб
     "specifications", "production", "spare-parts", "cyclones", "documents", "personnel",
     "vacations", "settings"
   ]);
-  assert.equal(MODULES.find(module => module.id === "vacations").managerOnly, true);
+  assert.notEqual(MODULES.find(module => module.id === "vacations").managerOnly, true);
   assert.equal(MODULES.find(module => module.id === "settings").managerOnly, true);
 });
 

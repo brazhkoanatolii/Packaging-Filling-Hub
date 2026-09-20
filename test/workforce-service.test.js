@@ -47,3 +47,17 @@ test("персонал, настройки смен и табель сохран
   assert.equal(saved.attendance[0].id, "2026-09-19:shift-team-a:employee-0002");
   assert.equal(saved.attendance[0].value, "L");
 });
+
+test("администрация не попадает в табель и график отпусков участка", async () => {
+  const service = new WorkforceService(createStore());
+  await service.initialize();
+
+  await assert.rejects(
+    service.saveAttendance({ date: "2026-09-19", shiftTeamId: "office", employeeId: "employee-admin-0001", value: "8" }),
+    /только сотрудников смен/
+  );
+  await assert.rejects(
+    service.saveVacation({ employeeId: "employee-admin-0001", year: 2026, startDate: "2026-06-01", endDate: "2026-06-14", status: "Запланирован" }),
+    /только сотрудника участка/
+  );
+});

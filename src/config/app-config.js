@@ -44,7 +44,7 @@ export const MODULES = Object.freeze([
   { id: "cyclones", labels: { ru: "Очистка циклонов", en: "Cyclone cleaning", lt: "Ciklonų valymas" }, icon: "cyclone" },
   { id: "documents", labels: { ru: "Документы", en: "Documents", lt: "Dokumentai" }, icon: "documents" },
   { id: "personnel", labels: { ru: "Персонал", en: "Personnel", lt: "Personalas" }, icon: "personnel" },
-  { id: "vacations", labels: { ru: "График отпусков", en: "Vacation schedule", lt: "Atostogų grafikas" }, icon: "vacation", managerOnly: true },
+  { id: "vacations", labels: { ru: "График отпусков", en: "Vacation schedule", lt: "Atostogų grafikas" }, icon: "vacation" },
   { id: "settings", labels: { ru: "Настройки", en: "Settings", lt: "Nustatymai" }, icon: "settings", managerOnly: true }
 ].map(module => Object.freeze(module)));
 

@@ -305,8 +305,10 @@ async function handleClick(event) {
       await workforceRepository?.acceptRemote(id);
       state.workforce = await workforceService.snapshot(); render(); return;
     }
-    if (action === "edit-vacation") { openVacationDialog(id); return; }
-    if (action === "add-vacation") { openVacationDialog(); return; }
+    if (action === "edit-vacation" || action === "add-vacation") {
+      if (state.account.role !== "manager") { toast("График отпусков доступен для редактирования только начальнику участка.", "error"); return; }
+      openVacationDialog(action === "edit-vacation" ? id : null); return;
+    }
     if (action === "cycle-language") {
       const index = LANGUAGES.findIndex(language => language.code === state.language);
       state.language = LANGUAGES[(index + 1) % LANGUAGES.length].code;
@@ -515,7 +517,7 @@ function renderPage() {
   if (state.page === "attendance") return renderAttendancePage();
   if (state.page === "personnel") return renderPersonnelPage();
   if (state.page === "sync") return renderSyncPage();
-  if (state.page === "vacations" && state.account.role === "manager") return renderVacationsPage();
+  if (state.page === "vacations") return renderVacationsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (["maintenance", "cyclones"].includes(state.page)) return renderLinkedJournals(state.page);
   if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
@@ -762,8 +764,9 @@ function renderPersonnelPage() {
 
 function renderVacationsPage() {
   const rows = [...(state.workforce.vacations || [])].sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
-  return `<section class="card module-header"><div><h2>График отпусков</h2><p>Одна запись — один период. Итоги считаются в календарных днях.</p></div><button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}</section>
-    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th><th></th></tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td><td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td></tr>`).join("") || '<tr><td colspan="7">Периоды пока не загружены.</td></tr>'}</tbody></table></section>`;
+  const canEdit = state.account.role === "manager";
+  return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
+    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 7 : 6}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
 }
 
 function renderLinkedJournals(page) {
@@ -1270,6 +1273,7 @@ function renderWorkforceOperation(operation) {
 }
 
 function openVacationDialog(id = null) {
+  if (state.account.role !== "manager") throw new Error("График отпусков доступен для редактирования только начальнику участка.");
   const vacation = id ? (state.workforce.vacations || []).find(item => item.id === id) : null;
   const dialog = createDialog(`
     <form class="dialog-card employee-dialog" data-vacation-form>
@@ -1278,7 +1282,7 @@ function openVacationDialog(id = null) {
       <div id="form-error" class="form-error" hidden></div>
       <div class="form-grid">
         ${formField("vacation-year", "Год", `<select id="vacation-year" name="year" required>${WORKFORCE_YEARS.map(year => `<option value="${year}" ${Number(vacation?.year || WORKFORCE_YEARS[0]) === year ? "selected" : ""}>${year}</option>`).join("")}</select>`)}
-        ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
+        ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().filter(employee => employee.shiftTeamId !== "office").sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
         ${formField("vacation-start", "Начало", `<input id="vacation-start" name="startDate" type="date" value="${attribute(vacation?.startDate || "")}" required>`)}
         ${formField("vacation-end", "Окончание", `<input id="vacation-end" name="endDate" type="date" value="${attribute(vacation?.endDate || "")}" required>`)}
         ${formField("vacation-status", "Статус", `<select id="vacation-status" name="status" required>${["Запланирован", "Согласован", "Использован", "Аннулирован"].map(status => `<option ${vacation?.status === status ? "selected" : ""}>${status}</option>`).join("")}</select>`)}

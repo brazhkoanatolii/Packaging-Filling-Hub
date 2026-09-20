@@ -29,10 +29,8 @@ function getWorkforceSnapshot(options) {
       attendance.push({id:date+':'+shiftTeamId+':'+employee.id,date,employeeId:employee.id,shiftTeamId,value,overtime,revision:wfToken_([value,overtime]),updatedAt:wfIso_(v[40]),updatedBy:String(v[41]||'')});
     }
   }));
-  if(options && options.role==='manager') {
-    const book=SpreadsheetApp.openById(WF_BOOKS.vacations);
-    WF_YEARS.forEach(year=>wfRows_(book.getSheetByName(String(year)),12).filter(r=>r.values[7]).forEach(r=>vacations.push(wfVacation_(r.values,year))));
-  }
+  const book=SpreadsheetApp.openById(WF_BOOKS.vacations);
+  WF_YEARS.forEach(year=>wfRows_(book.getSheetByName(String(year)),12).filter(r=>r.values[7]).forEach(r=>vacations.push(wfVacation_(r.values,year))));
   return {ok:true,ready:true,personnel,shiftTeams:teams.filter(t=>t.id!=='office'),officeSchedule:teams.find(t=>t.id==='office'),attendance,vacations,years:WF_YEARS,timeZone:'Europe/Vilnius'};
 }
 
@@ -92,6 +90,7 @@ function wfSaveAttendance_(people,teams,op) {
  const p=op.record, date=String(p.date||''), parsed=wfDate_(date),year=Number(date.slice(0,4)),month=Number(date.slice(5,7)),day=Number(date.slice(8,10));
  if(!WF_YEARS.includes(year)) throw new Error('Табель подготовлен на 2025–2029 годы');
  const employee=people.find(e=>e.id===p.employeeId);if(!employee)throw new Error('Сотрудник не найден');
+ if(employee.shiftTeamId==='office')throw new Error('В табель фасовочного участка можно вносить только сотрудников смен.');
  if(!teams.some(t=>t.id===p.shiftTeamId))throw new Error('Смена не найдена');
  if(p.id!==date+':'+p.shiftTeamId+':'+p.employeeId)throw new Error('Некорректный ID табеля');
  const value=String(p.value||'');if(!/^(?:[1-9]|1[0-9]|2[0-4]|A|L|NA|M|PB|PV)$/.test(value))throw new Error('Недопустимое значение табеля');
@@ -115,6 +114,7 @@ function wfSaveAttendance_(people,teams,op) {
 function wfSaveVacation_(people,teams,op) {
  const p=op.record,year=Number(p.year),person=people.find(e=>e.id===p.employeeId);
  if(!WF_YEARS.includes(year)||!person||!WF_STATUSES.includes(p.status))throw new Error('Проверьте сотрудника, год и статус');
+ if(person.shiftTeamId==='office')throw new Error('Для графика отпусков можно выбрать только сотрудника участка.');
  const start=p.startDate?wfDate_(p.startDate):'',end=p.endDate?wfDate_(p.endDate):'';
  if((start&&!end)||(!start&&end)||start>end)throw new Error('Укажите корректное начало и окончание отпуска');
  if(start&&(String(p.startDate).slice(0,4)!==String(year)||String(p.endDate).slice(0,4)!==String(year)))throw new Error('Период должен находиться в выбранном году. Переходящий отпуск разделите на две записи.');

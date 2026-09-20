@@ -85,6 +85,8 @@ export class WorkforceService {
     const fullHours = Array.from({ length: 24 }, (_, index) => String(index + 1));
     if (![...ATTENDANCE_CODES.map(item => item.value), ...fullHours].includes(value)) throw new Error("Недопустимое значение табеля");
     const snapshot = await this.snapshot();
+    const employee = snapshot.personnel.find(person => person.id === input.employeeId);
+    if (!employee || employee.shiftTeamId === "office") throw new Error("В табель фасовочного участка можно вносить только сотрудников смен.");
     if (this.repository && !snapshot.years.includes(Number(String(input.date).slice(0, 4)))) throw new Error("Этот год ещё не подключён. Табель создан на 2025–2029 годы.");
     const attendance = snapshot.attendance;
     const id = `${input.date}:${input.shiftTeamId}:${input.employeeId}`;
@@ -101,7 +103,8 @@ export class WorkforceService {
     const snapshot = await this.snapshot();
     const year = Number(input.year);
     if (!snapshot.years.includes(year)) throw new Error("Выберите год 2025–2029");
-    if (!snapshot.personnel.some(p => p.id === input.employeeId)) throw new Error("Выберите сотрудника");
+    const employee = snapshot.personnel.find(person => person.id === input.employeeId);
+    if (!employee || employee.shiftTeamId === "office") throw new Error("Для графика отпусков можно выбрать только сотрудника участка.");
     const startDate = String(input.startDate || ""), endDate = String(input.endDate || "");
     if (!startDate || !endDate || startDate > endDate || Number(startDate.slice(0, 4)) !== year || Number(endDate.slice(0, 4)) !== year) throw new Error("Укажите начало и окончание в пределах выбранного года");
     if (!["Запланирован", "Согласован", "Использован", "Аннулирован"].includes(input.status)) throw new Error("Выберите статус отпуска");
