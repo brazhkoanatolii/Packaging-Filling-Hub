@@ -801,7 +801,7 @@ function renderPersonnelPage() {
         <div class="personnel-card-top"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="employee-team-badge">${escapeHtml(teamLabel(employee.shiftTeamId))}</span></div>
         <h3>${escapeHtml(employee.fullName)}</h3>
         <p>${escapeHtml(roleLabel(employee.role))}</p>
-        <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div>${employee.role === "packer" ? `<div><dt>Номер PAK</dt><dd>${escapeHtml(employee.pakNumber || "—")}</dd></div><div><dt>Код</dt><dd>${escapeHtml(employee.pakCode || "—")}</dd></div>` : ""}</dl>
+        <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div class="personnel-shift"><dt>Смена</dt><dd>${escapeHtml(teamLabel(employee.shiftTeamId))}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div>${employee.role === "packer" ? `<div class="personnel-pak"><dt>Номер PAK</dt><dd>${escapeHtml(employee.pakNumber || "—")}</dd></div><div class="personnel-pak personnel-code"><dt>Код</dt><dd>${escapeHtml(employee.pakCode || "—")}</dd></div>` : ""}</dl>
         ${canEdit ? renderPersonnelPrivateDetails(employee) : `<p class="directory-note">Справочник · только просмотр</p>`}
         ${canEdit ? `<div class="personnel-card-actions"><button data-action="edit-employee" data-id="${employee.id}">Карточка</button><button data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div>` : ""}
       </article>`).join("")}
