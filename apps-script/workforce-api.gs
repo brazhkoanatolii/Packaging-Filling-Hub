@@ -7,7 +7,7 @@ const WF_BOOKS = Object.freeze({
   attendance: '1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0',
   vacations: '1zenc0sBGtD8KHQdrBxULsoA9jSaUcZeW83XIiz5YxSo'
 });
-const WF_YEARS = [2027, 2028, 2029];
+const WF_YEARS = [2025, 2026, 2027, 2028, 2029];
 const WF_ROLES = { 'head-of-area':'Начальник участка', 'production-manager':'Начальник производства', administrator:'Администратор', 'warehouse-manager':'Начальник склада', 'senior-mechanic':'Старший механик', 'mechanic-operator':'Механик-оператор', packer:'Упаковщик' };
 const WF_STATUSES = ['Не запланирован','Запланирован','Согласован','Использован','Аннулирован'];
 
@@ -90,7 +90,7 @@ function wfSaveTeam_(master,op) {
 }
 function wfSaveAttendance_(people,teams,op) {
  const p=op.record, date=String(p.date||''), parsed=wfDate_(date),year=Number(date.slice(0,4)),month=Number(date.slice(5,7)),day=Number(date.slice(8,10));
- if(!WF_YEARS.includes(year)) throw new Error('Табель подготовлен на 2027–2029 годы');
+ if(!WF_YEARS.includes(year)) throw new Error('Табель подготовлен на 2025–2029 годы');
  const employee=people.find(e=>e.id===p.employeeId);if(!employee)throw new Error('Сотрудник не найден');
  if(!teams.some(t=>t.id===p.shiftTeamId))throw new Error('Смена не найдена');
  if(p.id!==date+':'+p.shiftTeamId+':'+p.employeeId)throw new Error('Некорректный ID табеля');
