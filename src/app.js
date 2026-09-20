@@ -289,6 +289,10 @@ async function handleClick(event) {
       render();
       return;
     }
+    if (["add-employee", "edit-employee", "toggle-employee"].includes(action) && state.account.role !== "manager") {
+      toast("Редактировать справочник персонала может только начальник участка.", "error");
+      return;
+    }
     if (action === "add-employee") {
       openEmployeeDialog();
       return;
@@ -748,10 +752,11 @@ function renderWorkforceMonthToolbar(title, note) {
 
 function renderPersonnelPage() {
   const employees = personnel().sort(comparePersonnel);
+  const canEdit = state.account.role === "manager";
   return `
     <section class="workforce-hero card personnel-header">
-      <div><p class="eyebrow">Команда фасовочного участка</p><h2>Персонал</h2><p>Сотрудники, должности и принадлежность к смене из прежней программы.</p></div>
-      <div class="personnel-actions"><span class="count-badge"><b data-personnel-count>${employees.length}</b> сотрудников</span>${state.account.role === "manager" ? `<button class="primary-button" data-action="add-employee">+ Добавить сотрудника</button>` : ""}</div>
+      <div><p class="eyebrow">Команда фасовочного участка</p><h2>Персонал</h2><p>${canEdit ? "Полный справочник: состав смен, статус и личные данные сотрудников." : "Справочник сотрудников: должность, смена и рабочий статус. Редактирование доступно начальнику участка."}</p></div>
+      <div class="personnel-actions"><span class="count-badge"><b data-personnel-count>${employees.length}</b> сотрудников</span>${canEdit ? `<button class="primary-button" data-action="add-employee">+ Добавить сотрудника</button>` : `<span class="status-pill muted">Только просмотр</span>`}</div>
     </section>
     <section class="card personnel-filter-card">
       <label class="personnel-search"><span>Поиск</span><input type="search" data-personnel-filter data-personnel-search placeholder="Имя или фамилия…" autocomplete="off"></label>
@@ -764,9 +769,24 @@ function renderPersonnelPage() {
         <h3>${escapeHtml(employee.fullName)}</h3>
         <p>${escapeHtml(roleLabel(employee.role))}</p>
         <dl><div><dt>График</dt><dd>${employee.shiftTeamId === "office" ? "5/2 · 8 ч" : "2/2 · 12 ч"}</dd></div><div><dt>Статус</dt><dd>${employee.active === false ? "В архиве" : "Активен"}</dd></div></dl>
-        ${state.account.role === "manager" ? `<div class="personnel-card-actions"><button data-action="edit-employee" data-id="${employee.id}">Изменить</button><button data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div>` : ""}
+        ${canEdit ? renderPersonnelPrivateDetails(employee) : `<p class="directory-note">Справочник · только просмотр</p>`}
+        ${canEdit ? `<div class="personnel-card-actions"><button data-action="edit-employee" data-id="${employee.id}">Карточка</button><button data-action="toggle-employee" data-id="${employee.id}">${employee.active === false ? "Вернуть" : "В архив"}</button></div>` : ""}
       </article>`).join("")}
     </section>`;
+}
+
+function renderPersonnelPrivateDetails(employee) {
+  return `<details class="personnel-private"><summary>Личные сведения</summary><dl>
+    <div><dt>Дата рождения</dt><dd>${escapeHtml(formatPersonnelDate(employee.birthday))}</dd></div>
+    <div><dt>Дата приёма</dt><dd>${escapeHtml(formatPersonnelDate(employee.hireDate))}</dd></div>
+    <div class="full"><dt>Телефон</dt><dd>${escapeHtml(employee.phone || "Не указан")}</dd></div>
+    <div class="full"><dt>Электронная почта</dt><dd>${escapeHtml(employee.email || "Не указана")}</dd></div>
+  </dl></details>`;
+}
+
+function formatPersonnelDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : "Не указана";
 }
 
 function renderVacationsPage() {
@@ -1240,11 +1260,12 @@ function openAnnulDialog(id) {
 }
 
 function openEmployeeDialog(id = null) {
+  if (state.account.role !== "manager") throw new Error("Редактировать справочник персонала может только начальник участка.");
   const employee = id ? personnel().find(item => item.id === id) : null;
   const dialog = createDialog(`
     <form class="dialog-card employee-dialog" data-employee-form>
       <div class="dialog-heading"><div><p class="eyebrow">Справочник персонала</p><h2>${employee ? "Изменить сотрудника" : "Новый сотрудник"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-      <p class="dialog-lead">Эти данные используются в графике смен, табеле и списке исполнителей.</p>
+      <p class="dialog-lead">Основные данные используются в графике смен, табеле и списке исполнителей. Личные сведения доступны только начальнику участка.</p>
       <div id="form-error" class="form-error" hidden></div>
       <div class="form-grid">
         ${formField("employee-full-name", "Имя и фамилия", `<input id="employee-full-name" name="fullName" value="${attribute(employee?.fullName ?? "")}" autocomplete="off" required>`, "Как в рабочих документах", "full")}
