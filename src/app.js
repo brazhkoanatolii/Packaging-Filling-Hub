@@ -525,9 +525,10 @@ function renderPage() {
   if (state.page === "personnel") return renderPersonnelPage();
   if (state.page === "sync") return renderSyncPage();
   if (state.page === "vacations") return renderVacationsPage();
+  if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (["maintenance", "cyclones"].includes(state.page)) return renderLinkedJournals(state.page);
-  if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
+  if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "ppe-warehouse", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
   return renderDashboard();
 }
 
@@ -784,6 +785,58 @@ function renderPersonnelPrivateDetails(employee) {
   </dl></details>`;
 }
 
+function renderStatisticsPage() {
+  const allEmployees = personnel();
+  const employees = activePersonnel();
+  const todayValue = today();
+  const currentMonth = todayValue.slice(0, 7);
+  const currentMonthAttendance = (state.workforce.attendance || []).filter(record => String(record.date || "").startsWith(currentMonth) && String(record.value || "") !== "");
+  const activeVacations = (state.workforce.vacations || []).filter(record => ["Запланирован", "Согласован", "Использован"].includes(record.status));
+  const profileComplete = employees.filter(employee => employee.birthday && employee.hireDate && employee.phone && employee.email).length;
+  const teams = [
+    { id: "office", name: "Администрация", code: "5/2" },
+    ...state.workforce.shiftTeams
+  ];
+  const roleRows = Object.entries(ROLE_LABELS).map(([role, label]) => ({
+    label,
+    active: employees.filter(employee => employee.role === role).length,
+    archived: allEmployees.filter(employee => employee.role === role && employee.active === false).length
+  })).filter(row => row.active || row.archived);
+
+  return `
+    <section class="settings-hero card">
+      <div><p class="eyebrow">Сводные показатели участка</p><h2>Статистика</h2><p>Общие данные по персоналу, сменам, табелю и доступным журналам. Личные сведения сотрудников здесь не отображаются.</p></div>
+      <span class="status-pill success">Только начальник</span>
+    </section>
+    <section class="metric-grid">
+      ${metricCard("Сотрудников", employees.length, `${allEmployees.length - employees.length} в архиве`, "neutral")}
+      ${metricCard("Карточки заполнены", profileComplete, `из ${employees.length} активных`, profileComplete === employees.length ? "success" : "warning")}
+      ${metricCard("Отметок табеля", currentMonthAttendance.length, `за ${escapeHtml(monthTitle(currentMonth))}`, "neutral")}
+      ${metricCard("Периодов отпуска", activeVacations.length, "запланировано или согласовано", activeVacations.length ? "warning" : "success")}
+    </section>
+    <div class="settings-grid">
+      <section class="card settings-section">
+        <div class="section-heading"><div><p class="eyebrow">Состав смен</p><h2>Сотрудники по бригадам</h2></div></div>
+        ${teams.map(team => {
+          const count = employees.filter(employee => employee.shiftTeamId === team.id).length;
+          const leaders = employees.filter(employee => employee.shiftTeamId === team.id && ["senior-mechanic", "mechanic"].includes(employee.role)).length;
+          return settingRow(escapeHtml(team.name), `${count}`, leaders ? `${leaders} ответственных за техническую часть` : "Сотрудники участка");
+        }).join("")}
+      </section>
+      <section class="card settings-section">
+        <div class="section-heading"><div><p class="eyebrow">Качество справочника</p><h2>Заполнение карточек</h2></div></div>
+        ${settingRow("Дата рождения", `${employees.filter(employee => employee.birthday).length} из ${employees.length}`, "Нужно для напоминаний")}
+        ${settingRow("Дата приёма", `${employees.filter(employee => employee.hireDate).length} из ${employees.length}`, "Для истории стажа")}
+        ${settingRow("Телефон", `${employees.filter(employee => employee.phone).length} из ${employees.length}`, "Виден только начальнику")}
+        ${settingRow("Электронная почта", `${employees.filter(employee => employee.email).length} из ${employees.length}`, "Видна только начальнику")}
+      </section>
+      <section class="card settings-section wide">
+        <div class="section-heading"><div><p class="eyebrow">Должности</p><h2>Структура персонала</h2></div><span class="status-pill muted">Активные / архив</span></div>
+        <div class="settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Должность</th><th>Работают</th><th>В архиве</th></tr></thead><tbody>${roleRows.map(row => `<tr><td><strong>${escapeHtml(row.label)}</strong></td><td>${row.active}</td><td>${row.archived || "—"}</td></tr>`).join("") || "<tr><td colspan=\"3\">Данные пока не загружены.</td></tr>"}</tbody></table></div>
+      </section>
+    </div>`;
+}
+
 function formatPersonnelDate(value) {
   const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return match ? `${match[3]}.${match[2]}.${match[1]}` : "Не указана";
@@ -822,6 +875,7 @@ function renderModulePlaceholder(page) {
     specifications: "Просмотр утверждённых параметров продуктов и упаковки.",
     production: "Выпуск готовой продукции, брак и итоги по сменам.",
     "spare-parts": "Остатки, выдача и поступление запасных частей.",
+    "ppe-warehouse": "Остатки, выдача и поступление средств индивидуальной защиты.",
     cyclones: "План и журнал очистки циклонов с напоминаниями.",
     documents: "Инструкции, формы и другие документы; подразделы добавим после согласования."
   };
@@ -1757,6 +1811,7 @@ function moduleIcon(type) {
   if (type === "scales") return journalIcon();
   if (type === "personnel") return personnelIcon();
   if (type === "settings") return settingsIcon();
+  if (type === "statistics") return statisticsIcon();
   const paths = {
     package: `<path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5zM4 7.5l8 4.5 8-4.5M12 12v9"/>`,
     tools: `<path d="m14 6 4-4 4 4-4 4M16 8 7 17M4 14l6 6-3 2-5-5z"/>`,
@@ -1764,9 +1819,12 @@ function moduleIcon(type) {
     specification: `<path d="M6 3h9l4 4v14H6zM15 3v5h4M9 12h6M9 16h6"/>`,
     production: `<path d="M3 21V9l6 4V9l6 4V5h6v16zM7 17h2M12 17h2M17 17h2"/>`,
     warehouse: `<path d="m3 9 9-6 9 6v12H3zM7 21v-8h10v8M7 16h10"/>`,
+    ppe: `<path d="M7 4h10v5l3 3v8H4v-8l3-3zM9 4v5M15 4v5M8 14h8M8 17h8"/>`,
     cyclone: `<path d="M5 4h14l-5 7v7l-4 2v-9zM8 7h8"/>`,
     documents: `<path d="M6 3h9l4 4v14H6zM15 3v5h4M9 12h6M9 16h6"/>`,
     vacation: `<path d="M5 3v3M19 3v3M4 8h16M5 5h14v15H5zM8 12h3M13 12h3M8 16h3"/>`
   };
   return `<svg viewBox="0 0 24 24">${paths[type] ?? paths.documents}</svg>`;
 }
+
+function statisticsIcon() { return `<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>`; }
