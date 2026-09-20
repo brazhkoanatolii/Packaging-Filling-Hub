@@ -681,16 +681,17 @@ function renderShiftStartView() {
 
 function renderScheduleView() {
   const days = monthDays(state.attendanceMonth);
+  const teams = teamsWithCurrentShiftFirst();
   return `${renderWorkforceMonthToolbar("График смен", "Плановый цикл 2/2")}
     <section class="schedule-summary-grid">
-      ${state.workforce.shiftTeams.map(team => {
+      ${teams.map(team => {
         const schedule = getScheduleMonth(team, ...monthParts(state.attendanceMonth));
         const workDays = schedule.filter(day => day.scheduled).length;
         return `<article class="schedule-summary-card card"><span class="team-orb">${team.code}</span><div><strong>${escapeHtml(team.name)}</strong><small>2 рабочих / 2 выходных</small></div><dl><div><dt>Смен</dt><dd>${workDays}</dd></div><div><dt>Часов</dt><dd>${workDays * team.accountingHours}</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === team.id).length}</dd></div></dl></article>`;
       }).join("")}
       <article class="schedule-summary-card office card"><span class="team-orb">5/2</span><div><strong>${OFFICE_SCHEDULE.name}</strong><small>Пн–Пт · праздничные дни нерабочие</small></div><dl><div><dt>День</dt><dd>8 ч</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === "office").length}</dd></div></dl></article>
     </section>
-    <div class="schedule-groups">${state.workforce.shiftTeams.map(team => renderScheduleTeam(team, days)).join("")}</div>`;
+    <div class="schedule-groups">${teams.map(team => renderScheduleTeam(team, days)).join("")}</div>`;
 }
 
 function renderScheduleTeam(team, days) {
@@ -705,9 +706,10 @@ function renderScheduleTeam(team, days) {
 
 function renderTimesheetView() {
   const days = monthDays(state.attendanceMonth);
+  const teams = teamsWithCurrentShiftFirst();
   return `${renderWorkforceMonthToolbar("Табель рабочего времени", "Нажмите на ячейку, чтобы изменить часы или причину отсутствия")}
     <section class="attendance-code-strip">${ATTENDANCE_CODES.map(item => `<span class="tone-${item.tone}"><b>${item.value}</b>${item.label}</span>`).join("")}</section>
-    <div class="schedule-groups">${state.workforce.shiftTeams.map(team => renderTimesheetTeam(team, days)).join("")}</div>`;
+    <div class="schedule-groups">${teams.map(team => renderTimesheetTeam(team, days)).join("")}</div>`;
 }
 
 function renderTimesheetTeam(team, days) {
@@ -1484,6 +1486,15 @@ function teamLabel(id) {
 function scheduledTeam(date = today()) {
   const [year, monthIndex] = monthParts(date);
   return state.workforce?.shiftTeams?.find(team => getScheduleMonth(team, year, monthIndex).some(day => day.date === date && day.scheduled)) ?? null;
+}
+
+function teamsWithCurrentShiftFirst() {
+  const currentTeamId = state.shift?.active ? state.shift.shiftTeamId : scheduledTeam()?.id;
+  return [...(state.workforce?.shiftTeams || [])].sort((left, right) => {
+    if (left.id === currentTeamId) return -1;
+    if (right.id === currentTeamId) return 1;
+    return left.code.localeCompare(right.code, "ru");
+  });
 }
 
 function comparePersonnel(left, right) {
