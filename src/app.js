@@ -154,6 +154,35 @@ async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
+  if (form.dataset.form === "login") {
+    const data = new FormData(form);
+    try {
+      state.account = await authService.login(String(data.get("accountId") || ""), String(data.get("password") || ""));
+      state.page = "dashboard";
+      render();
+    } catch (error) {
+      const panel = form.querySelector("[data-login-error]");
+      if (panel) { panel.textContent = error.message || "Не удалось выполнить вход"; panel.hidden = false; }
+    }
+    return;
+  }
+  if (form.dataset.form === "password-change") {
+    if (state.account?.role !== "manager") return;
+    const data = new FormData(form);
+    const nextPassword = String(data.get("nextPassword") || "");
+    if (nextPassword !== String(data.get("repeatPassword") || "")) {
+      toast("Новый пароль и повтор не совпадают.", "error");
+      return;
+    }
+    try {
+      await authService.changePassword(String(data.get("accountId") || ""), String(data.get("currentPassword") || ""), nextPassword);
+      form.reset();
+      toast("Пароль учётной записи изменён на этом компьютере.", "success");
+    } catch (error) {
+      toast(error.message || "Не удалось изменить пароль.", "error");
+    }
+    return;
+  }
   if (form.dataset.form === "shift-settings") {
     try {
       const data = Object.fromEntries(new FormData(form));
@@ -448,17 +477,20 @@ function renderLogin() {
         </div>
         <div class="account-list">
           ${accounts.map(account => `
-            <button class="account-card" data-action="login" data-account-id="${account.id}">
+            <form class="account-card" data-form="login">
+              <input type="hidden" name="accountId" value="${account.id}">
               <span class="account-icon">${account.role === "manager" ? "НУ" : "СМ"}</span>
               <span class="account-copy">
                 <strong>${account.title}</strong>
                 <small>${account.description}</small>
+                <label class="login-password"><span>Пароль</span><input name="password" type="password" inputmode="numeric" minlength="4" required autocomplete="current-password" placeholder="Введите пароль"></label>
+                <small class="login-error" data-login-error hidden></small>
               </span>
-              <span class="account-arrow" aria-hidden="true">→</span>
-            </button>
+              <button class="account-login-button" type="submit">Войти</button>
+            </form>
           `).join("")}
         </div>
-        <p class="privacy-note">${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
+        <p class="privacy-note">Первый пароль для каждой учётной записи: <b>0000</b>. Начальник участка меняет пароли в «Настройках». ${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
       </section>
     </main>`;
 }
@@ -981,6 +1013,17 @@ function renderSettingsPage() {
           ${settingRow("Язык", language.name, "RU · EN · LT")}
           ${settingRow("Тема", state.theme === "dark" ? "Тёмная" : "Светлая", "Переключается также в верхней панели")}
           ${settingRow("Дата и время", APP_CONFIG.timeZone, "Часы отображаются постоянно")}
+        </section>
+        <section class="card settings-section">
+          <div class="section-heading"><div><p class="eyebrow">Доступ к программе</p><h2>Пароли учётных записей</h2></div><span class="status-pill warning">Только этот компьютер</span></div>
+          <p class="settings-copy">Первоначальный пароль — <b>0000</b>. Чтобы изменить пароль, укажите текущий пароль выбранной учётной записи.</p>
+          <form class="settings-password-form" data-form="password-change">
+            <label class="field"><span>Учётная запись</span><select name="accountId">${authService.availableAccounts().map(account => `<option value="${account.id}">${escapeHtml(account.title)}</option>`).join("")}</select></label>
+            <label class="field"><span>Текущий пароль</span><input name="currentPassword" type="password" minlength="4" required autocomplete="current-password"></label>
+            <label class="field"><span>Новый пароль</span><input name="nextPassword" type="password" minlength="4" required autocomplete="new-password"></label>
+            <label class="field"><span>Повторите новый пароль</span><input name="repeatPassword" type="password" minlength="4" required autocomplete="new-password"></label>
+            <button class="primary-button" type="submit">Сменить пароль</button>
+          </form>
         </section>
         <section class="card settings-section wide">
           <div class="section-heading"><div><p class="eyebrow">Рабочая модель</p><h2>Персонал и графики перенесены</h2></div></div>
