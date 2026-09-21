@@ -16,6 +16,9 @@ import { WORKSPACE_JOURNALS, WORKFORCE_YEARS } from "./config/workspace-journals
 import { ProductSpecificationGatewayProvider } from "./providers/product-specification-gateway-provider.js";
 import { ProductSpecificationService } from "./services/product-specification-service.js";
 import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-config.js";
+import { CycloneGatewayProvider } from "./providers/cyclone-gateway-provider.js";
+import { CycloneRepository } from "./repositories/cyclone-repository.js";
+import { CycloneService, cycloneStatistics } from "./services/cyclone-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -41,6 +44,8 @@ const state = {
   shiftResponsible: null,
   shiftGuests: [],
   specifications: { specifications: [], source: "loading", cachedAt: null },
+  cyclones: { records: [], operations: [], lastReadAt: null, error: null },
+  cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
@@ -55,6 +60,7 @@ let journalService;
 let workforceService;
 let workforceRepository;
 let productSpecificationService;
+let cycloneService;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -63,6 +69,10 @@ bootstrap().catch(error => renderFatalError(error));
 
 async function bootstrap() {
   store = await new IndexedDbDataProvider().init();
+  const cycloneStore = await new IndexedDbDataProvider("packaging-filling-hub-cyclones").init();
+  cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
+    new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
+  state.cyclones = navigator.onLine ? await cycloneService.refresh() : await cycloneService.snapshot();
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
@@ -138,6 +148,11 @@ function handleInput(event) {
 }
 
 async function handleChange(event) {
+  if (event.target.matches("[data-cyclone-year]")) {
+    state.cycloneYear = Number(event.target.value);
+    render();
+    return;
+  }
   if (event.target.matches("[data-login-responsible]")) {
     const otherField = event.target.form?.querySelector("[data-login-responsible-other]");
     if (otherField) otherField.hidden = event.target.value !== "other";
@@ -278,6 +293,13 @@ async function handleClick(event) {
   const { action, id, page, accountId } = actionElement.dataset;
 
   try {
+    if (action === "new-cyclone") { openCycloneDialog(); return; }
+    if (action === "sync-cyclones") {
+      state.cyclones = await cycloneService.sync();
+      render();
+      toast(state.cyclones.error || "Журнал очистки циклонов обновлён", state.cyclones.error ? "warning" : "success");
+      return;
+    }
     if (action === "login") {
       state.account = await authService.login(accountId);
       state.page = "dashboard";
@@ -453,6 +475,11 @@ async function refreshSpecifications() {
   return state.specifications;
 }
 
+async function refreshCyclones(sync = false) {
+  state.cyclones = sync ? await cycloneService.sync() : await cycloneService.refresh();
+  return state.cyclones;
+}
+
 async function refreshFromSource({ silent = false } = {}) {
   if (!navigator.onLine) {
     if (!silent) toast("Нет интернета. Показаны последние сохранённые данные.", "warning");
@@ -460,7 +487,7 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications()]);
+  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones()]);
   const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
@@ -480,7 +507,7 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const checks = await Promise.allSettled([repository.sync(), syncWorkforce()]);
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true)]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -647,7 +674,8 @@ function renderPage() {
   if (state.page === "specifications") return renderSpecificationsPage();
   if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
-  if (["maintenance", "cyclones"].includes(state.page)) return renderLinkedJournals(state.page);
+  if (state.page === "cyclones") return renderCyclonesPage();
+  if (state.page === "maintenance") return renderLinkedJournals(state.page);
   if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "ppe-warehouse", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
   return renderDashboard();
 }
@@ -934,6 +962,55 @@ function renderVacationsPage() {
   const canEdit = state.account.role === "manager";
   return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
     <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 7 : 6}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
+}
+
+function renderCyclonesPage() {
+  const { records, operations, lastReadAt, error } = state.cyclones;
+  const stats = cycloneStatistics(records, state.cycloneYear);
+  const years = [...new Set([Number(today().slice(0, 4)), state.cycloneYear, ...records.map(r => Number(r.date.slice(0, 4)))])].sort((a, b) => b - a);
+  const monthNames = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+  const max = Math.max(1, ...stats.months);
+  const status = error ? `Google недоступен: ${error}` : lastReadAt ? `Последнее чтение Google: ${formatDateTime(lastReadAt)}` : "Связь с Google ещё не проверена";
+  return `<section class="card cyclone-heading"><div><h2>Очистка циклонов</h2><p>${escapeHtml(status)}</p>
+    ${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются в очередь на этом компьютере.</p>' : ""}
+    <p>В очереди: <strong>${operations.length}</strong>. ${operations.length ? "Эти записи ещё не подтверждены Google." : ""}</p></div>
+    <div class="dialog-actions"><button class="secondary-button" data-action="sync-cyclones">Обновить и отправить очередь</button><button class="primary-button" data-action="new-cyclone">Записать очистку</button></div></section>
+    <section class="card cyclone-statistics"><div><h3>Статистика</h3><label>Год <select data-cyclone-year>${years.map(y => `<option ${y === state.cycloneYear ? "selected" : ""}>${y}</option>`).join("")}</select></label>
+    <p>Подтверждено Google: <strong>${stats.total}</strong></p>
+    <table class="settings-data-table"><thead><tr><th>Месяц</th><th>Очисток</th></tr></thead><tbody>${stats.months.map((n, i) => `<tr><td>${monthNames[i]}</td><td>${n}</td></tr>`).join("")}</tbody></table>
+    <h3>По сотрудникам</h3><table class="settings-data-table"><thead><tr><th>Сотрудник</th><th>Очисток</th></tr></thead><tbody>${stats.people.map(([name, n]) => `<tr><td>${escapeHtml(name)}</td><td>${n}</td></tr>`).join("") || '<tr><td colspan="2">Нет подтверждённых записей за год</td></tr>'}</tbody></table></div>
+    <div><h3>Очистки по месяцам — ${state.cycloneYear}</h3><div class="cyclone-chart" role="img" aria-label="${attribute(stats.months.map((n, i) => `${monthNames[i]}: ${n}`).join(", "))}">${stats.months.map((n, i) => `<div class="cyclone-chart-column"><span>${n}</span><div class="cyclone-chart-track"><div style="height:${n / max * 100}%"></div></div><small>${monthNames[i]}</small></div>`).join("")}</div><p>${lastReadAt ? "Статистика рассчитана по последним прочитанным данным Google. Записи в очереди не включены." : "После подключения Google здесь появятся данные рабочего журнала."}</p></div></section>
+    <section class="card settings-table-wrap"><h3>Записи журнала</h3><table class="settings-data-table"><thead><tr><th>Дата</th><th>Исполнитель</th><th>Состояние</th></tr></thead><tbody>${records.map(r => `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(r.performer)}</td><td>${r.syncState === "synced" ? "Подтверждено Google" : "Ожидает отправки"}${operations.find(o => o.record.id === r.id)?.error ? `<br><small>${escapeHtml(operations.find(o => o.record.id === r.id).error)}</small>` : ""}</td></tr>`).join("") || '<tr><td colspan="3">Записи ещё не загружены. Можно сохранить новую очистку в локальную очередь.</td></tr>'}</tbody></table></section>`;
+}
+
+function openCycloneDialog() {
+  const names = employeeNames();
+  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><h2>Записать очистку циклонов</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    ${formField("cyclone-date", "Дата очистки", `<input id="cyclone-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
+    ${formField("cyclone-performer", "Кто выполнил очистку", `<select id="cyclone-performer" name="performer" required><option value="">Выберите сотрудника</option>${names.map(name => `<option>${escapeHtml(name)}</option>`).join("")}</select>`)}
+    <p>Запись сначала сохранится на этом компьютере. Подтверждение Google появится после успешной отправки.</p>
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить очистку</button></div></form>`);
+  let saving = false;
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (saving) return;
+    saving = true;
+    const form = event.currentTarget;
+    form.querySelector('[type="submit"]').disabled = true;
+    try {
+      await cycloneService.create(Object.fromEntries(new FormData(form)), state.account, names);
+      dialog.close();
+      state.cyclones = await cycloneService.snapshot();
+      render();
+      toast("Очистка сохранена на этом компьютере. Ожидает подтверждения Google.", "success");
+      if (navigator.onLine) { await refreshCyclones(true); render(); }
+    } catch (error) {
+      showFormError(form, error);
+      saving = false;
+      form.querySelector('[type="submit"]').disabled = false;
+    }
+  });
+  dialog.showModal();
 }
 
 function renderLinkedJournals(page) {
@@ -1695,6 +1772,7 @@ function showFormError(form, error) {
 }
 
 function renderDemoBanner() {
+  if (state.page === "cyclones") return "";
   if (APP_CONFIG.integration.mode !== "demo") return "";
   if (state.demoBannerDismissed) return "";
   return `<div class="demo-banner"><span class="demo-icon">i</span><p><strong>Безопасный тестовый режим.</strong> Здесь показаны демонстрационные записи. Связь с рабочей таблицей пока выключена.</p><button data-action="dismiss-demo" aria-label="Закрыть">×</button></div>`;

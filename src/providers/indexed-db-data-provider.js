@@ -5,10 +5,12 @@ const STORES = ["records", "remoteRecords", "operations", "preferences", "audit"
 export class IndexedDbDataProvider {
   #database;
 
+  constructor(databaseName = DATABASE_NAME) { this.databaseName = databaseName; }
+
   async init() {
     if (!globalThis.indexedDB) throw new Error("Браузер не поддерживает локальное хранилище IndexedDB");
     this.#database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      const request = indexedDB.open(this.databaseName, DATABASE_VERSION);
       request.onupgradeneeded = () => {
         for (const name of STORES) {
           if (!request.result.objectStoreNames.contains(name)) {
@@ -37,6 +39,21 @@ export class IndexedDbDataProvider {
 
   async delete(storeName, key) {
     await this.#request(storeName, "readwrite", store => store.delete(key));
+  }
+
+  // Commit a record and its queue operation together, or neither of them.
+  async batch(changes) {
+    return new Promise((resolve, reject) => {
+      const transaction = this.#database.transaction([...new Set(changes.map(item => item.store))], "readwrite");
+      for (const change of changes) {
+        const bucket = transaction.objectStore(change.store);
+        if (change.deleteKey !== undefined) bucket.delete(change.deleteKey);
+        else bucket.put(change.value);
+      }
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error("Локальное сохранение отменено"));
+      transaction.onerror = () => reject(transaction.error);
+    });
   }
 
   async preference(key, fallback = null) {

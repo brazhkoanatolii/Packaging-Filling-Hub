@@ -1,4 +1,4 @@
-const CACHE_NAME = "packaging-filling-hub-v0.7.8";
+const CACHE_NAME = "packaging-filling-hub-v0.8.0-1";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -7,6 +7,12 @@ const APP_SHELL = [
   "./assets/icon.svg",
   "./src/styles.css",
   "./src/app.js",
+  "./src/providers/cyclone-gateway-provider.js",
+  "./src/repositories/cyclone-repository.js",
+  "./src/services/cyclone-service.js",
+  "./src/config/product-specification-config.js",
+  "./src/providers/product-specification-gateway-provider.js",
+  "./src/services/product-specification-service.js",
   "./src/config/app-config.js",
   "./src/config/workforce-config.js",
   "./src/config/workspace-journals.js",
@@ -31,8 +37,10 @@ self.addEventListener("activate", event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", event => {
+  // API availability must reflect the network, not a cached success response.
+  if (new URL(event.request.url).pathname.startsWith("/api/")) return;
   if (event.request.method !== "GET") return;
-  event.respondWith(fetch(event.request).then(response => {
+  event.respondWith(fetch(event.request, { cache: "no-cache" }).then(response => {
     const copy = response.clone();
     caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
     return response;

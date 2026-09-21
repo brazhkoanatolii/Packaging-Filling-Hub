@@ -56,6 +56,21 @@ createServer(async (request, response) => {
       });
     }
 
+    if (url.pathname === "/api/cyclone-records") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      if (request.method === "GET") return sendJson(response, 200, await runAppsScript("listCycloneRecords"));
+      if (request.method === "POST") {
+        if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+        const input = await readJsonBody(request);
+        const result = await runAppsScript("createCycloneRecord", [{
+          requestId: input.requestId, recordId: input.recordId, date: input.date, performer: input.performer,
+          role: workstationRole, workstationId
+        }]);
+        return sendJson(response, result?.ok === false ? 400 : 200, result);
+      }
+      return sendJson(response, 405, { ok: false, message: "Допускаются только чтение и добавление очисток" });
+    }
+
     if (url.pathname === "/api/scale-records" && request.method === "GET") {
       const result = await runAppsScript("listScaleRecords");
       return sendJson(response, 200, result);
