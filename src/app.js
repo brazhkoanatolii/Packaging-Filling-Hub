@@ -32,6 +32,7 @@ const state = {
   journalError: null,
   operations: [],
   page: "dashboard",
+  recordMonth: today().slice(0, 7),
   loading: true,
   syncing: false,
   lastRefresh: null,
@@ -148,6 +149,11 @@ async function handleChange(event) {
 
   if (event.target.matches("[data-cyclone-year]")) {
     state.cycloneYear = Number(event.target.value);
+    render();
+    return;
+  }
+  if (event.target.matches("[data-record-month]")) {
+    state.recordMonth = event.target.value;
     render();
     return;
   }
@@ -738,6 +744,8 @@ function renderJournalsPage() {
   const todayRecords = state.records.filter(record => record.date === today() && record.status !== "Аннулировано");
   const checkedScales = new Set(todayRecords.map(record => record.scaleName));
   const failedToday = todayRecords.filter(record => record.result === "Вне допуска").length;
+  const availableMonths = [...new Set([state.recordMonth, ...state.records.map(record => String(record.date || "").slice(0, 7)).filter(Boolean)])].sort().reverse();
+  const visibleRecords = state.records.filter(record => String(record.date || "").startsWith(state.recordMonth));
   return `
     <section class="journal-header card">
       <div class="journal-title-block">
@@ -757,13 +765,14 @@ function renderJournalsPage() {
     </div>
     <section class="card table-card">
       <div class="table-toolbar">
-        <div><strong>${state.records.length}</strong> ${plural(state.records.length, "запись", "записи", "записей")}</div>
+        <div><strong>${visibleRecords.length}</strong> ${plural(visibleRecords.length, "запись", "записи", "записей")} за ${monthTitle(state.recordMonth)}</div>
+        <label class="table-filter">Период<select data-record-month aria-label="Период журнала весов">${availableMonths.map(month => `<option value="${month}" ${month === state.recordMonth ? "selected" : ""}>${escapeHtml(monthTitle(month))}</option>`).join("")}</select></label>
         <div class="legend"><span class="legend-item"><i class="dot synced"></i>Отправлено</span><span class="legend-item"><i class="dot pending"></i>В очереди</span></div>
       </div>
       <div class="table-scroll">
         <table>
           <thead><tr><th>Дата</th><th>Весы</th><th>Факт</th><th>Отклонение</th><th>Результат</th><th>Исполнитель</th><th>Состояние записи</th><th></th></tr></thead>
-          <tbody>${state.records.length ? state.records.map(renderRecordRow).join("") : renderEmptyRow()}</tbody>
+          <tbody>${visibleRecords.length ? visibleRecords.map(renderRecordRow).join("") : renderEmptyRow()}</tbody>
         </table>
       </div>
     </section>`;
