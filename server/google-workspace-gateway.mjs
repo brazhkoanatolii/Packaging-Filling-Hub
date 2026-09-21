@@ -74,6 +74,11 @@ createServer(async (request, response) => {
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 
+    if (url.pathname === "/api/specifications" && request.method === "GET") {
+      const specifications = await runAppsScript("listProductSpecifications");
+      return sendJson(response, 200, { ok: true, specifications: Array.isArray(specifications) ? specifications : [] });
+    }
+
     if (url.pathname === "/api/scale-records" && request.method === "POST") {
       if (!writesEnabled) {
         return sendJson(response, 403, { ok: false, message: "Запись в Google пока выключена начальником участка" });
@@ -145,6 +150,7 @@ async function getAccessToken() {
   };
   return tokenCache.value;
 }
+
 
 function serveStatic(pathname, response) {
   const relativePath = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");

@@ -13,6 +13,9 @@ import { WorkforceService, getScheduleMonth } from "./services/workforce-service
 import { WorkforceGatewayProvider } from "./providers/workforce-gateway-provider.js";
 import { WorkforceRepository } from "./repositories/workforce-repository.js";
 import { WORKSPACE_JOURNALS, WORKFORCE_YEARS } from "./config/workspace-journals.js";
+import { ProductSpecificationGatewayProvider } from "./providers/product-specification-gateway-provider.js";
+import { ProductSpecificationService } from "./services/product-specification-service.js";
+import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-config.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -37,6 +40,8 @@ const state = {
   selectedShiftTeamId: null,
   shiftResponsible: null,
   shiftGuests: [],
+  specifications: { specifications: [], source: "loading", cachedAt: null },
+  specificationSelection: { line: "", product: "", variant: "" },
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
   theme: "light"
@@ -49,6 +54,7 @@ let repository;
 let journalService;
 let workforceService;
 let workforceRepository;
+let productSpecificationService;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -65,6 +71,8 @@ async function bootstrap() {
     new WorkforceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl, writesEnabled: APP_CONFIG.integration.googleWritesEnabled }),
     () => ({ ...workforceActor, workstationId: APP_CONFIG.workstationId, account: state.account?.id })) : null;
   workforceService = new WorkforceService(store, workforceRepository);
+  productSpecificationService = new ProductSpecificationService(store, APP_CONFIG.integration.mode === "gateway"
+    ? new ProductSpecificationGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl }) : null);
   journalService = new JournalService(repository, journal, {
     workstationId: APP_CONFIG.workstationId,
     workstationLabel: APP_CONFIG.workstationLabel
@@ -81,6 +89,7 @@ async function bootstrap() {
   state.account = await authService.current();
   state.shift = await shiftService.current();
   state.workforce = await workforceService.initialize();
+  state.specifications = await productSpecificationService.initialize();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
   state.demoBannerDismissed = await store.preference("demoBannerDismissed", false);
@@ -178,6 +187,14 @@ async function handleSubmit(event) {
       const panel = form.querySelector("[data-login-error]");
       if (panel) { panel.textContent = error.message || "Не удалось выполнить вход"; panel.hidden = false; }
     }
+    return;
+  }
+  if (event.target.matches("[data-specification-select]")) {
+    const field = event.target.dataset.specificationSelect;
+    state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
+    if (field === "line") state.specificationSelection = { line: event.target.value, product: "", variant: "" };
+    if (field === "product") state.specificationSelection = { ...state.specificationSelection, product: event.target.value, variant: "" };
+    render();
     return;
   }
   if (form.dataset.form === "password-change") {
@@ -419,6 +436,11 @@ async function syncWorkforce() {
   return state.workforce;
 }
 
+async function refreshSpecifications() {
+  state.specifications = await productSpecificationService.initialize();
+  return state.specifications;
+}
+
 async function refreshFromSource({ silent = false } = {}) {
   if (!navigator.onLine) {
     if (!silent) toast("Нет интернета. Показаны последние сохранённые данные.", "warning");
@@ -426,7 +448,7 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce()]);
+  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications()]);
   const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
@@ -610,6 +632,7 @@ function renderPage() {
   if (state.page === "personnel") return renderPersonnelPage();
   if (state.page === "sync") return renderSyncPage();
   if (state.page === "vacations") return renderVacationsPage();
+  if (state.page === "specifications") return renderSpecificationsPage();
   if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (["maintenance", "cyclones"].includes(state.page)) return renderLinkedJournals(state.page);
@@ -910,6 +933,35 @@ function renderLinkedJournals(page) {
     <div class="linked-journal-grid"><article class="card linked-journal"><h3>${escapeHtml(primary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink(isRepair ? "repairs" : "cyclones", "Открыть журнал")}</article>${secondary ? `<article class="card linked-journal"><h3>${escapeHtml(secondary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink("maintenance", "Открыть журнал")}</article>` : ""}</div>
     <p class="module-note">Следующим шагом можно добавить в этот раздел быстрые формы ввода с офлайн-очередью, не меняя устройство самих журналов.</p>
   </section>`;
+}
+
+function renderSpecificationsPage() {
+  const all = state.specifications?.specifications ?? [];
+  const lines = [...new Set(all.map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
+  const selection = state.specificationSelection;
+  const byLine = all.filter(item => !selection.line || item.line === selection.line);
+  const products = [...new Set(byLine.map(item => item.product))].sort((a, b) => a.localeCompare(b, "ru"));
+  const byProduct = byLine.filter(item => !selection.product || item.product === selection.product);
+  const variants = [...new Set(byProduct.map(item => String(item.variant)))].sort((a, b) => Number(b) - Number(a));
+  const selected = byProduct.find(item => String(item.variant) === selection.variant) || (byProduct.length === 1 ? byProduct[0] : null);
+  const sourceLabel = state.specifications?.source === "google" ? "Google Sheets" : state.specifications?.source === "cache" ? "Офлайн-копия" : state.specifications?.source === "demo" ? "Демонстрационные данные" : "Источник недоступен";
+  const error = state.specifications?.error ? `<p class="module-note">${escapeHtml(state.specifications.error)}. Можно открыть последнюю сохранённую копию при следующем запуске.</p>` : "";
+  return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>Выберите линейку, продукт и вариант. Все нормы заполняются автоматически и доступны только для просмотра.</p></div><a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Открыть источник ↗</a></section>
+    ${error}
+    <section class="card specification-picker"><div class="form-grid">
+      ${formField("spec-line", "Линейка", `<select id="spec-line" data-specification-select="line"><option value="">Выберите линейку</option>${lines.map(line => `<option value="${attribute(line)}" ${selection.line === line ? "selected" : ""}>${escapeHtml(line)}</option>`).join("")}</select>`)}
+      ${formField("spec-product", "Продукт", `<select id="spec-product" data-specification-select="product" ${selection.line ? "" : "disabled"}><option value="">Выберите продукт</option>${products.map(product => `<option value="${attribute(product)}" ${selection.product === product ? "selected" : ""}>${escapeHtml(product)}</option>`).join("")}</select>`)}
+      ${formField("spec-variant", "mg/g", `<select id="spec-variant" data-specification-select="variant" ${selection.product ? "" : "disabled"}><option value="">Выберите вариант</option>${variants.map(variant => `<option value="${attribute(variant)}" ${selection.variant === variant ? "selected" : ""}>${escapeHtml(variant)}</option>`).join("")}</select>`)}
+    </div></section>
+    ${selected ? renderSpecificationCard(selected) : `<section class="card empty-state"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "После выбора варианта программа покажет технологические нормы и упаковку." : "Проверьте подключение к Google и обновите страницу."}</p></section>`}
+    <p class="module-note">В справочнике доступно ${all.length} позиций. Исходные названия и пустые нормы сухих продуктов сохранены без изменений.</p>`;
+}
+
+function renderSpecificationCard(specification) {
+  const value = number => number === null || number === undefined ? "—" : formatNumber(number);
+  return `<section class="specification-detail card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(specification.line)}</p><h2>${escapeHtml(specification.product)} · ${escapeHtml(String(specification.variant))} mg/g</h2></div><span class="status-pill success">${escapeHtml(specification.processType || "Тип не указан")}</span></div><dl class="specification-values">
+    <div><dt>Вес сухого продукта</dt><dd>${value(specification.dryMass)} г</dd></div><div><dt>Вес мокрого продукта</dt><dd>${value(specification.wetMass)} г</dd></div><div><dt>Жидкость</dt><dd>${value(specification.liquidVolume)} мл</dd></div><div><dt>Подушек в банке</dt><dd>${value(specification.pouchCount)}</dd></div><div><dt>Цвет крышки</dt><dd>${escapeHtml(specification.lidColor || "—")}</dd></div><div><dt>Вид банки</dt><dd>${escapeHtml(specification.canType || "—")}</dd>
+  </dl></section>`;
 }
 
 function journalLink(key, label = "Открыть в Google Sheets") {

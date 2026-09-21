@@ -804,6 +804,13 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .clock-panel span { display: none; }
 }
 
+.specification-picker { padding: 22px; }
+.specification-detail { padding: 26px; }
+.specification-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 0; }
+.specification-values div { padding: 15px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-raised); }
+.specification-values dt { color: var(--text-muted); font-size: .72rem; }
+.specification-values dd { margin: 6px 0 0; color: var(--text); font-size: 1.1rem; font-weight: 800; }
+
 @media (max-width: 600px) {
   .topbar h1 { font-size: 1.45rem; }
   .connection-badge { width: 11px; height: 11px; padding: 0; overflow: hidden; border: 0; background: transparent; color: transparent; }
@@ -859,6 +866,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .shift-person-row select { grid-column: 1 / -1; }
   .attendance-counter { align-self: flex-start; }
   .workflow-steps { grid-template-columns: 1fr; }
+  .specification-values { grid-template-columns: 1fr 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
