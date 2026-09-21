@@ -92,10 +92,9 @@ async function bootstrap() {
   await repository.init();
   state.account = await authService.current();
   state.shift = await shiftService.current();
-  // The attendance revision must be read from Google before a user can start
-  // a shift; otherwise a stale cached revision turns an entire shift into
-  // avoidable conflicts.
-  state.workforce = await workforceService.initialize();
+  // Do not hold the whole interface on a slow Google request.  A fresh
+  // attendance snapshot is still required immediately before each save below.
+  state.workforce = await workforceService.snapshot();
   state.specifications = await productSpecificationService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
