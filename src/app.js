@@ -1,9 +1,7 @@
 import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
 import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS } from "./config/workforce-config.js";
 import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
-import { createDemoRecords } from "./data/demo-records.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
-import { DemoGoogleSheetsProvider } from "./providers/demo-google-sheets-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
 import { JournalRepository } from "./repositories/journal-repository.js";
 import { AuthService } from "./services/auth-service.js";
@@ -14,7 +12,7 @@ import { WorkforceGatewayProvider } from "./providers/workforce-gateway-provider
 import { WorkforceRepository } from "./repositories/workforce-repository.js";
 import { WORKSPACE_JOURNALS, WORKFORCE_YEARS } from "./config/workspace-journals.js";
 import { ProductSpecificationGatewayProvider } from "./providers/product-specification-gateway-provider.js";
-import { ProductSpecificationService } from "./services/product-specification-service.js";
+import { ProductSpecificationService } from "./services/product-specification-service.js?v=0.8.1";
 import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-config.js";
 import { CycloneGatewayProvider } from "./providers/cyclone-gateway-provider.js";
 import { CycloneRepository } from "./repositories/cyclone-repository.js";
@@ -31,12 +29,12 @@ const state = {
   account: null,
   shift: null,
   records: [],
+  journalError: null,
   operations: [],
   page: "dashboard",
   loading: true,
   syncing: false,
   lastRefresh: null,
-  demoBannerDismissed: false,
   attendanceMonth: today().slice(0, 7),
   attendanceView: "start",
   settingsTab: "overview",
@@ -65,14 +63,16 @@ let workforceActor = {};
 let refreshTimer;
 let clockTimer;
 
+registerServiceWorker();
 bootstrap().catch(error => renderFatalError(error));
 
 async function bootstrap() {
+  root.textContent = "Открываем локальные данные…";
   store = await new IndexedDbDataProvider().init();
   const cycloneStore = await new IndexedDbDataProvider("packaging-filling-hub-cyclones").init();
   cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
     new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
-  state.cyclones = navigator.onLine ? await cycloneService.refresh() : await cycloneService.snapshot();
+  state.cyclones = await cycloneService.snapshot();
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
@@ -88,21 +88,13 @@ async function bootstrap() {
     workstationLabel: APP_CONFIG.workstationLabel
   });
 
-  await repository.init(remoteProvider.mode === "demo" ? createDemoRecords() : []);
-  if (navigator.onLine) {
-    try {
-      await repository.refresh();
-    } catch (error) {
-      console.warn("Источник Google пока недоступен", error);
-    }
-  }
+  await repository.init();
   state.account = await authService.current();
   state.shift = await shiftService.current();
-  state.workforce = await workforceService.initialize();
-  state.specifications = await productSpecificationService.initialize();
+  state.workforce = await workforceService.snapshot();
+  state.specifications = await productSpecificationService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
-  state.demoBannerDismissed = await store.preference("demoBannerDismissed", false);
   state.language = normalizeLanguage(await store.preference("interfaceLanguage", "ru"));
   state.theme = (await store.preference("interfaceTheme", "light")) === "dark" ? "dark" : "light";
   await reloadLocalState();
@@ -113,17 +105,14 @@ async function bootstrap() {
   startAutomaticRefresh();
   startClock();
   registerServiceWorker();
-  if (navigator.onLine) syncRecords({ silent: true });
+  if (navigator.onLine) refreshFromSource({ silent: true }).then(() => syncRecords({ silent: true })).catch(error => toast(error.message, "warning"));
 }
 
 function createRemoteProvider() {
-  if (APP_CONFIG.integration.mode === "gateway") {
-    return new GoogleSheetsGatewayProvider({
-      baseUrl: APP_CONFIG.integration.gatewayBaseUrl,
-      writesEnabled: APP_CONFIG.integration.googleWritesEnabled
-    });
-  }
-  return new DemoGoogleSheetsProvider(store);
+  return new GoogleSheetsGatewayProvider({
+    baseUrl: APP_CONFIG.integration.gatewayBaseUrl,
+    writesEnabled: APP_CONFIG.integration.googleWritesEnabled
+  });
 }
 
 function bindGlobalEvents() {
@@ -148,6 +137,15 @@ function handleInput(event) {
 }
 
 async function handleChange(event) {
+  if (event.target.matches("[data-specification-select]")) {
+    const field = event.target.dataset.specificationSelect;
+    state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
+    if (field === "line") state.specificationSelection = { line: event.target.value, product: "", variant: "" };
+    if (field === "product") state.specificationSelection = { ...state.specificationSelection, product: event.target.value, variant: "" };
+    render();
+    return;
+  }
+
   if (event.target.matches("[data-cyclone-year]")) {
     state.cycloneYear = Number(event.target.value);
     render();
@@ -202,14 +200,6 @@ async function handleSubmit(event) {
       const panel = form.querySelector("[data-login-error]");
       if (panel) { panel.textContent = error.message || "Не удалось выполнить вход"; panel.hidden = false; }
     }
-    return;
-  }
-  if (event.target.matches("[data-specification-select]")) {
-    const field = event.target.dataset.specificationSelect;
-    state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
-    if (field === "line") state.specificationSelection = { line: event.target.value, product: "", variant: "" };
-    if (field === "product") state.specificationSelection = { ...state.specificationSelection, product: event.target.value, variant: "" };
-    render();
     return;
   }
   if (form.dataset.form === "password-change") {
@@ -449,11 +439,7 @@ async function handleClick(event) {
       actionElement.closest("dialog")?.close();
       return;
     }
-    if (action === "dismiss-demo") {
-      await store.setPreference("demoBannerDismissed", true);
-      state.demoBannerDismissed = true;
-      render();
-    }
+
   } catch (error) {
     toast(error.message || "Не удалось выполнить действие", "error");
   }
@@ -488,6 +474,7 @@ async function refreshFromSource({ silent = false } = {}) {
   setBusy(true);
   try {
   const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones()]);
+  state.journalError = checks[0].status === "rejected" ? checks[0].reason.message : null;
   const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
@@ -640,10 +627,11 @@ function renderApplication() {
             <button class="icon-button" data-action="refresh" title="${ui("refresh")}" aria-label="${ui("refresh")}">${refreshIcon()}</button>
           </div>
         </header>
-        ${renderDemoBanner()}
+
         ${renderPreparationReminder()}
         <section class="page-content">
           ${renderWorkforceConnection()}
+          ${state.journalError ? `<p class="form-error" role="status">Контроль весов: ${escapeHtml(state.journalError)}. Показаны сохранённые на этом компьютере записи.</p>` : ""}
           ${renderPage()}
         </section>
       </main>
@@ -675,8 +663,6 @@ function renderPage() {
   if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (state.page === "cyclones") return renderCyclonesPage();
-  if (state.page === "maintenance") return renderLinkedJournals(state.page);
-  if (["packaging", "maintenance", "nonconformities", "specifications", "production", "spare-parts", "ppe-warehouse", "cyclones", "documents"].includes(state.page)) return renderModulePlaceholder(state.page);
   return renderDashboard();
 }
 
@@ -710,7 +696,7 @@ function renderDashboard() {
           <span aria-hidden="true">→</span>
         </button>
         <button class="journal-tile" data-action="navigate" data-page="attendance"><span class="journal-symbol muted">${attendanceIcon()}</span><span><strong>Табель</strong><small>Начало смены и отметка сотрудников</small></span><span aria-hidden="true">→</span></button>
-        <button class="journal-tile" data-action="navigate" data-page="maintenance"><span class="journal-symbol muted">${moduleIcon("tools")}</span><span><strong>Ремонт и ТО</strong><small>Заявки, работы и история станков</small></span><span aria-hidden="true">→</span></button>
+        <button class="journal-tile" data-action="navigate" data-page="cyclones"><span class="journal-symbol muted">${moduleIcon("cyclone")}</span><span><strong>Очистка циклонов</strong><small>Журнал очисток и статистика</small></span><span aria-hidden="true">→</span></button>
       </section>
     </div>`;
 }
@@ -1013,17 +999,6 @@ function openCycloneDialog() {
   dialog.showModal();
 }
 
-function renderLinkedJournals(page) {
-  const isRepair = page === "maintenance";
-  const primary = isRepair ? WORKSPACE_JOURNALS.repairs : WORKSPACE_JOURNALS.cyclones;
-  const secondary = isRepair ? WORKSPACE_JOURNALS.maintenance : null;
-  return `<section class="module-placeholder">
-    <div class="placeholder-hero card"><span class="placeholder-icon">${moduleIcon(isRepair ? "tools" : "cyclone")}</span><div><p class="eyebrow">Рабочий журнал Google Sheets</p><h2>${escapeHtml(isRepair ? "Ремонт и ТО станков" : "Очистка циклонов")}</h2><p>${isRepair ? "Журнал ремонта и журнал ТО разделены. В каждом есть собственная вкладка «Статистика»." : "Рабочий журнал ведётся в Google Sheets и открывается из программы."}</p></div><span class="status-pill success">Подключено</span></div>
-    <div class="linked-journal-grid"><article class="card linked-journal"><h3>${escapeHtml(primary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink(isRepair ? "repairs" : "cyclones", "Открыть журнал")}</article>${secondary ? `<article class="card linked-journal"><h3>${escapeHtml(secondary.title)}</h3><p>Отдельный рабочий журнал с вкладкой «Статистика».</p>${journalLink("maintenance", "Открыть журнал")}</article>` : ""}</div>
-    <p class="module-note">Следующим шагом можно добавить в этот раздел быстрые формы ввода с офлайн-очередью, не меняя устройство самих журналов.</p>
-  </section>`;
-}
-
 function renderSpecificationsPage() {
   const all = state.specifications?.specifications ?? [];
   const lines = [...new Set(all.map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
@@ -1035,7 +1010,7 @@ function renderSpecificationsPage() {
   const selected = byProduct.find(item => String(item.variant) === selection.variant) || (byProduct.length === 1 ? byProduct[0] : null);
   const sourceLabel = state.specifications?.source === "google" ? "Google Sheets" : state.specifications?.source === "cache" ? "Офлайн-копия" : state.specifications?.source === "demo" ? "Демонстрационные данные" : "Источник недоступен";
   const error = state.specifications?.error ? `<p class="module-note">${escapeHtml(state.specifications.error)}. Можно открыть последнюю сохранённую копию при следующем запуске.</p>` : "";
-  const canEdit = state.account?.role === "manager";
+  const canEdit = state.account?.role === "manager" && APP_CONFIG.integration.googleWritesEnabled;
   return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>${canEdit ? "Добавляйте и исправляйте параметры прямо в программе. Изменения сразу сохраняются в Google Sheets." : "Выберите линейку, продукт и вариант. Все нормы доступны только для просмотра."}</p></div><div class="header-actions">${canEdit ? `<button class="primary-button" data-action="add-specification">+ Добавить продукт</button>` : ""}<a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Открыть источник ↗</a></div></section>
     ${error}
     <section class="card specification-picker"><div class="form-grid">
@@ -1058,29 +1033,6 @@ function journalLink(key, label = "Открыть в Google Sheets") {
   const journal = WORKSPACE_JOURNALS[key];
   if (!journal) return "";
   return `<a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${journal.id}/edit" target="_blank" rel="noreferrer">${escapeHtml(label)} ↗</a>`;
-}
-
-function renderModulePlaceholder(page) {
-  const module = MODULES.find(item => item.id === page);
-  const notes = {
-    packaging: "Учёт использованных банок, крышек, этикеток и другой упаковки.",
-    maintenance: "Заявки на ремонт, техническое обслуживание и история работ по станкам.",
-    nonconformities: "Регистрация отклонений, решений, ответственных и статуса выполнения.",
-    specifications: "Просмотр утверждённых параметров продуктов и упаковки.",
-    production: "Выпуск готовой продукции, брак и итоги по сменам.",
-    "spare-parts": "Остатки, выдача и поступление запасных частей.",
-    "ppe-warehouse": "Остатки, выдача и поступление средств индивидуальной защиты.",
-    cyclones: "План и журнал очистки циклонов с напоминаниями.",
-    documents: "Инструкции, формы и другие документы; подразделы добавим после согласования."
-  };
-  return `<section class="module-placeholder">
-    <div class="placeholder-hero card"><span class="placeholder-icon">${moduleIcon(module?.icon)}</span><div><p class="eyebrow">Раздел программы</p><h2>${escapeHtml(moduleLabel(module))}</h2><p>${escapeHtml(notes[page] ?? "Раздел будет настроен после подключения рабочего источника.")}</p></div><span class="status-pill warning">Следующий этап</span></div>
-    <div class="placeholder-grid">
-      <article class="card"><span>1</span><h3>Определить источник</h3><p>Выберем нужную таблицу или документ на Общем диске.</p></article>
-      <article class="card"><span>2</span><h3>Согласовать поля</h3><p>Зафиксируем, что читаем и в какие существующие строки записываем.</p></article>
-      <article class="card"><span>3</span><h3>Подключить форму</h3><p>Сделаем быстрый ввод, офлайн-очередь и контроль конфликтов.</p></article>
-    </div>
-  </section>`;
 }
 
 function renderRecordRow(record) {
@@ -1124,7 +1076,7 @@ function renderSyncPage() {
       <div class="sync-copy">
         <p class="eyebrow">Передача данных</p>
         <h2>${navigator.onLine ? "Подключение есть" : "Работа без интернета"}</h2>
-        <p>${navigator.onLine ? "Программа готова автоматически отправлять новые записи." : "Можно продолжать работу. Всё сохранится на этом компьютере и отправится позже."}</p>
+        <p>${!APP_CONFIG.integration.googleWritesEnabled ? "Отправка в Google выключена. Локальная очередь ожидает разрешения на запись." : navigator.onLine ? "Программа готова автоматически отправлять новые записи." : "Можно продолжать работу. Всё сохранится на этом компьютере и отправится позже."}</p>
       </div>
       <button class="primary-button" data-action="sync" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Отправляем…" : "Синхронизировать"}</button>
     </div>
@@ -1771,12 +1723,6 @@ function showFormError(form, error) {
   }
 }
 
-function renderDemoBanner() {
-  if (state.page === "cyclones") return "";
-  if (APP_CONFIG.integration.mode !== "demo") return "";
-  if (state.demoBannerDismissed) return "";
-  return `<div class="demo-banner"><span class="demo-icon">i</span><p><strong>Безопасный тестовый режим.</strong> Здесь показаны демонстрационные записи. Связь с рабочей таблицей пока выключена.</p><button data-action="dismiss-demo" aria-label="Закрыть">×</button></div>`;
-}
 
 function renderPreparationReminder() {
   if (state.account?.role !== "senior") return "";
@@ -1810,7 +1756,7 @@ function renderMobileNav() {
     ${navItem("dashboard", moduleLabelById("dashboard"), dashboardIcon())}
     ${navItem("attendance", moduleLabelById("attendance"), attendanceIcon())}
     ${navItem("journals", moduleLabelById("journals"), journalIcon())}
-    ${navItem("documents", moduleLabelById("documents"), moduleIcon("documents"))}
+    ${navItem("cyclones", moduleLabelById("cyclones"), moduleIcon("cyclone"))}
     ${state.account.role === "manager" ? navItem("settings", moduleLabelById("settings"), settingsIcon()) : navItem("personnel", moduleLabelById("personnel"), personnelIcon())}
   </nav>`;
 }
@@ -2133,7 +2079,7 @@ function renderFatalError(error) {
 
 function registerServiceWorker() {
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js", { updateViaCache: "none" }).then(registration => registration.update()).catch(() => {});
   }
 }
 

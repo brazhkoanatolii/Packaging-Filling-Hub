@@ -1,4 +1,4 @@
-const CACHE_NAME = "packaging-filling-hub-v0.8.0-1";
+const CACHE_NAME = "packaging-filling-hub-v0.8.1-2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,13 +12,12 @@ const APP_SHELL = [
   "./src/services/cyclone-service.js",
   "./src/config/product-specification-config.js",
   "./src/providers/product-specification-gateway-provider.js",
-  "./src/services/product-specification-service.js",
+  "./src/services/product-specification-service.js?v=0.8.1",
   "./src/config/app-config.js",
   "./src/config/workforce-config.js",
   "./src/config/workspace-journals.js",
   "./src/domain/scale-check.js",
   "./src/providers/indexed-db-data-provider.js",
-  "./src/providers/demo-google-sheets-provider.js",
   "./src/providers/google-sheets-gateway-provider.js",
   "./src/providers/workforce-gateway-provider.js",
   "./src/repositories/journal-repository.js",
@@ -26,8 +25,7 @@ const APP_SHELL = [
   "./src/services/auth-service.js",
   "./src/services/shift-service.js",
   "./src/services/workforce-service.js",
-  "./src/services/journal-service.js",
-  "./src/data/demo-records.js"
+  "./src/services/journal-service.js"
 ];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));

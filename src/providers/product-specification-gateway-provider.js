@@ -1,7 +1,7 @@
 export class ProductSpecificationGatewayProvider {
   constructor({ baseUrl = "", fetchImpl = globalThis.fetch } = {}) {
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
-    this.fetch = fetchImpl;
+    this.fetch = fetchImpl.bind(globalThis);
   }
 
   async list() {

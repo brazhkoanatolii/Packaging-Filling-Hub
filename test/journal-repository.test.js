@@ -3,6 +3,23 @@ import assert from "node:assert/strict";
 import { ConflictError } from "../src/domain/scale-check.js";
 import { JournalRepository } from "../src/repositories/journal-repository.js";
 
+test("старые демонстрационные данные сохранены локально, но не отображаются и не отправляются", async () => {
+  const local = new MemoryProvider();
+  const demo = record({ id: "demo-old", source: "demo" });
+  const real = record({ id: "real", source: "google" });
+  await local.put("records", demo);
+  await local.put("records", real);
+  await local.put("operations", { id: "demo-op", state: "pending", recordId: demo.id, record: demo });
+  let writes = 0;
+  const remote = { async write() { writes++; } };
+  const repository = new JournalRepository(local, remote);
+  assert.deepEqual((await repository.list()).map(item => item.id), ["real"]);
+  await repository.sync();
+  assert.equal(writes, 0);
+  assert.equal((await local.getAll("records")).length, 2);
+  assert.equal((await local.getAll("operations")).length, 1);
+});
+
 class MemoryProvider {
   constructor() {
     this.stores = new Map();

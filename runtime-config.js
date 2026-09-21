@@ -1,5 +1,5 @@
 globalThis.__PACKAGING_FILLING_CONFIG__ = Object.freeze({
-  mode: "demo",
+  mode: "gateway",
   googleWritesEnabled: false,
   gatewayBaseUrl: "",
   workstationRole: null,

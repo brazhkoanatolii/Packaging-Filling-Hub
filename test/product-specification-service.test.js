@@ -2,6 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ProductSpecificationService } from "../src/services/product-specification-service.js";
 
+test("отсутствие источника не подменяет спецификации демонстрационными", async () => {
+  const result = await new ProductSpecificationService(createStore()).initialize();
+  assert.equal(result.source, "unavailable");
+  assert.deepEqual(result.specifications, []);
+  assert.ok(result.error);
+});
+
 function createStore(initial = {}) {
   const values = new Map(Object.entries(initial));
   return { async preference(key, fallback = null) { return values.has(key) ? structuredClone(values.get(key)) : fallback; }, async setPreference(key, value) { values.set(key, structuredClone(value)); } };

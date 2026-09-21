@@ -5,7 +5,7 @@ export class GoogleSheetsGatewayProvider {
     if (typeof fetchImpl !== "function") throw new Error("Браузер не поддерживает сетевые запросы");
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.writesEnabled = Boolean(writesEnabled);
-    this.fetch = fetchImpl;
+    this.fetch = fetchImpl.bind(globalThis);
     this.mode = "gateway";
   }
 
@@ -19,6 +19,7 @@ export class GoogleSheetsGatewayProvider {
   }
 
   async write(operation) {
+    if (operation.record?.source === "demo") throw new Error("Демонстрационная запись не может быть отправлена в рабочий журнал");
     if (!this.writesEnabled) {
       const error = new Error("Запись в Google пока выключена начальником участка");
       error.name = "WritesDisabledError";

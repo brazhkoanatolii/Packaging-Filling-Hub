@@ -15,7 +15,7 @@ export class JournalRepository {
 
   async list() {
     const records = await this.local.getAll("records");
-    return records.sort((a, b) => `${b.date}${b.updatedAt}`.localeCompare(`${a.date}${a.updatedAt}`));
+    return records.filter(record => record.source !== "demo").sort((a, b) => `${b.date}${b.updatedAt}`.localeCompare(`${a.date}${a.updatedAt}`));
   }
 
   async get(id) {
@@ -48,7 +48,7 @@ export class JournalRepository {
 
   async pendingOperations() {
     return (await this.local.getAll("operations"))
-      .filter(item => item.state !== "done")
+      .filter(item => item.state !== "done" && item.record?.source !== "demo")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 

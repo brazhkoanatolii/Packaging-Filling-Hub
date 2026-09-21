@@ -33,7 +33,7 @@ createServer(async (request, response) => {
 
     if (url.pathname === "/runtime-config.js") {
       return sendJavaScript(response, `globalThis.__PACKAGING_FILLING_CONFIG__ = Object.freeze(${JSON.stringify({
-        mode: missingGoogleSettings().length === 0 ? "gateway" : "demo",
+        mode: "gateway",
         googleWritesEnabled: writesEnabled,
         gatewayBaseUrl: "",
         workstationRole,

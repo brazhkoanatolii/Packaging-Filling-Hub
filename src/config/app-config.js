@@ -2,7 +2,7 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.8.0",
+  version: "0.8.1",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
@@ -16,7 +16,7 @@ export const APP_CONFIG = Object.freeze({
     ? runtimeConfig.workstationLabel
     : null,
   integration: {
-    mode: runtimeConfig.mode === "gateway" ? "gateway" : "demo",
+    mode: "gateway",
     googleWritesEnabled: runtimeConfig.googleWritesEnabled === true,
     gatewayBaseUrl: runtimeConfig.gatewayBaseUrl ?? "",
     spreadsheetId: "1An019JRwrya4wl9EtqY4zNELfRNzaq26sidhQce3Tc8",
@@ -35,15 +35,8 @@ export const MODULES = Object.freeze([
   { id: "dashboard", labels: { ru: "Главная", en: "Home", lt: "Pagrindinis" }, icon: "home" },
   { id: "attendance", labels: { ru: "Табель", en: "Attendance", lt: "Darbo laikas" }, icon: "attendance" },
   { id: "journals", labels: { ru: "Контроль весов", en: "Scale control", lt: "Svarstyklių kontrolė" }, icon: "scales" },
-  { id: "packaging", labels: { ru: "Расход упаковки", en: "Packaging usage", lt: "Pakuotės sunaudojimas" }, icon: "package" },
-  { id: "maintenance", labels: { ru: "Ремонт и ТО станков", en: "Machine maintenance", lt: "Įrenginių priežiūra" }, icon: "tools" },
-  { id: "nonconformities", labels: { ru: "Несоответствия", en: "Nonconformities", lt: "Neatitiktys" }, icon: "alert" },
   { id: "specifications", labels: { ru: "Спецификация продуктов", en: "Product specifications", lt: "Produktų specifikacijos" }, icon: "specification" },
-  { id: "production", labels: { ru: "Учёт продукции и брака", en: "Production and scrap", lt: "Produkcija ir brokas" }, icon: "production" },
-  { id: "spare-parts", labels: { ru: "Склад запчастей", en: "Spare parts", lt: "Atsarginių dalių sandėlis" }, icon: "warehouse" },
-  { id: "ppe-warehouse", labels: { ru: "Склад СИЗ", en: "PPE warehouse", lt: "AAP sandėlis" }, icon: "ppe" },
   { id: "cyclones", labels: { ru: "Очистка циклонов", en: "Cyclone cleaning", lt: "Ciklonų valymas" }, icon: "cyclone" },
-  { id: "documents", labels: { ru: "Документы", en: "Documents", lt: "Dokumentai" }, icon: "documents" },
   { id: "personnel", labels: { ru: "Персонал", en: "Personnel", lt: "Personalas" }, icon: "personnel" },
   { id: "vacations", labels: { ru: "График отпусков", en: "Vacation schedule", lt: "Atostogų grafikas" }, icon: "vacation" },
   { id: "statistics", labels: { ru: "Статистика", en: "Statistics", lt: "Statistika" }, icon: "statistics", managerOnly: true },
