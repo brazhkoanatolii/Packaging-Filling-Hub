@@ -3,12 +3,10 @@
  * The source workbook remains the owner of product data.
  */
 const PRODUCT_SPECIFICATION_BOOK = '1BCfwR8P2UqjlbnDyrEp95n2AmbQpx0N4SDZV540GpA8';
-const PRODUCT_SPECIFICATION_SHEET = 'Для фасовки 24.07.2026';
+const PRODUCT_SPECIFICATION_SHEET_PREFIX = 'Для фасовки';
 
 function listProductSpecifications() {
-  const sheet = SpreadsheetApp.openById(PRODUCT_SPECIFICATION_BOOK)
-    .getSheetByName(PRODUCT_SPECIFICATION_SHEET);
-  if (!sheet) throw new Error('В Google отсутствует вкладка спецификации продуктов');
+  const sheet = productSpecificationSheet_();
 
   const rows = sheet.getRange(3, 2, Math.max(0, sheet.getLastRow() - 2), 10).getValues();
   let currentLine = '';
@@ -56,7 +54,8 @@ function deleteProductSpecification(input) {
 }
 
 function productSpecificationSheet_() {
-  const sheet = SpreadsheetApp.openById(PRODUCT_SPECIFICATION_BOOK).getSheetByName(PRODUCT_SPECIFICATION_SHEET);
+  const sheet = SpreadsheetApp.openById(PRODUCT_SPECIFICATION_BOOK).getSheets()
+    .find((item) => item.getName().startsWith(PRODUCT_SPECIFICATION_SHEET_PREFIX));
   if (!sheet) throw new Error('В Google отсутствует вкладка спецификации продуктов');
   return sheet;
 }
