@@ -17,6 +17,9 @@ import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-con
 import { CycloneGatewayProvider } from "./providers/cyclone-gateway-provider.js";
 import { CycloneRepository } from "./repositories/cyclone-repository.js";
 import { CycloneService, cycloneStatistics } from "./services/cyclone-service.js";
+import { MaintenanceGatewayProvider } from "./providers/maintenance-gateway-provider.js";
+import { MaintenanceRepository } from "./repositories/maintenance-repository.js";
+import { MaintenanceService, maintenanceStatistics } from "./services/maintenance-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -44,6 +47,9 @@ const state = {
   specifications: { specifications: [], source: "loading", cachedAt: null },
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
   cycloneYear: Number(today().slice(0, 4)),
+  maintenance: { records: [], operations: [], machines: [], performers: [], lastReadAt: null, error: null },
+  maintenanceYear: Number(today().slice(0, 4)),
+  maintenanceMachine: "",
   specificationSelection: { line: "", product: "", variant: "" },
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
@@ -59,6 +65,7 @@ let workforceService;
 let workforceRepository;
 let productSpecificationService;
 let cycloneService;
+let maintenanceService;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -73,6 +80,10 @@ async function bootstrap() {
   cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
     new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.cyclones = await cycloneService.snapshot();
+  const maintenanceStore = await new IndexedDbDataProvider("packaging-filling-hub-maintenance").init();
+  maintenanceService = new MaintenanceService(new MaintenanceRepository(maintenanceStore,
+    new MaintenanceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
+  state.maintenance = await maintenanceService.snapshot();
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
@@ -137,6 +148,8 @@ function handleInput(event) {
 }
 
 async function handleChange(event) {
+  if (event.target.matches("[data-maintenance-year]")) { state.maintenanceYear = Number(event.target.value); render(); return; }
+  if (event.target.matches("[data-maintenance-machine]")) { state.maintenanceMachine = event.target.value; render(); return; }
   if (event.target.matches("[data-specification-select]")) {
     const field = event.target.dataset.specificationSelect;
     state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
@@ -283,6 +296,8 @@ async function handleClick(event) {
   const { action, id, page, accountId } = actionElement.dataset;
 
   try {
+    if (action === "new-maintenance") { openMaintenanceDialog(); return; }
+    if (action === "sync-maintenance") { await refreshMaintenance(true); render(); return; }
     if (action === "new-cyclone") { openCycloneDialog(); return; }
     if (action === "sync-cyclones") {
       state.cyclones = await cycloneService.sync();
@@ -465,6 +480,10 @@ async function refreshCyclones(sync = false) {
   state.cyclones = sync ? await cycloneService.sync() : await cycloneService.refresh();
   return state.cyclones;
 }
+async function refreshMaintenance(sync = false) {
+  state.maintenance = sync ? await maintenanceService.sync() : await maintenanceService.refresh();
+  return state.maintenance;
+}
 
 async function refreshFromSource({ silent = false } = {}) {
   if (!navigator.onLine) {
@@ -473,7 +492,7 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones()]);
+  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones(), refreshMaintenance()]);
   state.journalError = checks[0].status === "rejected" ? checks[0].reason.message : null;
   const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -494,7 +513,7 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true)]);
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true), refreshMaintenance(true)]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -654,6 +673,7 @@ function renderWorkforceConnection() {
 }
 
 function renderPage() {
+  if (state.page === "maintenance") return renderMaintenancePage();
   if (state.page === "journals") return renderJournalsPage();
   if (state.page === "attendance") return renderAttendancePage();
   if (state.page === "personnel") return renderPersonnelPage();
@@ -930,12 +950,10 @@ function renderPersonnelPrivateDetails(employee) {
 }
 
 function renderStatisticsPage() {
-  return `
-    <section class="settings-hero card">
-      <div><p class="eyebrow">Сводные показатели участка</p><h2>Статистика</h2><p>Общие данные по персоналу, сменам, табелю и доступным журналам. Личные сведения сотрудников здесь не отображаются.</p></div>
-      <span class="status-pill success">Только начальник</span>
-    </section>
-    <section class="card empty-state"><span>◌</span><h3>Раздел подготовлен</h3><p>Показатели и графики добавим после того, как вы определите нужный состав статистики.</p></section>`;
+  const rows = [["Контроль весов", state.records.filter(r=>r.source==="google" && r.syncState==="synced" && r.status!=="Аннулировано").length],
+    ["Очистка циклонов",state.cyclones.records.filter(r=>r.syncState==="synced").length],
+    ["Техническое обслуживание",state.maintenance.records.filter(r=>r.syncState==="synced").length]];
+  return `<section class="card cyclone-statistics"><div><h2>Статистика журналов</h2><p>Подтверждённые записи в последней сохранённой копии Google за все годы. Локальная очередь не включена.</p><table class="settings-data-table"><thead><tr><th>Журнал</th><th>Записей</th></tr></thead><tbody>${rows.map(([name,n])=>`<tr><td>${name}</td><td>${n}</td></tr>`).join("")}</tbody></table><p>Подробная статистика ТО и очисток доступна в соответствующих разделах.</p></div><div><h3>Записи по журналам</h3>${renderMaintenanceChart(rows)}</div></section>`;
 }
 
 function formatPersonnelDate(value) {
@@ -967,6 +985,52 @@ function renderCyclonesPage() {
     <h3>По сотрудникам</h3><table class="settings-data-table"><thead><tr><th>Сотрудник</th><th>Очисток</th></tr></thead><tbody>${stats.people.map(([name, n]) => `<tr><td>${escapeHtml(name)}</td><td>${n}</td></tr>`).join("") || '<tr><td colspan="2">Нет подтверждённых записей за год</td></tr>'}</tbody></table></div>
     <div><h3>Очистки по месяцам — ${state.cycloneYear}</h3><div class="cyclone-chart" role="img" aria-label="${attribute(stats.months.map((n, i) => `${monthNames[i]}: ${n}`).join(", "))}">${stats.months.map((n, i) => `<div class="cyclone-chart-column"><span>${n}</span><div class="cyclone-chart-track"><div style="height:${n / max * 100}%"></div></div><small>${monthNames[i]}</small></div>`).join("")}</div><p>${lastReadAt ? "Статистика рассчитана по последним прочитанным данным Google. Записи в очереди не включены." : "После подключения Google здесь появятся данные рабочего журнала."}</p></div></section>
     <section class="card settings-table-wrap"><h3>Записи журнала</h3><table class="settings-data-table"><thead><tr><th>Дата</th><th>Исполнитель</th><th>Состояние</th></tr></thead><tbody>${records.map(r => `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(r.performer)}</td><td>${r.syncState === "synced" ? "Подтверждено Google" : "Ожидает отправки"}${operations.find(o => o.record.id === r.id)?.error ? `<br><small>${escapeHtml(operations.find(o => o.record.id === r.id).error)}</small>` : ""}</td></tr>`).join("") || '<tr><td colspan="3">Записи ещё не загружены. Можно сохранить новую очистку в локальную очередь.</td></tr>'}</tbody></table></section>`;
+}
+
+function renderMaintenancePage() {
+  const { records, operations, machines, lastReadAt, error } = state.maintenance;
+  const stats = maintenanceStatistics(records, state.maintenanceYear, machines);
+  const years = [...new Set([Number(today().slice(0,4)), state.maintenanceYear, ...stats.years.map(([y]) => y)])].sort((a,b)=>b-a);
+  const status = error ? `Ошибка чтения: ${error}` : lastReadAt ? `Последнее чтение Google: ${formatDateTime(lastReadAt)}` : "Журнал ещё не загружен";
+  const months = ["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
+  const table = (headers, rows) => `<table class="settings-data-table"><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(v=>`<td>${escapeHtml(String(v))}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${headers.length}">Нет подтверждённых записей</td></tr>`}</tbody></table>`;
+  const pair = (title, headers, rows, chartRows) => `<section class="card cyclone-statistics"><div><h3>${title}</h3>${table(headers,rows)}</div><div><h3>${title}</h3>${renderMaintenanceChart(chartRows)}</div></section>`;
+  const visible = records.filter(r => (!state.maintenanceMachine || r.machine === state.maintenanceMachine) && Number(r.date.slice(0,4)) === state.maintenanceYear);
+  return `<section class="card cyclone-heading"><div><h2>Техническое обслуживание станков</h2><p>${escapeHtml(status)}</p><p>Всего подтверждено: <strong>${stats.all}</strong>. За выбранный год: <strong>${stats.total}</strong>. В очереди: <strong>${operations.length}</strong>.</p>${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются на этом компьютере.</p>' : ""}<label>Год <select data-maintenance-year>${years.map(y=>`<option ${y===state.maintenanceYear?"selected":""}>${y}</option>`).join("")}</select></label></div><div class="dialog-actions"><button class="secondary-button" data-action="sync-maintenance">Обновить и отправить очередь</button><button class="primary-button" data-action="new-maintenance" ${machines.length?"":"disabled"}>Записать ТО</button></div></section>
+  ${pair("ТО по станкам",["Станок","Всего","За год","Последнее ТО"],stats.machines.map(m=>[m.title,m.total,m.year,m.last?formatDate(m.last):"—"]),stats.machines.map(m=>[m.title,m.year]))}
+  ${pair(`ТО по месяцам — ${state.maintenanceYear}`,["Месяц","ТО"],stats.months.map((n,i)=>[months[i],n]),stats.months.map((n,i)=>[months[i],n]))}
+  ${pair("ТО по годам",["Год","ТО"],stats.years,stats.years)}
+  ${pair("ТО по сотрудникам",["Сотрудник","Всего","За год"],stats.people.map(p=>[p.name,p.total,p.year]),stats.people.map(p=>[p.name,p.year]))}
+  <section class="card settings-table-wrap"><h3>Записи за ${state.maintenanceYear}</h3><label>Станок <select data-maintenance-machine><option value="">Все станки</option>${machines.map(m=>`<option value="${attribute(m.id)}" ${m.id===state.maintenanceMachine?"selected":""}>${escapeHtml(m.title)}</option>`).join("")}</select></label>
+  ${table(["Дата","Станок","Исполнитель","Примечание","Состояние"],visible.map(r=>[formatDate(r.date),`ТО ${r.machine}`,r.performer,r.note||"—",r.syncState==="synced"?"Подтверждено Google":operations.find(o=>o.record.id===r.id)?.error||"Ожидает отправки"]))}
+  <p>Статистика учитывает только подтверждённые записи Google. Графики по станкам и сотрудникам показывают выбранный год.</p></section>`;
+}
+
+function renderMaintenanceChart(rows) {
+  const max = Math.max(1,...rows.map(r=>r[1]));
+  return `<div class="maintenance-chart" role="img" aria-label="${attribute(rows.map(([name,n])=>`${name}: ${n}`).join(", "))}">${rows.map(([name,n])=>`<div class="maintenance-chart-row"><span>${escapeHtml(String(name))}</span><div><i style="width:${n/max*100}%"></i></div><b>${n}</b></div>`).join("") || "Нет данных"}</div>`;
+}
+
+function openMaintenanceDialog() {
+  const names = employeeNames().filter(n => state.maintenance.performers.includes(n));
+  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><h2>Записать ТО</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    ${formField("to-machine","Станок",`<select id="to-machine" name="machine" required><option value="">Выберите станок</option>${state.maintenance.machines.map(m=>`<option value="${attribute(m.id)}">${escapeHtml(m.title)}</option>`).join("")}</select>`)}
+    ${formField("to-date","Дата ТО",`<input id="to-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
+    ${formField("to-performer","Исполнитель",`<select id="to-performer" name="performer" required><option value="">Выберите сотрудника</option>${names.map(n=>`<option>${escapeHtml(n)}</option>`).join("")}</select>`)}
+    ${formField("to-note","Примечание",'<textarea id="to-note" name="note" maxlength="5000" rows="3"></textarea>')}
+    <p>Дата сохраняется вместе с записью. До подтверждения Google запись остаётся в очереди этого компьютера.</p><p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить ТО</button></div></form>`);
+  let saving = false;
+  dialog.querySelector("form").addEventListener("submit",async event=>{
+    event.preventDefault(); if(saving)return; saving=true;
+    const form=event.currentTarget; form.querySelector('[type="submit"]').disabled=true;
+    try {
+      await maintenanceService.create(Object.fromEntries(new FormData(form)),state.account,names);
+      dialog.close(); state.maintenance=await maintenanceService.snapshot(); render();
+      toast("ТО сохранено на этом компьютере. Ожидает подтверждения Google.","success");
+      if(navigator.onLine){await refreshMaintenance(true);render();}
+    } catch(error){showFormError(form,error);saving=false;form.querySelector('[type="submit"]').disabled=false;}
+  });
+  dialog.showModal();
 }
 
 function openCycloneDialog() {

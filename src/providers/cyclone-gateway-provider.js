@@ -1,13 +1,14 @@
 export class CycloneGatewayProvider {
-  constructor({ baseUrl = "", fetchImpl = globalThis.fetch } = {}) {
+  constructor({ baseUrl = "", fetchImpl = globalThis.fetch, endpoint = "/api/cyclone-records" } = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.endpoint = endpoint;
     this.fetch = fetchImpl.bind(globalThis);
   }
 
   async request(method, body) {
     let response;
     try {
-      response = await this.fetch(`${this.baseUrl}/api/cyclone-records`, {
+      response = await this.fetch(`${this.baseUrl}${this.endpoint}`, {
         method, headers: { Accept: "application/json", "Content-Type": "application/json" },
         signal: AbortSignal.timeout(45000),
         ...(body ? { body: JSON.stringify(body) } : {})

@@ -2,7 +2,7 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.8.1",
+  version: "0.9.0",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
@@ -35,6 +35,7 @@ export const MODULES = Object.freeze([
   { id: "dashboard", labels: { ru: "Главная", en: "Home", lt: "Pagrindinis" }, icon: "home" },
   { id: "attendance", labels: { ru: "Табель", en: "Attendance", lt: "Darbo laikas" }, icon: "attendance" },
   { id: "journals", labels: { ru: "Контроль весов", en: "Scale control", lt: "Svarstyklių kontrolė" }, icon: "scales" },
+  { id: "maintenance", labels: { ru: "Техническое обслуживание", en: "Maintenance", lt: "Techninė priežiūra" }, icon: "tools" },
   { id: "specifications", labels: { ru: "Спецификация продуктов", en: "Product specifications", lt: "Produktų specifikacijos" }, icon: "specification" },
   { id: "cyclones", labels: { ru: "Очистка циклонов", en: "Cyclone cleaning", lt: "Ciklonų valymas" }, icon: "cyclone" },
   { id: "personnel", labels: { ru: "Персонал", en: "Personnel", lt: "Personalas" }, icon: "personnel" },

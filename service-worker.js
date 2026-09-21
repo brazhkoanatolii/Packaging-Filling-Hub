@@ -1,4 +1,4 @@
-const CACHE_NAME = "packaging-filling-hub-v0.8.1-2";
+const CACHE_NAME = "packaging-filling-hub-v0.9.0-1";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -7,6 +7,9 @@ const APP_SHELL = [
   "./assets/icon.svg",
   "./src/styles.css",
   "./src/app.js",
+  "./src/providers/maintenance-gateway-provider.js",
+  "./src/repositories/maintenance-repository.js",
+  "./src/services/maintenance-service.js",
   "./src/providers/cyclone-gateway-provider.js",
   "./src/repositories/cyclone-repository.js",
   "./src/services/cyclone-service.js",
