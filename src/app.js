@@ -92,7 +92,10 @@ async function bootstrap() {
   await repository.init();
   state.account = await authService.current();
   state.shift = await shiftService.current();
-  state.workforce = await workforceService.snapshot();
+  // The attendance revision must be read from Google before a user can start
+  // a shift; otherwise a stale cached revision turns an entire shift into
+  // avoidable conflicts.
+  state.workforce = await workforceService.initialize();
   state.specifications = await productSpecificationService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
@@ -1987,6 +1990,10 @@ function attendanceCode(value) {
 
 async function saveShiftAttendanceToTimesheet(teamId, attendance) {
   const date = today();
+  // Re-read the source immediately before a batch save.  This is especially
+  // important when the application has been open while someone edited the
+  // same monthly timesheet in Google Sheets.
+  if (workforceRepository) await syncWorkforce();
   await withWorkforceActor(async () => {
     for (const item of attendance) {
       await workforceService.saveAttendance({

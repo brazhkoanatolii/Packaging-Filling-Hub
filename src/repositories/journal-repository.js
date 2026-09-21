@@ -93,6 +93,18 @@ export class JournalRepository {
   async refresh() {
     const remoteRecords = await this.remote.list();
     const pendingIds = new Set((await this.pendingOperations()).map(item => item.recordId));
+    const remoteIds = new Set(remoteRecords.map(record => record.id));
+
+    // Google Sheets is the source of truth. If a confirmed record was removed
+    // directly from the journal, remove only its stale local cache entry.
+    // Local/offline work and every queued operation remain intact.
+    for (const localRecord of await this.local.getAll("records")) {
+      const confirmedRemoteRecord = localRecord.source === "google" || localRecord.syncState === "synced";
+      if (confirmedRemoteRecord && !pendingIds.has(localRecord.id) && !remoteIds.has(localRecord.id)) {
+        await this.local.delete("records", localRecord.id);
+      }
+    }
+
     for (const record of remoteRecords) {
       if (!pendingIds.has(record.id)) await this.local.put("records", record);
     }
