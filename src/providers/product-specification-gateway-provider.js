@@ -17,6 +17,32 @@ export class ProductSpecificationGatewayProvider {
       throw error;
     }
   }
+
+  async save(specification) {
+    return this.#write("POST", specification, "Не удалось сохранить спецификацию в Google").then(payload => normalizeSpecification(payload.specification));
+  }
+
+  async remove(id) {
+    await this.#write("DELETE", { id }, "Не удалось удалить спецификацию из Google");
+  }
+
+  async #write(method, payload, fallbackMessage) {
+    try {
+      const response = await this.fetch(`${this.baseUrl}/api/specifications`, {
+        method,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.ok) throw new Error(result?.message || fallbackMessage);
+      return result;
+    } catch (cause) {
+      const error = new Error(cause?.message || fallbackMessage);
+      error.name = globalThis.navigator?.onLine ? "GatewayUnavailableError" : "OfflineError";
+      error.cause = cause;
+      throw error;
+    }
+  }
 }
 
 function normalizeSpecification(value) {

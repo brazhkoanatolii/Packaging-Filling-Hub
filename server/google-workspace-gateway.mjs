@@ -78,6 +78,18 @@ createServer(async (request, response) => {
       const specifications = await runAppsScript("listProductSpecifications");
       return sendJson(response, 200, { ok: true, specifications: Array.isArray(specifications) ? specifications : [] });
     }
+    if (url.pathname === "/api/specifications" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Редактировать спецификации может только начальник участка" });
+      const specification = await runAppsScript("saveProductSpecification", [{ ...(await readJsonBody(request)), role: workstationRole }]);
+      return sendJson(response, 200, { ok: true, specification });
+    }
+    if (url.pathname === "/api/specifications" && request.method === "DELETE") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Редактировать спецификации может только начальник участка" });
+      const result = await runAppsScript("deleteProductSpecification", [{ ...(await readJsonBody(request)), role: workstationRole }]);
+      return sendJson(response, 200, result);
+    }
 
     if (url.pathname === "/api/scale-records" && request.method === "POST") {
       if (!writesEnabled) {

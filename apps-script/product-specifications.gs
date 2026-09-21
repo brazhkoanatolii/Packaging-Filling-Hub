@@ -33,6 +33,66 @@ function listProductSpecifications() {
   }).filter((item) => item.line && item.product && item.variant !== null);
 }
 
+function saveProductSpecification(input) {
+  requireProductManager_(input);
+  const sheet = productSpecificationSheet_();
+  const item = normalizeProductSpecification_(input);
+  const rowNumber = productSpecificationRow_(item.id);
+  const values = [[item.line, item.product, item.variant, item.dryMass, item.wetMass, item.liquidVolume,
+    item.processType, item.pouchCount, item.lidColor, item.canType]];
+
+  if (rowNumber) sheet.getRange(rowNumber, 2, 1, 10).setValues(values);
+  else sheet.getRange(sheet.getLastRow() + 1, 2, 1, 10).setValues(values);
+  return listProductSpecifications().find((specification) => specification.id === `spec:${rowNumber || sheet.getLastRow()}`);
+}
+
+function deleteProductSpecification(input) {
+  requireProductManager_(input);
+  const rowNumber = productSpecificationRow_(input && input.id);
+  if (!rowNumber) throw new Error('Не выбрана спецификация для удаления');
+  const sheet = productSpecificationSheet_();
+  sheet.getRange(rowNumber, 2, 1, 10).clearContent();
+  return { ok: true, id: `spec:${rowNumber}` };
+}
+
+function productSpecificationSheet_() {
+  const sheet = SpreadsheetApp.openById(PRODUCT_SPECIFICATION_BOOK).getSheetByName(PRODUCT_SPECIFICATION_SHEET);
+  if (!sheet) throw new Error('В Google отсутствует вкладка спецификации продуктов');
+  return sheet;
+}
+
+function requireProductManager_(input) {
+  if (input && input.role === 'manager') return;
+  throw new Error('Редактировать спецификации может только начальник участка');
+}
+
+function productSpecificationRow_(id) {
+  const match = /^spec:(\d+)$/.exec(String(id || ''));
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeProductSpecification_(input) {
+  const text = (value) => String(value == null ? '' : value).trim();
+  const number = (value, label, required) => {
+    if (value === '' || value == null) {
+      if (required) throw new Error(`Заполните поле «${label}»`);
+      return '';
+    }
+    const result = Number(String(value).replace(',', '.'));
+    if (!Number.isFinite(result)) throw new Error(`Поле «${label}» должно быть числом`);
+    return result;
+  };
+  const item = {
+    id: text(input && input.id), line: text(input && input.line), product: text(input && input.product),
+    variant: number(input && input.variant, 'mg/g', true), dryMass: number(input && input.dryMass, 'Вес сухого продукта', false),
+    wetMass: number(input && input.wetMass, 'Вес мокрого продукта', false), liquidVolume: number(input && input.liquidVolume, 'Жидкость', false),
+    processType: text(input && input.processType), pouchCount: number(input && input.pouchCount, 'Количество подушек', false),
+    lidColor: text(input && input.lidColor), canType: text(input && input.canType)
+  };
+  if (!item.line || !item.product) throw new Error('Заполните линейку и название продукта');
+  return item;
+}
+
 function productSpecText_(value) {
   return String(value == null ? '' : value).trim();
 }

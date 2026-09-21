@@ -356,7 +356,7 @@ async function handleClick(event) {
       render();
       return;
     }
-    if (["add-employee", "edit-employee", "toggle-employee"].includes(action) && state.account.role !== "manager") {
+    if (["add-employee", "edit-employee", "toggle-employee", "add-specification", "edit-specification", "delete-specification"].includes(action) && state.account.role !== "manager") {
       toast("Редактировать справочник персонала может только начальник участка.", "error");
       return;
     }
@@ -386,6 +386,18 @@ async function handleClick(event) {
       state.workforce = await workforceService.snapshot();
       render();
       toast("Статус сотрудника изменён.", "success");
+      return;
+    }
+    if (action === "add-specification") {
+      openSpecificationDialog();
+      return;
+    }
+    if (action === "edit-specification") {
+      openSpecificationDialog(id);
+      return;
+    }
+    if (action === "delete-specification") {
+      await deleteSpecification(id);
       return;
     }
     if (action === "workforce-accept-remote") {
@@ -946,20 +958,21 @@ function renderSpecificationsPage() {
   const selected = byProduct.find(item => String(item.variant) === selection.variant) || (byProduct.length === 1 ? byProduct[0] : null);
   const sourceLabel = state.specifications?.source === "google" ? "Google Sheets" : state.specifications?.source === "cache" ? "Офлайн-копия" : state.specifications?.source === "demo" ? "Демонстрационные данные" : "Источник недоступен";
   const error = state.specifications?.error ? `<p class="module-note">${escapeHtml(state.specifications.error)}. Можно открыть последнюю сохранённую копию при следующем запуске.</p>` : "";
-  return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>Выберите линейку, продукт и вариант. Все нормы заполняются автоматически и доступны только для просмотра.</p></div><a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Открыть источник ↗</a></section>
+  const canEdit = state.account?.role === "manager";
+  return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>${canEdit ? "Добавляйте и исправляйте параметры прямо в программе. Изменения сразу сохраняются в Google Sheets." : "Выберите линейку, продукт и вариант. Все нормы доступны только для просмотра."}</p></div><div class="header-actions">${canEdit ? `<button class="primary-button" data-action="add-specification">+ Добавить продукт</button>` : ""}<a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Открыть источник ↗</a></div></section>
     ${error}
     <section class="card specification-picker"><div class="form-grid">
       ${formField("spec-line", "Линейка", `<select id="spec-line" data-specification-select="line"><option value="">Выберите линейку</option>${lines.map(line => `<option value="${attribute(line)}" ${selection.line === line ? "selected" : ""}>${escapeHtml(line)}</option>`).join("")}</select>`)}
       ${formField("spec-product", "Продукт", `<select id="spec-product" data-specification-select="product" ${selection.line ? "" : "disabled"}><option value="">Выберите продукт</option>${products.map(product => `<option value="${attribute(product)}" ${selection.product === product ? "selected" : ""}>${escapeHtml(product)}</option>`).join("")}</select>`)}
       ${formField("spec-variant", "mg/g", `<select id="spec-variant" data-specification-select="variant" ${selection.product ? "" : "disabled"}><option value="">Выберите вариант</option>${variants.map(variant => `<option value="${attribute(variant)}" ${selection.variant === variant ? "selected" : ""}>${escapeHtml(variant)}</option>`).join("")}</select>`)}
     </div></section>
-    ${selected ? renderSpecificationCard(selected) : `<section class="card empty-state"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "После выбора варианта программа покажет технологические нормы и упаковку." : "Проверьте подключение к Google и обновите страницу."}</p></section>`}
+    ${selected ? renderSpecificationCard(selected, canEdit) : `<section class="card empty-state"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "После выбора варианта программа покажет технологические нормы и упаковку." : "Проверьте подключение к Google и обновите страницу."}</p></section>`}
     <p class="module-note">В справочнике доступно ${all.length} позиций. Исходные названия и пустые нормы сухих продуктов сохранены без изменений.</p>`;
 }
 
-function renderSpecificationCard(specification) {
+function renderSpecificationCard(specification, canEdit = false) {
   const value = number => number === null || number === undefined ? "—" : formatNumber(number);
-  return `<section class="specification-detail card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(specification.line)}</p><h2>${escapeHtml(specification.product)} · ${escapeHtml(String(specification.variant))} mg/g</h2></div><span class="status-pill success">${escapeHtml(specification.processType || "Тип не указан")}</span></div><dl class="specification-values">
+  return `<section class="specification-detail card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(specification.line)}</p><h2>${escapeHtml(specification.product)} · ${escapeHtml(String(specification.variant))} mg/g</h2></div><div class="header-actions"><span class="status-pill success">${escapeHtml(specification.processType || "Тип не указан")}</span>${canEdit ? `<button class="small-button" data-action="edit-specification" data-id="${attribute(specification.id)}">Изменить</button><button class="small-button danger-outline" data-action="delete-specification" data-id="${attribute(specification.id)}">Удалить</button>` : ""}</div></div><dl class="specification-values">
     <div><dt>Вес сухого продукта</dt><dd>${value(specification.dryMass)} г</dd></div><div><dt>Вес мокрого продукта</dt><dd>${value(specification.wetMass)} г</dd></div><div><dt>Жидкость</dt><dd>${value(specification.liquidVolume)} мл</dd></div><div><dt>Подушек в банке</dt><dd>${value(specification.pouchCount)}</dd></div><div><dt>Цвет крышки</dt><dd>${escapeHtml(specification.lidColor || "—")}</dd></div><div><dt>Вид банки</dt><dd>${escapeHtml(specification.canType || "—")}</dd>
   </dl></section>`;
 }
@@ -1475,6 +1488,56 @@ function openEmployeeDialog(id = null) {
     }
   });
   dialog.showModal();
+}
+
+function openSpecificationDialog(id = null) {
+  if (state.account?.role !== "manager") throw new Error("Редактировать спецификации может только начальник участка.");
+  const specification = id ? state.specifications.specifications.find(item => item.id === id) : null;
+  const value = (field) => specification?.[field] ?? "";
+  const dialog = createDialog(`
+    <form class="dialog-card employee-dialog" data-specification-form>
+      <div class="dialog-heading"><div><p class="eyebrow">Спецификация продуктов</p><h2>${specification ? "Изменить продукт" : "Новый продукт"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+      <p class="dialog-lead">Пустые поля норм сохраняются пустыми. Все изменения сразу попадут в рабочую Google-таблицу.</p>
+      <div id="form-error" class="form-error" hidden></div>
+      <div class="form-grid">
+        ${formField("specification-line", "Линейка", `<input id="specification-line" name="line" value="${attribute(value("line"))}" required>`)}
+        ${formField("specification-product", "Продукт", `<input id="specification-product" name="product" value="${attribute(value("product"))}" required>`)}
+        ${formField("specification-variant", "mg/g", `<input id="specification-variant" name="variant" type="number" step="0.1" min="0" value="${attribute(value("variant"))}" required>`)}
+        ${formField("specification-process", "Сухой / мокрый", `<input id="specification-process" name="processType" value="${attribute(value("processType"))}">`)}
+        ${formField("specification-dry", "Вес сухого продукта, г", `<input id="specification-dry" name="dryMass" type="number" step="0.01" min="0" value="${attribute(value("dryMass"))}">`)}
+        ${formField("specification-wet", "Вес мокрого продукта, г", `<input id="specification-wet" name="wetMass" type="number" step="0.01" min="0" value="${attribute(value("wetMass"))}">`)}
+        ${formField("specification-liquid", "Жидкость, мл", `<input id="specification-liquid" name="liquidVolume" type="number" step="0.01" min="0" value="${attribute(value("liquidVolume"))}">`)}
+        ${formField("specification-pouches", "Подушек в банке", `<input id="specification-pouches" name="pouchCount" type="number" step="1" min="0" value="${attribute(value("pouchCount"))}">`)}
+        ${formField("specification-lid", "Цвет крышки", `<input id="specification-lid" name="lidColor" value="${attribute(value("lidColor"))}">`)}
+        ${formField("specification-can", "Вид банки", `<input id="specification-can" name="canType" value="${attribute(value("canType"))}">`)}
+      </div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
+    </form>`);
+  dialog.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const saved = await productSpecificationService.save({ ...Object.fromEntries(new FormData(form)), id: specification?.id });
+      state.specifications = await productSpecificationService.initialize();
+      state.specificationSelection = { line: saved.line, product: saved.product, variant: String(saved.variant) };
+      dialog.close(); render(); toast("Спецификация сохранена в Google Sheets.", "success");
+    } catch (error) { showFormError(form, error); button.disabled = false; }
+  });
+  dialog.showModal();
+}
+
+async function deleteSpecification(id) {
+  if (state.account?.role !== "manager") throw new Error("Удалять спецификации может только начальник участка.");
+  const item = state.specifications.specifications.find(specification => specification.id === id);
+  if (!item || !window.confirm(`Удалить спецификацию «${item.product} · ${item.variant} mg/g»?`)) return;
+  try {
+    await productSpecificationService.remove(id);
+    state.specifications = await productSpecificationService.initialize();
+    state.specificationSelection = { line: "", product: "", variant: "" };
+    render(); toast("Спецификация удалена из Google Sheets.", "success");
+  } catch (error) { toast(error.message || "Не удалось удалить спецификацию.", "error"); }
 }
 
 function openShiftGuestDialog() {

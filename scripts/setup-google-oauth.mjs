@@ -7,21 +7,40 @@ import { fileURLToPath } from "node:url";
 const projectRoot = normalize(join(fileURLToPath(new URL(".", import.meta.url)), ".."));
 const credentialsPath = process.argv[2];
 const environmentPath = join(projectRoot, ".env");
+const reuseLocalClient = credentialsPath === "--reuse-local-client";
 const oauthScopes = [
   "https://www.googleapis.com/auth/script.scriptapp",
   "https://www.googleapis.com/auth/spreadsheets"
 ];
 
-if (!credentialsPath || !existsSync(credentialsPath)) {
+if (!reuseLocalClient && (!credentialsPath || !existsSync(credentialsPath))) {
   console.error("Укажите путь к скачанному JSON-файлу OAuth-клиента.");
   console.error('Пример: npm run setup:google-oauth -- "C:\\Users\\User\\Downloads\\client_secret_....json"');
   process.exit(1);
 }
 
-const credentials = JSON.parse(readFileSync(credentialsPath, "utf8"));
-const installed = credentials.installed;
+const installed = reuseLocalClient
+  ? readExistingClient(environmentPath)
+  : JSON.parse(readFileSync(credentialsPath, "utf8")).installed;
 if (!installed?.client_id || !installed?.client_secret) {
-  throw new Error("Файл не содержит данные OAuth-клиента типа «Настольное приложение».");
+  throw new Error(reuseLocalClient
+    ? "В локальном .env не найдены данные OAuth-клиента. Используйте скачанный JSON-файл клиента."
+    : "Файл не содержит данные OAuth-клиента типа «Настольное приложение».");
+}
+
+function readExistingClient(filePath) {
+  if (!existsSync(filePath)) return null;
+  const values = Object.fromEntries(readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.includes("="))
+    .map((line) => {
+      const index = line.indexOf("=");
+      return [line.slice(0, index), line.slice(index + 1)];
+    }));
+  return {
+    client_id: values.GOOGLE_OAUTH_CLIENT_ID,
+    client_secret: values.GOOGLE_OAUTH_CLIENT_SECRET
+  };
 }
 
 const codeVerifier = toBase64Url(randomBytes(48));

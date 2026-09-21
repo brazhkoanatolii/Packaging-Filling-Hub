@@ -17,4 +17,17 @@ export class ProductSpecificationService {
       return { specifications: [], source: "unavailable", cachedAt: null, error: error.message };
     }
   }
+
+  async save(specification) {
+    if (!this.provider) throw new Error("В демонстрационном режиме изменения спецификаций недоступны");
+    const saved = await this.provider.save(specification);
+    await this.initialize();
+    return saved;
+  }
+
+  async remove(id) {
+    if (!this.provider) throw new Error("В демонстрационном режиме изменения спецификаций недоступны");
+    await this.provider.remove(id);
+    await this.initialize();
+  }
 }
