@@ -1,8 +1,12 @@
 ﻿[CmdletBinding()]
 param(
-  [string]$InstallRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")),
+  [string]$InstallRoot = "",
   [switch]$NoBrowser
 )
+
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+  $InstallRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+}
 
 function Get-EnvironmentValue {
   param([string]$Path, [string]$Name, [string]$Fallback)

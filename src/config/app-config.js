@@ -2,7 +2,7 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.8.34",
+  version: "0.8.36",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,

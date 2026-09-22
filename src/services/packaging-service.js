@@ -2,7 +2,7 @@ import { getVilniusDate, makeId } from "../domain/scale-check.js";
 
 export const PACKAGING_FIELDS = Object.freeze([
   { key: "garantBox430", label: "Коробки с логотипом GARANT 430×285×255, шт" },
-  { key: "garantBox570", label: "Коробки с логотипом Garant 570×210×249, шт" },
+  { key: "garantBox570", label: "Коробки с логотипом Garant (узкая) 570×210×249, шт" },
   { key: "dochemsPaper", label: "Бумага Dochems 37 GSM, рул" },
   { key: "killaCanClear", label: "Банка килла прозрачная, шт" },
   { key: "killaCanGreen", label: "Банка килла зелёная, шт" },
