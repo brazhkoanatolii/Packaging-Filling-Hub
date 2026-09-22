@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,7 @@ const writesEnabled = process.env.GOOGLE_WRITES_ENABLED === "true";
 const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
+const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub/main/update-manifest.json";
 const maximumBodyBytes = 1024 * 1024;
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -54,6 +56,24 @@ createServer(async (request, response) => {
         workstationLabel,
         missing: missingGoogleSettings()
       });
+    }
+
+    if (url.pathname === "/api/update-status" && request.method === "GET") {
+      return sendJson(response, 200, await getUpdateStatus());
+    }
+    if (url.pathname === "/api/update" && request.method === "POST") {
+      const update = await getUpdateStatus();
+      if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
+      if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });
+      const updater = join(projectRoot, "scripts", "windows", "update-program.ps1");
+      if (!existsSync(updater)) return sendJson(response, 500, { ok: false, message: "Не найден сценарий обновления" });
+      const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      child.unref();
+      return sendJson(response, 202, { ok: true, version: update.version });
     }
 
     if (url.pathname === "/api/cyclone-records") {
@@ -172,6 +192,43 @@ createServer(async (request, response) => {
   console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
 });
+
+async function getUpdateStatus() {
+  const base = { ok: true, currentVersion: appVersion, available: false, message: "Новая версия не найдена" };
+  try {
+    const response = await fetch(updateManifestUrl, {
+      headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+      signal: AbortSignal.timeout(7_000)
+    });
+    if (!response.ok) return { ...base, message: "Не удалось получить сведения об обновлении" };
+    const manifest = await response.json();
+    if (!isSafeUpdateManifest(manifest)) return { ...base, message: "Сведения об обновлении не прошли проверку" };
+    return compareVersions(manifest.version, appVersion) > 0
+      ? { ...base, available: true, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256, message: `Доступна версия ${manifest.version}` }
+      : base;
+  } catch {
+    return { ...base, message: "Не удалось проверить обновление" };
+  }
+}
+
+function isSafeUpdateManifest(manifest) {
+  if (!manifest || typeof manifest !== "object" || !/^\d+\.\d+\.\d+$/.test(manifest.version || "") || !/^[A-Fa-f0-9]{64}$/.test(manifest.sha256 || "")) return false;
+  try {
+    const packageUrl = new URL(manifest.packageUrl);
+    return packageUrl.protocol === "https:" && packageUrl.hostname === "raw.githubusercontent.com" && packageUrl.pathname.startsWith("/brazhkoanatolii/Packaging-Filling-Hub/") && packageUrl.pathname.endsWith(".zip");
+  } catch {
+    return false;
+  }
+}
+
+function compareVersions(left, right) {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] > rightParts[index] ? 1 : -1;
+  }
+  return 0;
+}
 
 async function runAppsScript(functionName, parameters = []) {
   assertGoogleConfigured();

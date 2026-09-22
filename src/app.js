@@ -51,6 +51,7 @@ const state = {
   maintenanceView: "overview",
   production: { records: [], source: "loading", cachedAt: null, error: null },
   productionLoading: false,
+  update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
   specificationSearch: "",
@@ -122,6 +123,7 @@ async function bootstrap() {
   startAutomaticRefresh();
   startClock();
   registerServiceWorker();
+  void checkForUpdate();
   if (navigator.onLine) refreshFromSource({ silent: true }).then(() => syncRecords({ silent: true })).catch(error => toast(error.message, "warning"));
 }
 
@@ -392,6 +394,21 @@ async function handleClick(event) {
       await refreshFromSource();
       return;
     }
+    if (action === "check-update") {
+      await checkForUpdate({ announce: true });
+      return;
+    }
+    if (action === "install-update") {
+      if (!state.update.available || state.update.installing) return;
+      state.update.installing = true;
+      render();
+      const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update`, { method: "POST", headers: { Accept: "application/json" } });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || "Не удалось запустить обновление");
+      toast("Обновление скачивается и проверяется. Программа перезапустится через несколько секунд.", "success");
+      window.setTimeout(() => window.location.reload(), 9000);
+      return;
+    }
     if (action === "refresh-maintenance") {
       await refreshMaintenance();
       render();
@@ -608,6 +625,26 @@ async function refreshFromSource({ silent = false } = {}) {
     if (!silent) toast(failed ? failed.reason.message : "Данные обновлены.", failed ? "warning" : "success");
   } finally {
     setBusy(false);
+  }
+}
+
+async function checkForUpdate({ announce = false } = {}) {
+  try {
+    const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update-status`, { headers: { Accept: "application/json" } });
+    const result = await response.json();
+    state.update.checked = true;
+    state.update.available = response.ok && result.available === true;
+    state.update.version = state.update.available ? result.version : null;
+    state.update.message = state.update.available ? `Доступна версия ${result.version}` : "Новая версия не найдена";
+    if (state.update.available && announce) toast(`Доступна версия ${result.version}. Откройте «Настройки» → «Обновление программы».`, "warning");
+    if (!state.update.available && announce) toast(state.update.message, "success");
+    render();
+  } catch {
+    state.update.checked = true;
+    state.update.available = false;
+    state.update.message = "Не удалось проверить обновление";
+    if (announce) toast(state.update.message, "warning");
+    render();
   }
 }
 
@@ -1439,6 +1476,11 @@ function renderSettingsPage() {
           ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
           ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}
           ${settingRow("Часовой пояс", APP_CONFIG.timeZone, "Дата и время заполняются автоматически")}
+        </section>
+        <section class="card settings-section">
+          <div class="section-heading"><div><p class="eyebrow">Программа</p><h2>Обновление</h2></div><span class="status-pill ${state.update.available ? "warning" : "success"}">${state.update.available ? "Доступно" : "Актуально"}</span></div>
+          ${settingRow("Установлено", `Версия ${APP_CONFIG.version}`, state.update.checked ? (state.update.message || "Проверено при запуске") : "Проверяем наличие новой версии")}
+          ${state.update.available ? `<p class="settings-copy">Доступна версия <b>${escapeHtml(state.update.version)}</b>. Настройки Google и локальная очередь сохранятся.</p><button class="primary-button" data-action="install-update" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Устанавливаем…" : "Установить обновление"}</button>` : `<button class="secondary-button" data-action="check-update">Проверить сейчас</button>`}
         </section>
         <section class="card settings-section">
           <div class="section-heading"><div><p class="eyebrow">Интерфейс</p><h2>Язык и оформление</h2></div></div>
