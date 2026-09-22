@@ -36,6 +36,10 @@ const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
 const productionScrapRange = "'Брак'!A7:V500";
 const productionMachineColumns = Object.freeze({ A: 2, B: 3, D: 4, F: 5, H: 6, K: 7, L: 8, M: 9 });
+const nonconformitySpreadsheetId = "1ovuf2QW5KC4_CI1wAEUcufhZXfLreeJhN2PNVPtjlrk";
+const nonconformitySheetName = "Журнал";
+const nonconformityRange = "'Журнал'!A2:H";
+const nonconformityDictionaryRange = "'Справочник несоответсвий'!B2:B";
 const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 6);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
@@ -199,6 +203,25 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/packaging-records" && request.method === "DELETE") {
       if (!writesEnabled || (workstationRole !== "manager" && workstationRole !== "senior")) return sendJson(response, 403, { ok: false, message: "Удаление расхода упаковки недоступно" });
       return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
+    }
+    if (url.pathname === "/api/nonconformities" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      return sendJson(response, 200, await getNonconformitySnapshot());
+    }
+    if (url.pathname === "/api/nonconformities" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Вносить несоответствия могут только начальник участка и старший механик" });
+      return sendJson(response, 200, await createNonconformityRecord(await readJsonBody(request)));
+    }
+    if (url.pathname === "/api/nonconformities" && request.method === "PUT") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Исправлять несоответствия могут только начальник участка и старший механик" });
+      return sendJson(response, 200, await updateNonconformityRecord(await readJsonBody(request)));
+    }
+    if (url.pathname === "/api/nonconformities" && request.method === "DELETE") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Удалять несоответствия могут только начальник участка и старший механик" });
+      return sendJson(response, 200, await deleteNonconformityRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/specifications" && request.method === "GET") {
       const specifications = await runAppsScript("listProductSpecifications");
@@ -433,6 +456,62 @@ async function deletePackagingRecord(input) {
   const accessToken = await getAccessToken(); const sheetId = await getPackagingSheetId(accessToken);
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
   const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
+}
+
+async function getNonconformitySnapshot() {
+  const [journalRows, dictionaryRows] = await getGoogleSheetRanges(nonconformitySpreadsheetId, [nonconformityRange, nonconformityDictionaryRange]);
+  const rows = journalRows ?? [];
+  const headers = rows[0] ?? [];
+  if (headers.length < 8 || String(headers[0]).trim() !== "Дата") throw new Error("Изменилась структура журнала несоответствий");
+  return { ok: true, records: rows.slice(1).map((row, index) => nonconformityRecordFromRow(row, index + 3)).filter(Boolean), dictionary: { types: (dictionaryRows ?? []).slice(1).map(row => String(row[0] || "").trim()).filter(value => value && value !== "Вид несоответствия") } };
+}
+
+function nonconformityRecordFromRow(row, rowNumber) {
+  if (!row?.some(value => String(value || "").trim())) return null;
+  const date = googleSheetDate(row[0]);
+  if (!date) throw new Error("Проверьте дату в строке " + rowNumber + " журнала несоответствий");
+  return { id: "nonconformity-" + rowNumber, rowNumber, date, shift: String(row[1] || "").trim(), category: String(row[2] || "").trim(), type: String(row[3] || "").trim(), cause: String(row[4] || "").trim(), correctiveAction: String(row[5] || "").trim(), responsible: String(row[6] || "").trim(), status: String(row[7] || "").trim() };
+}
+
+function validateNonconformityRecord(input) {
+  const text = (key, label, limit = 5000) => { const value = String(input?.[key] || "").trim(); if (!value) throw new Error("Заполните поле «" + label + "»"); if (value.length > limit) throw new Error("Поле «" + label + "» слишком длинное"); return value; };
+  const date = String(input?.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw new Error("Некорректная дата несоответствия");
+  const shift = text("shift", "Смена", 2).toUpperCase();
+  if (!["A", "B"].includes(shift)) throw new Error("Смена должна быть A или B");
+  return { date, shift, category: text("category", "Категория", 180), type: text("type", "Вид несоответствия", 500), cause: text("cause", "Причина появления"), correctiveAction: text("correctiveAction", "Корректирующие действия"), responsible: text("responsible", "Ответственный", 180), status: text("status", "Отметка о выполнении", 100) };
+}
+
+async function createNonconformityRecord(input) {
+  const record = validateNonconformityRecord(input);
+  const accessToken = await getAccessToken();
+  const endpoint = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(nonconformitySpreadsheetId) + "/values/" + encodeURIComponent("'Журнал'!A:H") + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS";
+  const response = await fetch(endpoint, { method: "POST", headers: { Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, body: JSON.stringify({ values: [[displayDate(record.date), record.shift, record.category, record.type, record.cause, record.correctiveAction, record.responsible, record.status]] }), signal: AbortSignal.timeout(20_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось внести несоответствие");
+  const rowNumber = Number(String(payload.updates?.updatedRange || "").match(/!(?:[A-Z]+)(\d+):/)?.[1]);
+  return { ok: true, record: { ...record, id: "nonconformity-" + rowNumber, rowNumber } };
+}
+
+async function updateNonconformityRecord(input) {
+  const record = validateNonconformityRecord(input);
+  const id = String(input?.id || "");
+  const rowNumber = Number(id.match(/^nonconformity-(\d+)$/)?.[1]);
+  if (!Number.isInteger(rowNumber) || rowNumber < 3) throw new Error("Некорректный идентификатор записи");
+  const accessToken = await getAccessToken();
+  await setGoogleSheetRanges(nonconformitySpreadsheetId, accessToken, [{ range: "'Журнал'!A" + rowNumber + ":H" + rowNumber, values: [[displayDate(record.date), record.shift, record.category, record.type, record.cause, record.correctiveAction, record.responsible, record.status]] }]);
+  return { ok: true, record: { ...record, id, rowNumber } };
+}
+
+async function deleteNonconformityRecord(input) {
+  const rowNumber = Number(String(input?.id || "").match(/^nonconformity-(\d+)$/)?.[1]);
+  if (!Number.isInteger(rowNumber) || rowNumber < 3) throw new Error("Некорректный идентификатор записи");
+  const accessToken = await getAccessToken();
+  const sheetId = await getSheetId(nonconformitySpreadsheetId, nonconformitySheetName, accessToken);
+  const response = await fetch("https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(nonconformitySpreadsheetId) + ":batchUpdate", { method: "POST", headers: { Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowNumber - 1, endIndex: rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить несоответствие");
+  return { ok: true };
 }
 
 async function exportPackagingDaily(input) {

@@ -23,6 +23,9 @@ import { ProductionService, LINES as PRODUCTION_LINES } from "./services/product
 import { PackagingGatewayProvider } from "./providers/packaging-gateway-provider.js";
 import { PackagingRepository } from "./repositories/packaging-repository.js";
 import { PackagingService, PACKAGING_FIELDS } from "./services/packaging-service.js";
+import { NonconformityGatewayProvider } from "./providers/nonconformity-gateway-provider.js";
+import { NonconformityRepository } from "./repositories/nonconformity-repository.js";
+import { NonconformityService } from "./services/nonconformity-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -59,6 +62,8 @@ const state = {
   productionLoading: false,
   packaging: { records: [], operations: [], lastReadAt: null, error: null },
   packagingEntryItem: "",
+  nonconformities: { records: [], dictionary: { types: [] }, source: "loading", cachedAt: null, error: null },
+  nonconformityLoading: false,
   update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
@@ -82,6 +87,8 @@ let productSpecificationService;
 let cycloneService;
 let productionService;
 let packagingService;
+let nonconformityService;
+let nonconformityRefreshPromise = null;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -100,6 +107,7 @@ async function bootstrap() {
   packagingService = new PackagingService(new PackagingRepository(packagingStore,
     new PackagingGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.packaging = await packagingService.snapshot();
+  nonconformityService = new NonconformityService(store, new NonconformityRepository(new NonconformityGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
@@ -127,6 +135,7 @@ async function bootstrap() {
   state.workforce = await workforceService.snapshot();
   state.specifications = await productSpecificationService.snapshot();
   state.production = await productionService.snapshot();
+  state.nonconformities = await nonconformityService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
   state.language = normalizeLanguage(await store.preference("interfaceLanguage", "ru"));
@@ -357,6 +366,19 @@ async function handleClick(event) {
 
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
+    if (action === "add-nonconformity") { openNonconformityDialog(); return; }
+    if (action === "edit-nonconformity") { const record = state.nonconformities.records.find(item => item.id === id); if (record) openNonconformityDialog(record); return; }
+    if (action === "delete-nonconformity") {
+      const record = state.nonconformities.records.find(item => item.id === id);
+      if (!record || !window.confirm(`Удалить несоответствие «${record.type}» от ${formatDate(record.date)}?`)) return;
+      await nonconformityService.remove(record.id); await refreshNonconformities(); render(); toast("Запись удалена из журнала.", "success"); return;
+    }
+    if (action === "refresh-nonconformities") {
+      if (state.nonconformityLoading) return; state.nonconformityLoading = true; render();
+      try { await refreshNonconformities(); toast(state.nonconformities.error || "Журнал несоответствий обновлён.", state.nonconformities.error ? "warning" : "success"); }
+      finally { state.nonconformityLoading = false; render(); }
+      return;
+    }
     if (action === "new-packaging") { openPackagingDialog(); return; }
     if (action === "select-packaging-item") {
       state.packagingEntryItem = String(item || "");
@@ -404,6 +426,10 @@ async function handleClick(event) {
       }
       if (page === "packaging") {
         await refreshPackaging();
+        render();
+      }
+      if (page === "nonconformities") {
+        await refreshNonconformities();
         render();
       }
       return;
@@ -649,6 +675,15 @@ async function refreshCyclones(sync = false) {
 async function refreshPackaging(sync = false) {
   state.packaging = sync ? await packagingService.sync() : await packagingService.refresh();
   return state.packaging;
+}
+
+async function refreshNonconformities() {
+  if (!nonconformityRefreshPromise) {
+    nonconformityRefreshPromise = nonconformityService.refresh()
+      .then(snapshot => { state.nonconformities = snapshot; return snapshot; })
+      .finally(() => { nonconformityRefreshPromise = null; });
+  }
+  return nonconformityRefreshPromise;
 }
 
 async function refreshMaintenance() {
@@ -973,6 +1008,7 @@ function renderPage() {
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (state.page === "cyclones") return renderCyclonesPage();
   if (state.page === "packaging") return renderPackagingPage();
+  if (state.page === "nonconformities") return renderNonconformitiesPage();
   if (state.page === "maintenance") return renderMaintenancePage();
   if (state.page === "production") return renderProductionPage();
   if (state.page !== "dashboard" && MODULES.some(module => module.id === state.page)) return renderPlannedModulePage();
@@ -1402,6 +1438,19 @@ function renderPackagingPage() {
     `;
 }
 
+function renderNonconformitiesPage() {
+  const all = state.nonconformities.records ?? [];
+  const month = today().slice(0, 7);
+  const records = all.filter(record => record.date.startsWith(month)).sort((left, right) => right.date.localeCompare(left.date) || right.id.localeCompare(left.id));
+  const open = records.filter(record => !/^выполнено$/i.test(record.status)).length;
+  const categories = new Set(records.map(record => record.category).filter(Boolean));
+  const canWrite = ["manager", "senior"].includes(state.account?.role);
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · журнал и сводка</p><h2>Несоответствия</h2><p>Показан текущий месяц. Дата и смена берутся из табеля; виды несоответствий — из рабочего справочника.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-nonconformities" ${state.nonconformityLoading ? "disabled" : ""}>${state.nonconformityLoading ? "Обновляем…" : "Обновить"}</button>${canWrite ? `<button class="primary-button" data-action="add-nonconformity">+ Новое несоответствие</button>` : ""}</div></section>
+    ${state.nonconformities.error ? `<p class="form-error">${escapeHtml(state.nonconformities.error)}</p>` : ""}
+    <div class="dashboard-grid production-metrics"><article class="metric-card"><span>За текущий месяц</span><strong>${records.length}</strong><small>записей</small></article><article class="metric-card"><span>Требуют завершения</span><strong>${open}</strong><small>статус не «Выполнено»</small></article><article class="metric-card"><span>Категории</span><strong>${categories.size}</strong><small>за текущий месяц</small></article></div>
+    <section class="card table-card"><div class="table-toolbar"><strong>${monthTitle(month)}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")}</span></div><div class="table-scroll"><table><thead><tr><th>Дата</th><th>Смена</th><th>Категория</th><th>Вид</th><th>Причина</th><th>Корректирующие действия</th><th>Ответственный</th><th>Статус</th>${canWrite ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${formatDate(record.date)}</td><td><strong>${escapeHtml(record.shift)}</strong></td><td>${escapeHtml(record.category)}</td><td>${escapeHtml(record.type)}</td><td>${escapeHtml(record.cause)}</td><td>${escapeHtml(record.correctiveAction)}</td><td>${escapeHtml(record.responsible)}</td><td><span class="status-pill ${/^выполнено$/i.test(record.status) ? "success" : "warning"}">${escapeHtml(record.status)}</span></td>${canWrite ? `<td><div class="row-actions"><button class="small-button" data-action="edit-nonconformity" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-nonconformity" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canWrite ? 9 : 8}">За текущий месяц записей нет.</td></tr>`}</tbody></table></div></section>`;
+}
+
 function shortPackagingLabel(label) {
   return label.replace(", шт", "").replace(", рул", "");
 }
@@ -1532,6 +1581,31 @@ function openProductionDialog(record = null) {
       else await productionService.create({ ...data, requestId: `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people);
       dialog.close(); await refreshProduction(); render(); toast(record ? "Исправления сохранены в обоих листах журнала." : "Запись сохранена в оба листа журнала.", "success");
     } catch (error) { showFormError(form, error); submit.disabled = false; }
+  });
+  dialog.showModal();
+}
+
+function openNonconformityDialog(record = null) {
+  if (!record && !state.shift?.active) { toast("Сначала заполните табель и начните смену.", "warning"); return; }
+  const people = [...new Set([...(operationalAuthorNames() ?? []), ...(record?.responsible ? [record.responsible] : [])])];
+  const records = state.nonconformities.records ?? [];
+  const categories = [...new Set(["Смесь", "Банка, крышка", "Вода", "Паучи", ...records.map(item => item.category)])].filter(Boolean).sort((a, b) => a.localeCompare(b, "ru"));
+  const types = state.nonconformities.dictionary?.types ?? [];
+  const statuses = ["Выполнено", "В работе", "Ожидает решения"];
+  const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  const dialog = createDialog(`<form class="dialog-card production-dialog"><div class="dialog-heading"><div><p class="eyebrow">Журнал несоответствий</p><h2>${record ? "Исправить запись" : "Новое несоответствие"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Дата и смена определяются по текущему табелю. Все поля сохраняются непосредственно в основной лист журнала.</p>
+    <div class="form-grid">${formField("nonconf-date", "Дата", `<input id="nonconf-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("nonconf-shift", "Смена", `<input id="nonconf-shift" name="shift" value="${attribute(record?.shift || productionShiftCode())}" readonly>`)}${formField("nonconf-category", "Категория", `<select id="nonconf-category" name="category" required>${optionList(categories, "Выберите категорию")}</select>`)}${formField("nonconf-type", "Вид несоответствия", `<select id="nonconf-type" name="type" required>${optionList(types, "Выберите вид")}</select>`)}</div>
+    ${formField("nonconf-cause", "Причина появления", `<textarea id="nonconf-cause" name="cause" rows="3" maxlength="5000" required></textarea>`)}
+    ${formField("nonconf-action", "Корректирующие действия", `<textarea id="nonconf-action" name="correctiveAction" rows="3" maxlength="5000" required></textarea>`)}
+    <div class="form-grid">${formField("nonconf-responsible", "Ответственный", `<select id="nonconf-responsible" name="responsible" required>${optionList(people, "Выберите присутствующего")}</select>`)}${formField("nonconf-status", "Отметка о выполнении", `<select id="nonconf-status" name="status" required>${optionList(statuses, "Выберите статус")}</select>`)}</div>
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить исправления" : "Внести в журнал"}</button></div></form>`);
+  const form = dialog.querySelector("form");
+  if (record) { form.elements.category.value = record.category; form.elements.type.value = record.type; form.elements.cause.value = record.cause; form.elements.correctiveAction.value = record.correctiveAction; form.elements.responsible.value = record.responsible; form.elements.status.value = record.status; }
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); const data = Object.fromEntries(new FormData(form)); const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    try { if (record) await nonconformityService.update(record.id, data, people); else await nonconformityService.create({ ...data, requestId: `nonconformity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people); dialog.close(); await refreshNonconformities(); render(); toast(record ? "Исправления сохранены в журнале." : "Несоответствие внесено в журнал.", "success"); }
+    catch (error) { showFormError(form, error); submit.disabled = false; }
   });
   dialog.showModal();
 }
