@@ -1957,8 +1957,9 @@ function openShiftGuestDialog() {
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Добавить в смену</button></div>
     </form>`);
   const form = dialog.querySelector("[data-shift-guest-form]");
-  form.addEventListener("submit", event => {
+  form.addEventListener("submit", async event => {
     event.preventDefault();
+    const submit = form.querySelector('[type="submit"]');
     const data = new FormData(form);
     const employee = activePersonnel().find(item => item.id === String(data.get("employeeId") || ""));
     const substitutionReason = String(data.get("substitutionReason") || "");
@@ -1967,8 +1968,28 @@ function openShiftGuestDialog() {
       return;
     }
     state.shiftGuests = [...state.shiftGuests.filter(item => item.employeeId !== employee.id), { employeeId: employee.id, substitutionReason, homeShiftTeamId: employee.shiftTeamId }];
+    if (state.shift?.active) {
+      submit.disabled = true;
+      const guestAttendance = { employeeId: employee.id, status: "11", isSubstitute: true, substitutionReason, homeShiftTeamId: employee.shiftTeamId };
+      const attendance = [...state.shift.attendance.filter(item => item.employeeId !== employee.id), guestAttendance];
+      try {
+        const save = () => workforceService.saveAttendance({ date: today(), shiftTeamId: teamId, employeeId: employee.id, value: "11", substitutionReason, homeShiftTeamId: employee.shiftTeamId });
+        if (state.shift.supervisor) {
+          workforceActor = { performer: state.shift.supervisor };
+          await save();
+        } else await withWorkforceActor(save, attendanceAuthorNames(teamId));
+        state.shift = await shiftService.updateAttendance(attendance);
+        state.shiftGuests = state.shiftGuests.filter(item => item.employeeId !== employee.id);
+        sendWorkforceInBackground();
+      } catch (error) {
+        submit.disabled = false;
+        showFormError(form, error);
+        return;
+      }
+    }
     dialog.close();
     render();
+    toast(`${employee.fullName} добавлен${state.shift?.active ? " в табель и" : " в состав"} текущей смены.`, "success");
   });
   dialog.showModal();
 }
