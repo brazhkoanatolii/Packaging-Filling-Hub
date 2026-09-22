@@ -50,6 +50,7 @@ const state = {
   maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
   maintenanceView: "overview",
   production: { records: [], source: "loading", cachedAt: null, error: null },
+  productionLoading: false,
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
   specificationSearch: "",
@@ -63,6 +64,7 @@ let authService;
 let shiftService;
 let repository;
 let journalService;
+let productionRefreshPromise = null;
 let workforceService;
 let workforceRepository;
 let productSpecificationService;
@@ -396,8 +398,16 @@ async function handleClick(event) {
       return;
     }
     if (action === "refresh-production") {
-      await refreshProduction(); render();
-      toast(state.production.error || "Журнал продукции обновлён из Google Sheets.", state.production.error ? "warning" : "success");
+      if (state.productionLoading) return;
+      state.productionLoading = true;
+      render();
+      try {
+        await refreshProduction();
+        toast(state.production.error || "Журнал продукции обновлён из Google Sheets.", state.production.error ? "warning" : "success");
+      } finally {
+        state.productionLoading = false;
+        render();
+      }
       return;
     }
     if (action === "add-production") { openProductionDialog(); return; }
@@ -571,8 +581,15 @@ async function refreshMaintenance() {
 }
 
 async function refreshProduction() {
-  state.production = await productionService.refresh();
-  return state.production;
+  if (!productionRefreshPromise) {
+    productionRefreshPromise = productionService.refresh()
+      .then(snapshot => {
+        state.production = snapshot;
+        return snapshot;
+      })
+      .finally(() => { productionRefreshPromise = null; });
+  }
+  return productionRefreshPromise;
 }
 
 async function refreshFromSource({ silent = false } = {}) {
@@ -805,7 +822,8 @@ function renderProductionPage() {
   const totalScrap = records.reduce((sum, item) => sum + Number(item.scrapKg || 0), 0);
   const totalCanScrap = records.reduce((sum, item) => sum + Number(item.canScrapKg || 0), 0);
   const canAdd = state.account?.role === "manager" || state.account?.role === "senior";
-  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Запись завершённого продукта переносится одновременно в оба рабочих листа. Показан текущий день; линии идут по алфавиту.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production">Обновить</button>${canAdd ? `<button class="primary-button" data-action="add-production">+ Завершить продукт</button>` : ""}</div></section>
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Запись завершённого продукта переносится одновременно в оба рабочих листа. Показан текущий день; линии идут по алфавиту.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production" ${state.productionLoading ? "disabled" : ""}>${state.productionLoading ? "Обновляем…" : "Обновить"}</button>${canAdd ? `<button class="primary-button" data-action="add-production" ${state.productionLoading ? "disabled" : ""}>+ Завершить продукт</button>` : ""}</div></section>
+    ${state.productionLoading ? '<p class="module-note" role="status">Получаем данные из Google Sheets. Это может занять до 30 секунд.</p>' : ""}
     ${state.production.error ? `<p class="form-error">${escapeHtml(state.production.error)}</p>` : ""}
     <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)}</strong><small>шт. за сегодня</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
     <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · A → M</span></div><div class="table-scroll"><table><thead><tr><th>Начало</th><th>Окончание</th><th>Линия</th><th>Продукт</th><th>mg/g</th><th>Готово, шт</th><th>Брак продукции, кг</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${escapeHtml(record.product)}</td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatNumber(record.scrapKg)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 12 : 11}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>`;

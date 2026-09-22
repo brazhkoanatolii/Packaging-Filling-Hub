@@ -15,11 +15,13 @@ export class ProductionGatewayProvider {
       response = await this.fetch(`${this.baseUrl}/api/production-records`, {
         method,
         headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(30_000),
         ...(body ? { body: JSON.stringify(body) } : {})
       });
     } catch (cause) {
-      const error = new Error("Нет связи с журналом учёта продукции в Google");
+      const error = new Error(cause?.name === "TimeoutError"
+        ? "Google не ответил за 30 секунд. Попробуйте обновить позже — повторно нажимать кнопку не нужно."
+        : "Нет связи с журналом учёта продукции в Google");
       error.name = globalThis.navigator?.onLine ? "GatewayUnavailableError" : "OfflineError";
       error.cause = cause;
       throw error;

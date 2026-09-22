@@ -183,7 +183,8 @@ async function runAppsScript(functionName, parameters = []) {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ function: functionName, parameters, devMode: false })
+    body: JSON.stringify({ function: functionName, parameters, devMode: false }),
+    signal: AbortSignal.timeout(35_000)
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Google Apps Script недоступен");
@@ -204,7 +205,8 @@ async function getAccessToken() {
       client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
       refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN,
       grant_type: "refresh_token"
-    })
+    }),
+    signal: AbortSignal.timeout(15_000)
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.access_token) {
