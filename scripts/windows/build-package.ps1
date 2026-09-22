@@ -30,6 +30,11 @@ try {
     "INSTALL-HOME-MANAGER.cmd",
     "INSTALL-MANAGER.cmd",
     "INSTALL-SENIOR-MECHANIC.cmd",
+    "UPDATE-MANAGER-WORK.cmd",
+    "UPDATE-SENIOR-MECHANIC-WORK.cmd",
+    "CONNECT-GOOGLE.cmd",
+    "TEST-GOOGLE-CONNECTION.cmd",
+    "ENABLE-GOOGLE-WRITES.cmd",
     "VERIFY-INSTALLATION.cmd"
   )) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination (Join-Path $stagePath $file)
