@@ -2,7 +2,7 @@ const KEY = "googleWorkforceV1";
 const empty = () => ({ personnel: [], shiftTeams: [], attendance: [], vacations: [], years: [], ready: false });
 export class WorkforceRepository {
   constructor(store, provider, actor = () => ({})) {
-    this.store = store; this.provider = provider; this.actor = actor; this.serial = Promise.resolve(); this.lastError = null;
+    this.store = store; this.provider = provider; this.actor = actor; this.serial = Promise.resolve(); this.syncRunning = null; this.lastError = null;
   }
   exclusive(fn) {
     const run = () => globalThis.navigator?.locks ? navigator.locks.request("packaging-workforce", fn) : fn();
@@ -35,29 +35,53 @@ export class WorkforceRepository {
     });
   }
   async sync() {
+    if (this.syncRunning) return this.syncRunning;
+    this.syncRunning = this.performSync().finally(() => { this.syncRunning = null; });
+    return this.syncRunning;
+  }
+  async performSync() {
+    // Network calls deliberately run outside exclusive().  A new local form
+    // save can therefore join the queue while Google is still processing an
+    // earlier item instead of waiting up to the request timeout.
+    while (true) {
+      const operation = await this.exclusive(async () => {
+        const data = await this.load();
+        const next = data.pending.find(item => item.status === "pending");
+        if (!next) return null;
+        next.attempted = true;
+        await this.store.setPreference(KEY, data);
+        return structuredClone(next);
+      });
+      if (!operation) break;
+      try {
+        const result = await this.provider.write(operation);
+        await this.exclusive(async () => {
+          const data = await this.load();
+          const current = data.pending.find(item => item.requestId === operation.requestId);
+          if (!current) return;
+          const index = data.confirmed[current.kind].findIndex(item => item.id === result.record.id);
+          if (index < 0) data.confirmed[current.kind].push(result.record); else data.confirmed[current.kind][index] = result.record;
+          data.pending = data.pending.filter(item => item.requestId !== operation.requestId);
+          await this.store.setPreference(KEY, data);
+        });
+      } catch (error) {
+        this.lastError = error.message;
+        await this.exclusive(async () => {
+          const data = await this.load();
+          const current = data.pending.find(item => item.requestId === operation.requestId);
+          if (!current) return;
+          if (error.conflict || error.status === 409) current.status = "conflict";
+          else if ([400, 403, 422].includes(error.status)) current.status = "error";
+          else { await this.store.setPreference(KEY, data); throw error; }
+          current.error = error.message;
+          await this.store.setPreference(KEY, data);
+        });
+      }
+    }
+    const remote = await this.provider.snapshot();
+    if (!Array.isArray(remote.personnel) || !Array.isArray(remote.shiftTeams) || !Array.isArray(remote.attendance) || !Array.isArray(remote.vacations)) throw new Error("Google вернул неполный список журналов");
     return this.exclusive(async () => {
       const data = await this.load();
-      for (const op of data.pending) {
-        if (op.status !== "pending") continue;
-        op.attempted = true;
-        await this.store.setPreference(KEY, data);
-        try {
-          const result = await this.provider.write(op);
-          const index = data.confirmed[op.kind].findIndex(x => x.id === result.record.id);
-          if (index < 0) data.confirmed[op.kind].push(result.record); else data.confirmed[op.kind][index] = result.record;
-          op.status = "sent";
-        } catch (error) {
-          this.lastError = error.message;
-          if (error.conflict || error.status === 409) op.status = "conflict";
-          else if ([400, 403, 422].includes(error.status)) op.status = "error";
-          else { await this.store.setPreference(KEY, data); throw error; }
-          op.error = error.message;
-        }
-        data.pending = data.pending.filter(item => item.status !== "sent");
-        await this.store.setPreference(KEY, data);
-      }
-      const remote = await this.provider.snapshot();
-      if (!Array.isArray(remote.personnel) || !Array.isArray(remote.shiftTeams) || !Array.isArray(remote.attendance) || !Array.isArray(remote.vacations)) throw new Error("Google вернул неполный список журналов");
       // A browser can lose the response after Google has already saved an attendance
       // row. Treat that as delivered only when the remote row is exactly the same;
       // never discard a genuine conflicting correction.

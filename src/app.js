@@ -212,6 +212,7 @@ async function handleChange(event) {
       state.workforce = await workforceService.snapshot();
       render();
       toast("Табель сохранён.", "success");
+      sendWorkforceInBackground();
     } catch (error) {
       toast(error.message || "Не удалось сохранить табель.", "error");
     }
@@ -263,6 +264,7 @@ async function handleSubmit(event) {
       state.workforce = await workforceService.snapshot();
       render();
       toast("Настройки смены сохранены.", "success");
+      sendWorkforceInBackground();
     } catch (error) {
       toast(error.message || "Не удалось сохранить настройки смены.", "error");
     }
@@ -512,6 +514,7 @@ async function handleClick(event) {
       state.workforce = await workforceService.snapshot();
       render();
       toast("Статус сотрудника изменён.", "success");
+      sendWorkforceInBackground();
       return;
     }
     if (action === "add-specification") {
@@ -673,6 +676,13 @@ async function syncRecords({ silent = false } = {}) {
     state.syncing = false;
     render();
   }
+}
+
+function syncInBackground() {
+  if (!navigator.onLine) return;
+  // All forms have already committed their data to IndexedDB.  Do not keep a
+  // completed form waiting on Google; one running sync is shared by later saves.
+  void syncRecords({ silent: true });
 }
 
 function startAutomaticRefresh() {
@@ -1739,7 +1749,7 @@ function openScaleWalkDialog() {
       toast(entries.length === SCALES.length
         ? (state.shift?.requiresScaleControl ? "Все 13 весов проверены. Рабочие разделы открыты." : "Все 13 весов проверены и сохранены.")
         : `Сохранено показаний: ${entries.length}. Для завершения контроля нужны все 13 весов.`, entries.length === SCALES.length ? "success" : "warning");
-      await syncRecords({ silent: true });
+      syncInBackground();
     } catch (error) {
       showWalkError(error.message || "Не удалось сохранить обход");
       button.disabled = false;
@@ -1792,7 +1802,7 @@ function openRecordDialog(id = null) {
       await reloadLocalState();
       render();
       toast(existing ? "Исправление сохранено." : "Запись сохранена.", "success");
-      await syncRecords({ silent: true });
+      syncInBackground();
     } catch (error) {
       showFormError(form, error);
       submitButton.disabled = false;
@@ -1822,7 +1832,7 @@ function openAnnulDialog(id) {
       await reloadLocalState();
       render();
       toast("Запись аннулирована.", "success");
-      await syncRecords({ silent: true });
+      syncInBackground();
     } catch (error) {
       showFormError(event.currentTarget, error);
     }
@@ -1871,6 +1881,7 @@ function openEmployeeDialog(id = null) {
       dialog.close();
       render();
       toast("Сотрудник сохранён.", "success");
+      sendWorkforceInBackground();
     } catch (error) {
       showFormError(form, error);
       button.disabled = false;
@@ -2014,6 +2025,7 @@ function openVacationDialog(id = null) {
       dialog.close();
       render();
       toast("Период отпуска сохранён.", "success");
+      sendWorkforceInBackground();
     } catch (error) {
       showFormError(form, error);
       button.disabled = false;
