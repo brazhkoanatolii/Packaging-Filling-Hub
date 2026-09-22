@@ -58,6 +58,7 @@ const state = {
   production: { records: [], source: "loading", cachedAt: null, error: null },
   productionLoading: false,
   packaging: { records: [], operations: [], lastReadAt: null, error: null },
+  packagingEntryItem: "",
   update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
@@ -238,6 +239,29 @@ async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
+  if (form.dataset.form === "packaging-quick") {
+    const data = Object.fromEntries(new FormData(form));
+    const authors = packagingAuthorNames();
+    const submit = form.querySelector('[type="submit"]');
+    if (!authors.includes(String(data.author || ""))) {
+      showFormError(form, "Выберите присутствующего ответственного за смену.");
+      return;
+    }
+    submit.disabled = true;
+    try {
+      await packagingService.add({ date: today(), ...data }, state.account);
+      state.packaging = await packagingService.snapshot();
+      state.packagingEntryItem = String(data.item || "");
+      render();
+      focusPackagingQuantity();
+      toast("Расход сохранён. Итог за сегодня обновлён.", "success");
+      if (navigator.onLine) void refreshPackaging(true).then(() => render());
+    } catch (error) {
+      showFormError(form, error.message || "Не удалось сохранить расход.");
+      submit.disabled = false;
+    }
+    return;
+  }
   if (form.dataset.form === "login") {
     const data = new FormData(form);
     try {
@@ -334,11 +358,17 @@ async function handleSubmit(event) {
 async function handleClick(event) {
   const actionElement = event.target.closest("[data-action]");
   if (!actionElement) return;
-  const { action, id, page, accountId } = actionElement.dataset;
+  const { action, id, page, accountId, item } = actionElement.dataset;
 
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
     if (action === "new-packaging") { openPackagingDialog(); return; }
+    if (action === "select-packaging-item") {
+      state.packagingEntryItem = String(item || "");
+      render();
+      focusPackagingQuantity();
+      return;
+    }
     if (action === "edit-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record) openPackagingEditDialog(record); return; }
     if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } return; }
     if (action === "sync-packaging") {
@@ -1369,15 +1399,25 @@ function renderPackagingPage() {
   const { records, operations, lastReadAt, error } = state.packaging;
   const status = error ? `Google недоступен: ${error}` : lastReadAt ? `Последнее чтение Google: ${formatDateTime(lastReadAt)}` : "Связь с Google ещё не проверена";
   const pending = new Map(operations.map(operation => [operation.record.id, operation]));
+  const current = records.find(record => record.date === today());
+  const selected = PACKAGING_FIELDS.find(field => field.key === state.packagingEntryItem) ?? null;
+  const authors = packagingAuthorNames();
+  const canSubmit = Boolean(selected && authors.length);
   return `<section class="card cyclone-heading"><div><p class="eyebrow">Google Sheets · одна таблица</p><h2>Расход упаковки</h2><p>${escapeHtml(status)}</p>
     ${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются только в очередь этого компьютера.</p>' : ""}
     <p>В очереди: <strong>${operations.length}</strong>${operations.length ? ". Можно вносить следующие данные, не дожидаясь Google." : "."}</p></div>
-    <div class="dialog-actions"><button class="secondary-button" data-action="sync-packaging">Обновить и отправить очередь</button><button class="primary-button" data-action="new-packaging">+ Внести расход</button></div></section>
+    <div class="dialog-actions"><button class="secondary-button" data-action="sync-packaging">Обновить и отправить очередь</button></div></section>
+    <section class="packaging-workspace"><article class="card packaging-catalog"><div class="section-heading"><div><p class="eyebrow">Сегодня</p><h2>Вид упаковки</h2><p>Нажмите на нужную позицию. Рядом показан уже взятый итог за день.</p></div></div><div class="packaging-item-list">${PACKAGING_FIELDS.map(field => { const total = Number(current?.values?.[field.key] || 0); const active = selected?.key === field.key; return `<button type="button" class="packaging-item ${active ? "selected" : ""}" data-action="select-packaging-item" data-item="${attribute(field.key)}"><span><strong>${escapeHtml(shortPackagingLabel(field.label))}</strong><small>Уже взято сегодня</small></span><b>${formatNumber(total)} <small>${escapeHtml(packagingUnit(field))}</small></b></button>`; }).join("")}</div></article>
+    <form class="card packaging-entry-panel" data-form="packaging-quick"><p class="eyebrow">Быстрый ввод</p><h2>${selected ? escapeHtml(shortPackagingLabel(selected.label)) : "Выберите упаковку"}</h2><p class="packaging-current-total">${selected ? `Уже взято: <strong>${formatNumber(Number(current?.values?.[selected.key] || 0))} ${escapeHtml(packagingUnit(selected))}</strong>` : "Сначала выберите позицию слева."}</p><input type="hidden" name="item" value="${attribute(selected?.key || "")}">${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="0" required ${selected ? "" : "disabled"}>`, "Только целое положительное число", "full")}${formField("packaging-author", "Кто внёс данные", `<select id="packaging-author" name="author" required ${authors.length ? "" : "disabled"}><option value="">Выберите ответственного</option>${authors.map(name => `<option ${authors.length === 1 ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>`, authors.length ? "Только присутствующий старший механик, механик или назначающий их подменный ответственный." : "Сначала начните смену и отметьте присутствующих.", "full")}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="submit" class="primary-button packaging-submit" ${canSubmit ? "" : "disabled"}>Сохранить расход</button></div></form></section>
     <section class="card settings-table-wrap"><h3>Итоги по дням</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Внёс данные</th><th>Состояние</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${escapeHtml(record.author)}</td><td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td><td><div class="row-actions"><button class="small-button" data-action="edit-packaging" data-id="${attribute(record.id)}">Изменить</button><button class="more-button" data-action="delete-packaging" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 4}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
 }
 
 function shortPackagingLabel(label) {
   return label.replace(", шт", "").replace(", рул", "");
+}
+
+function packagingUnit(field) {
+  return field.label.includes(", рул") ? "рул." : "шт.";
 }
 
 function renderCyclonesPage() {
@@ -2615,6 +2655,16 @@ function operationalAuthorNames() {
   return attendanceAuthorNames(teamId);
 }
 
+function packagingAuthorNames() {
+  const present = presentShiftPersonnel();
+  const names = new Set(present
+    .filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role))
+    .map(employee => employee.fullName));
+  const responsible = state.shift?.supervisor || state.shiftResponsible?.fullName || "";
+  if (responsible && present.some(employee => employee.fullName === responsible)) names.add(responsible);
+  return [...names].sort((left, right) => left.localeCompare(right, "ru"));
+}
+
 function showInlineFormError(form, message) {
   const panel = form.querySelector("#attendance-form-error");
   if (!panel) return;
@@ -2657,24 +2707,13 @@ function formatNumber(value) {
 }
 
 function openPackagingDialog() {
-  const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><div><p class="eyebrow">Расход упаковки</p><h2>Внести расход</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-    <p>Выберите упаковку и укажите полученное количество. Программа прибавит его к итогу текущего дня. Автор: <strong>${escapeHtml(state.account.title)}</strong>.</p>
-    ${formField("packaging-date", "Дата", `<input id="packaging-date" name="date" type="date" value="${today()}" readonly required>`)}
-    <div class="form-grid">${formField("packaging-item", "Вид упаковки", `<select id="packaging-item" name="item" required><option value="">Выберите упаковку</option>${PACKAGING_FIELDS.map(field => `<option value="${field.key}">${escapeHtml(field.label)}</option>`).join("")}</select>`)}${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="0.001" step="0.001" inputmode="decimal" required>` )}</div>
-    <p>Запись сначала сохранится на этом компьютере и автоматически отправится в единую таблицу Google.</p>
-    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить расход</button></div></form>`);
-  let saving = false;
-  dialog.querySelector("form").addEventListener("submit", async event => {
-    event.preventDefault(); if (saving) return; saving = true;
-    const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-    try {
-      await packagingService.add(Object.fromEntries(new FormData(form)), state.account);
-      dialog.close(); state.packaging = await packagingService.snapshot(); render();
-      toast("Расход сохранён на этом компьютере. Отправка в Google выполняется в фоне.", "success");
-      if (navigator.onLine) { void refreshPackaging(true).then(() => render()); }
-    } catch (error) { showFormError(form, error); saving = false; submit.disabled = false; }
-  });
-  dialog.showModal();
+  state.packagingEntryItem = state.packagingEntryItem || PACKAGING_FIELDS[0]?.key || "";
+  render();
+  focusPackagingQuantity();
+}
+
+function focusPackagingQuantity() {
+  window.setTimeout(() => root.querySelector("#packaging-quantity:not(:disabled)")?.focus(), 0);
 }
 
 function openPackagingEditDialog(record) {
