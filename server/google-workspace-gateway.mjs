@@ -14,7 +14,7 @@ const writesEnabled = process.env.GOOGLE_WRITES_ENABLED === "true";
 const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
-const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub/main/update-manifest.json";
+const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub-Updates/main/update-manifest.json";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
 const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
