@@ -33,6 +33,7 @@ class MemoryProvider {
   async get(name, id) { return this.bucket(name).get(id); }
   async getAll(name) { return [...this.bucket(name).values()]; }
   async put(name, value) { this.bucket(name).set(value.id, structuredClone(value)); return value; }
+  async delete(name, id) { this.bucket(name).delete(id); }
 }
 
 class RemoteProvider {
@@ -95,4 +96,20 @@ test("ошибка сети оставляет операцию в очеред�
   const [operation] = await repository.pendingOperations();
   assert.equal(operation.state, "pending");
   assert.equal(operation.attempts, 1);
+});
+
+test("после обновления из Google удаляется только устаревший синхронизированный кэш", async () => {
+  const local = new MemoryProvider();
+  const remote = new RemoteProvider();
+  remote.list = async () => [record({ id: "google-current", source: "google", syncState: "synced" })];
+  await local.put("records", record({ id: "google-removed", source: "google", syncState: "synced" }));
+  await local.put("records", record({ id: "offline-pending", source: "local", syncState: "pending" }));
+  await local.put("operations", { id: "operation-1", recordId: "offline-pending", record: record({ id: "offline-pending" }), state: "pending", createdAt: "2026-09-21T18:00:00.000Z" });
+  const repository = new JournalRepository(local, remote);
+
+  await repository.refresh();
+
+  assert.equal(await local.get("records", "google-removed"), undefined);
+  assert.ok(await local.get("records", "google-current"));
+  assert.ok(await local.get("records", "offline-pending"));
 });
