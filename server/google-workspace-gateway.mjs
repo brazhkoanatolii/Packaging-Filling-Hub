@@ -21,7 +21,6 @@ const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
 const packagingSheetName = "Лист";
 const packagingRange = "'Лист'!B2:M";
 const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
-const packagingHeaders = Object.freeze(["Дата", "Коробки с логотипом GARANT 430x285x255, шт", "Коробки с логотипом Garant (узкая) 570x210x249, шт", "Бумага Dochems 37 GSM, рул", "Банка килла прозрачная", "Банка килла зеленая", "Крышка килла зеленая", "Банка ДЗ прозрачная", "Банка ДЗ зеленая", "Крышка ДЗ черная", "Крышка ДЗ белая", "Внёс данные"]);
 const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
@@ -362,7 +361,7 @@ async function getPackagingSnapshot() {
   const values = await getGoogleSheetRanges(packagingSpreadsheetId, [packagingRange]);
   const rows = values[0] ?? [];
   const headers = rows[0] ?? [];
-  if (headers.length !== packagingHeaders.length || headers.some((header, index) => String(header).trim() !== packagingHeaders[index])) {
+  if (headers.length < 12 || String(headers[0]).trim() !== "Дата" || String(headers[11]).trim() !== "Внёс данные") {
     throw new Error("Изменилась структура журнала расхода упаковки");
   }
   const notes = await getPackagingDateNotes();
