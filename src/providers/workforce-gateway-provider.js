@@ -10,7 +10,7 @@ export class WorkforceGatewayProvider {
   }
   async request(method, operation) {
     const response = await fetch(`${this.baseUrl}/api/workforce`, {
-      method, cache: "no-store", signal: AbortSignal.timeout(method === "GET" ? 12_000 : 30_000),
+      method, cache: "no-store", signal: AbortSignal.timeout(method === "GET" ? 8_000 : 30_000),
       headers: operation ? { "Content-Type": "application/json" } : {},
       ...(operation ? { body: JSON.stringify(operation) } : {})
     });

@@ -39,7 +39,7 @@ const state = {
   loading: true,
   syncing: false,
   refreshing: false,
-  startupSync: { active: false, completed: 0, total: 6, current: "", failed: [], completedAt: null },
+  startupSync: { active: false, completed: 0, total: 7, current: "", failed: [], completedAt: null },
   lastRefresh: null,
   attendanceMonth: today().slice(0, 7),
   attendanceView: "start",
@@ -50,6 +50,7 @@ const state = {
   specifications: { specifications: [], source: "loading", cachedAt: null },
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
   maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
+  maintenanceDue: { records: [], source: "loading", cachedAt: null, error: null },
   maintenanceView: "overview",
   production: { records: [], source: "loading", cachedAt: null, error: null },
   productionLoading: false,
@@ -89,6 +90,7 @@ async function bootstrap() {
   cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
     new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.cyclones = await cycloneService.snapshot();
+  state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
@@ -647,15 +649,32 @@ async function refreshFromSource({ silent = false } = {}) {
   return refreshFromSourcePromise;
 }
 
+async function refreshMaintenanceDue() {
+  try {
+    const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance-due`, {
+      headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000)
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !Array.isArray(payload?.records)) throw new Error(payload?.message || "Не удалось загрузить сводку ТО");
+    state.maintenanceDue = { records: payload.records, source: "google", cachedAt: new Date().toISOString(), error: null };
+    await store.setPreference("maintenanceDueCache", state.maintenanceDue);
+  } catch (error) {
+    const cached = await store.preference("maintenanceDueCache", state.maintenanceDue);
+    state.maintenanceDue = { ...cached, error: error.message || "Не удалось загрузить сводку ТО" };
+  }
+  return state.maintenanceDue;
+}
+
 async function startStartupJournalSync() {
   if (startupSyncPromise) return startupSyncPromise;
   const tasks = [
-    ["Контроль весов", async () => { await repository.refresh(); await reloadLocalState(); }],
     ["Табель и персонал", async () => { state.workforce = workforceRepository ? await workforceRepository.refresh() : await workforceService.snapshot(); }],
+    ["Контроль весов", async () => { await repository.refresh(); await reloadLocalState(); }],
     ["Спецификации продуктов", async () => { await refreshSpecifications(); if (state.specifications.error) throw new Error(state.specifications.error); }],
-    ["Очистка циклонов", async () => { await refreshCyclones(); if (state.cyclones.error) throw new Error(state.cyclones.error); }],
+    ["Учёт продукции и брака", async () => { await refreshProduction(); if (state.production.error) throw new Error(state.production.error); }],
     ["Ремонт и ТО", async () => { await refreshMaintenance(); if (state.maintenance.error) throw new Error(state.maintenance.error); }],
-    ["Учёт продукции и брака", async () => { await refreshProduction(); if (state.production.error) throw new Error(state.production.error); }]
+    ["Сводка ТО", async () => { await refreshMaintenanceDue(); if (state.maintenanceDue.error) throw new Error(state.maintenanceDue.error); }],
+    ["Очистка циклонов", async () => { await refreshCyclones(); if (state.cyclones.error) throw new Error(state.cyclones.error); }]
   ];
   state.startupSync = { active: true, completed: 0, total: tasks.length, current: tasks[0][0], failed: [], completedAt: null };
   render();
@@ -982,25 +1001,17 @@ function renderDashboard() {
   const productionRecords = (state.production.records ?? []).filter(record => record.date === today());
   const totalQuantity = productionRecords.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
   const productScrap = productionRecords.reduce((sum, record) => sum + Number(record.scrapKg || 0), 0);
-  const canScrap = productionRecords.reduce((sum, record) => sum + Number(record.canScrapKg || 0), 0);
-  const boxes = productionRecords.reduce((sum, record) => sum + Number(record.boxes || record.boxCount || 0), 0);
+  const boxes = totalQuantity / 240;
+  const finishedMassKg = productionRecords.reduce((sum, record) => sum + productionRecordMassKg(record), 0);
+  const scrapPercent = finishedMassKg > 0 ? productScrap / finishedMassKg * 100 : null;
   const shiftPersonnel = presentShiftPersonnel();
   const packers = shiftPersonnel.filter(employee => employee.role === "packer");
-  const operators = shiftPersonnel.filter(employee => employee.role === "operator");
+  const operators = shiftPersonnel.filter(employee => employee.role === "mechanic-operator");
   const service = state.maintenance.service ?? { records: [], statistics: {} };
   const repair = state.maintenance.repair ?? { records: [], statistics: {} };
   const newest = records => [...records].sort((left, right) => String(right.date || "").localeCompare(String(left.date || "")));
   const latestRepair = newest(repair.records).slice(0, 10);
   const latestService = newest(service.records).slice(0, 5);
-  const lastService = latestService[0];
-  const topServiceMachine = newest(service.records).reduce((result, record) => {
-    const machine = String(record.machine || "").trim();
-    if (!machine) return result;
-    result.set(machine, (result.get(machine) || 0) + 1);
-    return result;
-  }, new Map());
-  const [frequentMachine, frequentMachineCount] = [...topServiceMachine.entries()]
-    .sort((left, right) => right[1] - left[1])[0] ?? ["—", 0];
   return `
     ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
@@ -1010,22 +1021,20 @@ function renderDashboard() {
       <article class="card dashboard-summary-card production-summary">
         <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
         <h2>Готовая продукция</h2>
-        <strong>${formatNumber(totalQuantity)} <small>шт.</small></strong>
-        <p>${boxes ? `${formatNumber(boxes)} ${plural(boxes, "коробка", "коробки", "коробок")}` : `${productionRecords.length} ${plural(productionRecords.length, "запись", "записи", "записей")} завершено`}</p>
+        <strong>${formatNumber(totalQuantity)} <small>шт.</small> / ${formatNumber(boxes)} <small>кор.</small></strong>
+        <p>${productionRecords.length} ${plural(productionRecords.length, "запись", "записи", "записей")} завершено · 240 шт. в коробке</p>
       </article>
       <article class="card dashboard-summary-card scrap-summary">
         <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
         <h2>Брак продукции</h2>
-        <strong>${formatNumber(productScrap)} <small>кг</small></strong>
-        <p>${canScrap ? `Брак банок: ${formatNumber(canScrap)} кг` : "Брак банок за смену не указан"}</p>
+        <strong>${formatNumber(productScrap)} <small>кг</small> / ${scrapPercent === null ? "—" : formatPercent(scrapPercent)} <small>%</small></strong>
+        <p>${finishedMassKg ? `Расчёт от ${formatNumber(finishedMassKg)} кг готового продукта` : "Процент появится после записи готовой продукции"}</p>
       </article>
       <article class="card dashboard-summary-card shift-summary">
         <p class="eyebrow">Состав текущей смены</p>
-        <h2>Люди на линии</h2>
-        <div class="dashboard-shift-roles">
-          ${renderDashboardRole("Упаковщики", packers)}
-          ${renderDashboardRole("Механики-операторы", operators)}
-        </div>
+        <h2>Упаковщики / механики-операторы</h2>
+        <strong>У-${packers.length} <small>/</small> М-${operators.length}</strong>
+        <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
       </article>
     </div>
     <section class="card dashboard-maintenance-card dashboard-repair-card">
@@ -1038,25 +1047,31 @@ function renderDashboard() {
         ${renderDashboardMaintenanceList(latestService, "ТО", 5)}
       </section>
       <section class="card dashboard-maintenance-card maintenance-overview-card">
-        <div class="section-heading"><div><p class="eyebrow">Таблица ТО</p><h2>Сводка по обслуживанию</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Все данные</button></div>
-        <dl class="maintenance-overview-list">
-          <div><dt>Всего записей ТО</dt><dd>${formatNumber(service.statistics.total || service.records.length)}</dd></div>
-          <div><dt>Станков с обслуживанием</dt><dd>${formatNumber(service.statistics.machinesWithRecords || topServiceMachine.size)}</dd></div>
-          <div><dt>Последнее ТО</dt><dd>${lastService ? formatDate(lastService.date) : "—"}</dd></div>
-          <div><dt>Чаще обслуживали</dt><dd>${frequentMachineCount ? `Станок ${escapeHtml(frequentMachine)} · ${frequentMachineCount}` : "—"}</dd></div>
-        </dl>
+        <div class="section-heading"><div><p class="eyebrow">Таблица ТО · выпуск</p><h2>Остаток до ТО</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Журнал ТО</button></div>
+        ${renderMaintenanceDueList(state.maintenanceDue)}
       </section>
     </div>`;
-}
-
-function renderDashboardRole(label, employees) {
-  const names = employees.map(employee => employee.fullName).filter(Boolean);
-  return `<div><span>${label}</span><strong>${names.length ? escapeHtml(names.join(", ")) : "Не отмечены"}</strong></div>`;
 }
 
 function renderDashboardMaintenanceList(records, kind, limit) {
   if (!records.length) return `<p class="dashboard-empty">В журнале ${kind} записей пока нет.</p>`;
   return `<div class="dashboard-maintenance-list">${records.slice(0, limit).map(record => `<article><time>${formatDate(record.date)}</time><div><strong>${escapeHtml(record.machine ? `Станок ${record.machine}` : kind)}${record.work ? ` · ${escapeHtml(record.work)}` : ""}</strong><small>${escapeHtml(record.performer || record.category || "Исполнитель не указан")}</small></div>${record.note ? `<span title="${attribute(record.note)}">${escapeHtml(record.note)}</span>` : ""}</article>`).join("")}</div>`;
+}
+
+function productionRecordMassKg(record) {
+  const specification = state.specifications.specifications.find(item =>
+    item.product === record.product && Number(item.variant) === Number(record.strength));
+  if (!specification) return 0;
+  const gramsPerPouch = Number(specification.wetMass) > 0 ? Number(specification.wetMass) : Number(specification.dryMass);
+  const pouchesPerCan = Number(specification.pouchCount);
+  if (!Number.isFinite(gramsPerPouch) || !Number.isFinite(pouchesPerCan) || gramsPerPouch <= 0 || pouchesPerCan <= 0) return 0;
+  return Number(record.quantity || 0) * gramsPerPouch * pouchesPerCan / 1000;
+}
+
+function renderMaintenanceDueList(snapshot) {
+  const records = snapshot?.records ?? [];
+  if (!records.length) return `<p class="dashboard-empty">${snapshot?.error ? "Сводка ТО пока недоступна. Показаны данные журнала после следующей проверки." : "Сводка ТО загружается."}</p>`;
+  return `<div class="maintenance-due-list">${records.map(record => `<article class="${record.status === "Скоро ТО" ? "warning" : ""}"><strong>${escapeHtml(record.line)}</strong><span>${formatNumber(record.remainingBoxes)} кор.</span><small>${escapeHtml(record.status || "В пределах интервала")}</small></article>`).join("")}</div>`;
 }
 
 function renderJournalReadiness() {
@@ -2593,6 +2608,10 @@ function monthDays(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
+}
+
+function formatPercent(value) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(Number(value));
 }
 
 function signedNumber(value) {

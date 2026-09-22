@@ -15,6 +15,8 @@ const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
 const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub/main/update-manifest.json";
+const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
+const maintenanceDueRange = "'ТО'!A6:H";
 const maximumBodyBytes = 1024 * 1024;
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -114,6 +116,10 @@ createServer(async (request, response) => {
       if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
       const result = await runAppsScript("getMaintenanceSnapshot");
       return sendJson(response, result?.ok === false ? 400 : 200, result);
+    }
+    if (url.pathname === "/api/maintenance-due" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      return sendJson(response, 200, await getMaintenanceDueSnapshot());
     }
     if (url.pathname === "/api/maintenance" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
@@ -280,6 +286,38 @@ async function getAccessToken() {
     })().finally(() => { tokenRefreshPromise = null; });
   }
   return tokenRefreshPromise;
+}
+
+async function getMaintenanceDueSnapshot() {
+  assertGoogleConfigured();
+  const accessToken = await getAccessToken();
+  const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(maintenanceDueSpreadsheetId)}/values/${encodeURIComponent(maintenanceDueRange)}?valueRenderOption=FORMATTED_VALUE`;
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(12_000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать сводку ТО");
+  const values = Array.isArray(payload.values) ? payload.values : [];
+  const rows = values.slice(1);
+  return {
+    ok: true,
+    records: rows.map(row => ({
+      line: String(row[0] || "").trim(),
+      lastService: String(row[1] || "").trim(),
+      intervalBoxes: googleNumber(row[2]),
+      producedBoxes: googleNumber(row[3]),
+      remainingBoxes: googleNumber(row[4]),
+      usedPercent: String(row[5] || "").trim(),
+      status: String(row[6] || "").trim()
+    })).filter(record => record.line && record.intervalBoxes > 0 && Number.isFinite(record.remainingBoxes))
+  };
+}
+
+function googleNumber(value) {
+  const normalized = String(value ?? "").replace(/\s/g, "").replace(",", ".");
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : NaN;
 }
 
 
