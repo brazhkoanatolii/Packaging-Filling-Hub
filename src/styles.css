@@ -439,7 +439,6 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .packaging-current-total { margin: 12px 0 4px; padding: 12px; border-radius: 11px; background: var(--surface-muted); color: var(--ink-500); }
 .packaging-current-total strong { color: var(--blue-600); font-size: 1.15rem; }
 .packaging-entry-panel #packaging-quantity { min-height: 66px; font-size: 2rem; font-weight: 800; text-align: center; }
-.packaging-entry-panel #packaging-author { min-height: 54px; font-size: 1rem; }
 .packaging-submit { min-height: 54px; font-size: 1rem; }
 
 .toast-region { position: fixed; right: 22px; bottom: 22px; z-index: 200; display: grid; gap: 9px; pointer-events: none; }

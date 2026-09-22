@@ -241,12 +241,7 @@ async function handleSubmit(event) {
   event.preventDefault();
   if (form.dataset.form === "packaging-quick") {
     const data = Object.fromEntries(new FormData(form));
-    const authors = packagingAuthorNames();
     const submit = form.querySelector('[type="submit"]');
-    if (!authors.includes(String(data.author || ""))) {
-      showFormError(form, "Выберите присутствующего ответственного за смену.");
-      return;
-    }
     submit.disabled = true;
     try {
       await packagingService.add({ date: today(), ...data }, state.account);
@@ -1401,15 +1396,14 @@ function renderPackagingPage() {
   const pending = new Map(operations.map(operation => [operation.record.id, operation]));
   const current = records.find(record => record.date === today());
   const selected = PACKAGING_FIELDS.find(field => field.key === state.packagingEntryItem) ?? null;
-  const authors = packagingAuthorNames();
-  const canSubmit = Boolean(selected && authors.length);
+  const canSubmit = Boolean(selected);
   return `<section class="card cyclone-heading"><div><p class="eyebrow">Google Sheets · одна таблица</p><h2>Расход упаковки</h2><p>${escapeHtml(status)}</p>
     ${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются только в очередь этого компьютера.</p>' : ""}
     <p>В очереди: <strong>${operations.length}</strong>${operations.length ? ". Можно вносить следующие данные, не дожидаясь Google." : "."}</p></div>
     <div class="dialog-actions"><button class="secondary-button" data-action="sync-packaging">Обновить и отправить очередь</button></div></section>
     <section class="packaging-workspace"><article class="card packaging-catalog"><div class="section-heading"><div><p class="eyebrow">Сегодня</p><h2>Вид упаковки</h2><p>Нажмите на нужную позицию. Рядом показан уже взятый итог за день.</p></div></div><div class="packaging-item-list">${PACKAGING_FIELDS.map(field => { const total = Number(current?.values?.[field.key] || 0); const active = selected?.key === field.key; return `<button type="button" class="packaging-item ${active ? "selected" : ""}" data-action="select-packaging-item" data-item="${attribute(field.key)}"><span><strong>${escapeHtml(shortPackagingLabel(field.label))}</strong><small>Уже взято сегодня</small></span><b>${formatNumber(total)} <small>${escapeHtml(packagingUnit(field))}</small></b></button>`; }).join("")}</div></article>
-    <form class="card packaging-entry-panel" data-form="packaging-quick"><p class="eyebrow">Быстрый ввод</p><h2>${selected ? escapeHtml(shortPackagingLabel(selected.label)) : "Выберите упаковку"}</h2><p class="packaging-current-total">${selected ? `Уже взято: <strong>${formatNumber(Number(current?.values?.[selected.key] || 0))} ${escapeHtml(packagingUnit(selected))}</strong>` : "Сначала выберите позицию слева."}</p><input type="hidden" name="item" value="${attribute(selected?.key || "")}">${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="0" required ${selected ? "" : "disabled"}>`, "Только целое положительное число", "full")}${formField("packaging-author", "Кто внёс данные", `<select id="packaging-author" name="author" required ${authors.length ? "" : "disabled"}><option value="">Выберите ответственного</option>${authors.map(name => `<option ${authors.length === 1 ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>`, authors.length ? "Только присутствующий старший механик, механик или назначающий их подменный ответственный." : "Сначала начните смену и отметьте присутствующих.", "full")}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="submit" class="primary-button packaging-submit" ${canSubmit ? "" : "disabled"}>Сохранить расход</button></div></form></section>
-    <section class="card settings-table-wrap"><h3>Итоги по дням</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Внёс данные</th><th>Состояние</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${escapeHtml(record.author)}</td><td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td><td><div class="row-actions"><button class="small-button" data-action="edit-packaging" data-id="${attribute(record.id)}">Изменить</button><button class="more-button" data-action="delete-packaging" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 4}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
+    <form class="card packaging-entry-panel" data-form="packaging-quick"><p class="eyebrow">Быстрый ввод</p><h2>${selected ? escapeHtml(shortPackagingLabel(selected.label)) : "Выберите упаковку"}</h2><p class="packaging-current-total">${selected ? `Уже взято: <strong>${formatNumber(Number(current?.values?.[selected.key] || 0))} ${escapeHtml(packagingUnit(selected))}</strong>` : "Сначала выберите позицию слева."}</p><input type="hidden" name="item" value="${attribute(selected?.key || "")}">${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="0" required ${selected ? "" : "disabled"}>`, "Новое количество будет прибавлено к итогу за сегодня. Только целое положительное число.", "full")}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="submit" class="primary-button packaging-submit" ${canSubmit ? "" : "disabled"}>Прибавить к итогу</button></div></form></section>
+    <section class="card settings-table-wrap"><h3>Итоги по дням</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Состояние</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td><td><div class="row-actions"><button class="small-button" data-action="edit-packaging" data-id="${attribute(record.id)}">Изменить</button><button class="more-button" data-action="delete-packaging" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 3}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
 }
 
 function shortPackagingLabel(label) {
@@ -2653,16 +2647,6 @@ function attendanceAuthorNames(teamId) {
 function operationalAuthorNames() {
   const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
   return attendanceAuthorNames(teamId);
-}
-
-function packagingAuthorNames() {
-  const present = presentShiftPersonnel();
-  const names = new Set(present
-    .filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role))
-    .map(employee => employee.fullName));
-  const responsible = state.shift?.supervisor || state.shiftResponsible?.fullName || "";
-  if (responsible && present.some(employee => employee.fullName === responsible)) names.add(responsible);
-  return [...names].sort((left, right) => left.localeCompare(right, "ru"));
 }
 
 function showInlineFormError(form, message) {

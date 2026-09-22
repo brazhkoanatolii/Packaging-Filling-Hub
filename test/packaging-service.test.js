@@ -13,19 +13,19 @@ class MemoryRepository {
   }
 }
 
-test("расход упаковки суммируется за день и сохраняет выбранного ответственного", async () => {
+test("расход упаковки суммируется в одной дневной записи без выбора автора", async () => {
   const repository = new MemoryRepository();
   const service = new PackagingService(repository);
-  const input = { date: getVilniusDate(), item: "garantBox430", quantity: "12", author: "Viktor Mini" };
-  await service.add(input, { title: "Начальник участка" });
-  const record = await service.add({ ...input, quantity: "8", author: "Albert Krevski" }, { title: "Начальник участка" });
+  const input = { date: getVilniusDate(), item: "garantBox430", quantity: "12" };
+  await service.add(input);
+  const record = await service.add({ ...input, quantity: "8" });
   assert.equal(record.values.garantBox430, 20);
-  assert.equal(record.author, "Albert Krevski");
+  assert.equal(record.author, undefined);
 });
 
 test("расход упаковки принимает только целое положительное количество", async () => {
   const service = new PackagingService(new MemoryRepository());
-  const base = { date: getVilniusDate(), item: "garantBox430", author: "Viktor Mini" };
+  const base = { date: getVilniusDate(), item: "garantBox430" };
   for (const quantity of ["", "0", "1.5", "-2"]) {
     await assert.rejects(service.add({ ...base, quantity }, { title: "Начальник участка" }), /целым положительным числом/);
   }

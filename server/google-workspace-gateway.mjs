@@ -367,7 +367,7 @@ async function getPackagingSnapshot() {
   const values = await getGoogleSheetRanges(packagingSpreadsheetId, [packagingRange]);
   const rows = values[0] ?? [];
   const headers = rows[0] ?? [];
-  if (headers.length < 12 || String(headers[0]).trim() !== "Дата" || String(headers[11]).trim() !== "Внёс данные") {
+  if (headers.length < 11 || String(headers[0]).trim() !== "Дата") {
     throw new Error("Изменилась структура журнала расхода упаковки");
   }
   const notes = await getPackagingDateNotes();
@@ -384,8 +384,7 @@ async function createPackagingRecord(input) {
   const receipt = `${packagingReceiptPrefix}${JSON.stringify({ id: record.id, requestId: record.requestId, workstationId: record.workstationId, createdAt: new Date().toISOString() })}`;
   const cells = [
     { userEnteredValue: { numberValue: serial }, note: receipt, userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } },
-    ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } })),
-    { userEnteredValue: { stringValue: record.author } }
+    ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } }))
   ];
   const request = existing ? { updateCells: { start: { sheetId, rowIndex: existing.rowNumber - 1, columnIndex: 1 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } } : { appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } };
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, {
@@ -395,7 +394,7 @@ async function createPackagingRecord(input) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось записать расход упаковки");
-  return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values, author: record.author } };
+  return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values } };
 }
 
 async function deletePackagingRecord(input) {
@@ -412,8 +411,6 @@ function validatePackagingRecord(input) {
   if (!/^[a-zA-Z0-9_-]{8,160}$/.test(id) || !/^[a-zA-Z0-9_-]{8,160}$/.test(requestId)) throw new Error("Некорректный идентификатор записи");
   const date = String(input.date || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw new Error("Некорректная дата расхода упаковки");
-  const author = String(input.author || "").trim();
-  if (!author || author.length > 120 || /^[=+@-]/.test(author)) throw new Error("Некорректный автор записи");
   const values = Object.fromEntries(packagingKeys.map(key => {
     const value = Number(input.values?.[key]);
     if (!Number.isFinite(value) || value < 0) throw new Error("Некорректный расход упаковки");
@@ -444,11 +441,11 @@ async function getPackagingSheetId(accessToken) {
 
 function packagingRecordFromRow(row, rowNumber, note) {
   if (!row?.some(value => value !== "" && value !== undefined)) return null;
-  const date = googleSerialToDate(row[0]); const author = String(row[11] || "").trim();
-  if (!date || !author) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
+  const date = googleSerialToDate(row[0]);
+  if (!date) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
   let receipt = {};
   if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }
-  return { id: `packaging-day-${date}`, requestId: receipt.requestId || "", rowNumber, date, values: Object.fromEntries(packagingKeys.map((key, index) => [key, Number(row[index + 1] || 0)])), author };
+  return { id: `packaging-day-${date}`, requestId: receipt.requestId || "", rowNumber, date, values: Object.fromEntries(packagingKeys.map((key, index) => [key, Number(row[index + 1] || 0)])) };
 }
 
 function googleSerialToDate(value) {
