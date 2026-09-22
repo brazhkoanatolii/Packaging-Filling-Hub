@@ -979,39 +979,84 @@ function renderPlannedModulePage() {
 }
 
 function renderDashboard() {
-  const active = state.records.filter(record => record.status !== "Аннулировано");
-  const within = active.filter(record => record.result === "В пределах допуска").length;
-  const outside = active.filter(record => record.result === "Вне допуска").length;
+  const productionRecords = (state.production.records ?? []).filter(record => record.date === today());
+  const totalQuantity = productionRecords.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const productScrap = productionRecords.reduce((sum, record) => sum + Number(record.scrapKg || 0), 0);
+  const canScrap = productionRecords.reduce((sum, record) => sum + Number(record.canScrapKg || 0), 0);
+  const boxes = productionRecords.reduce((sum, record) => sum + Number(record.boxes || record.boxCount || 0), 0);
+  const shiftPersonnel = presentShiftPersonnel();
+  const packers = shiftPersonnel.filter(employee => employee.role === "packer");
+  const operators = shiftPersonnel.filter(employee => employee.role === "operator");
+  const service = state.maintenance.service ?? { records: [], statistics: {} };
+  const repair = state.maintenance.repair ?? { records: [], statistics: {} };
+  const newest = records => [...records].sort((left, right) => String(right.date || "").localeCompare(String(left.date || "")));
+  const latestRepair = newest(repair.records).slice(0, 10);
+  const latestService = newest(service.records).slice(0, 5);
+  const lastService = latestService[0];
+  const topServiceMachine = newest(service.records).reduce((result, record) => {
+    const machine = String(record.machine || "").trim();
+    if (!machine) return result;
+    result.set(machine, (result.get(machine) || 0) + 1);
+    return result;
+  }, new Map());
+  const [frequentMachine, frequentMachineCount] = [...topServiceMachine.entries()]
+    .sort((left, right) => right[1] - left[1])[0] ?? ["—", 0];
   return `
     ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
     ${state.account.role === "senior" ? renderWorkflowPanel() : ""}
     ${renderJournalReadiness()}
-    <div class="metric-grid">
-      ${metricCard("Записей сегодня", active.filter(record => record.date === today()).length, "В локальном журнале", "neutral")}
-      ${metricCard("В пределах допуска", within, "Контроль 50 г", "success")}
-      ${metricCard("Вне допуска", outside, outside ? "Требует внимания" : "Отклонений нет", outside ? "danger" : "success")}
-      ${metricCard("Ожидает отправки", state.operations.length, navigator.onLine ? "Сеть доступна" : "Отправим позже", state.operations.length ? "warning" : "neutral")}
-    </div>
-    <div class="dashboard-grid">
-      <section class="card recent-card">
-        <div class="section-heading">
-          <div><p class="eyebrow">Последние действия</p><h2>Недавние записи</h2></div>
-          <button class="secondary-button" data-action="navigate" data-page="journals">Открыть контроль</button>
+    <div class="dashboard-summary-grid">
+      <article class="card dashboard-summary-card production-summary">
+        <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
+        <h2>Готовая продукция</h2>
+        <strong>${formatNumber(totalQuantity)} <small>шт.</small></strong>
+        <p>${boxes ? `${formatNumber(boxes)} ${plural(boxes, "коробка", "коробки", "коробок")}` : `${productionRecords.length} ${plural(productionRecords.length, "запись", "записи", "записей")} завершено`}</p>
+      </article>
+      <article class="card dashboard-summary-card scrap-summary">
+        <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
+        <h2>Брак продукции</h2>
+        <strong>${formatNumber(productScrap)} <small>кг</small></strong>
+        <p>${canScrap ? `Брак банок: ${formatNumber(canScrap)} кг` : "Брак банок за смену не указан"}</p>
+      </article>
+      <article class="card dashboard-summary-card shift-summary">
+        <p class="eyebrow">Состав текущей смены</p>
+        <h2>Люди на линии</h2>
+        <div class="dashboard-shift-roles">
+          ${renderDashboardRole("Упаковщики", packers)}
+          ${renderDashboardRole("Механики-операторы", operators)}
         </div>
-        ${renderCompactRecords(state.records.slice(0, 5))}
+      </article>
+    </div>
+    <section class="card dashboard-maintenance-card dashboard-repair-card">
+      <div class="section-heading"><div><p class="eyebrow">Журнал ремонта</p><h2>Последние записи ремонта</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть журнал</button></div>
+      ${renderDashboardMaintenanceList(latestRepair, "Ремонт", 10)}
+    </section>
+    <div class="dashboard-maintenance-grid">
+      <section class="card dashboard-maintenance-card">
+        <div class="section-heading"><div><p class="eyebrow">Журнал ТО</p><h2>Последние записи ТО</h2></div><span class="status-pill neutral">5 последних</span></div>
+        ${renderDashboardMaintenanceList(latestService, "ТО", 5)}
       </section>
-      <section class="card quick-card">
-        <div class="section-heading"><div><p class="eyebrow">Быстрый доступ</p><h2>Рабочие разделы</h2></div></div>
-        <button class="journal-tile" data-action="navigate" data-page="journals">
-          <span class="journal-symbol">13</span>
-          <span><strong>Быстрый контроль весов</strong><small>Все весы F1–F13 за один обход</small></span>
-          <span aria-hidden="true">→</span>
-        </button>
-        <button class="journal-tile" data-action="navigate" data-page="attendance"><span class="journal-symbol muted">${attendanceIcon()}</span><span><strong>Табель</strong><small>Начало смены и отметка сотрудников</small></span><span aria-hidden="true">→</span></button>
-        <button class="journal-tile" data-action="navigate" data-page="cyclones"><span class="journal-symbol muted">${moduleIcon("cyclone")}</span><span><strong>Очистка циклонов</strong><small>Журнал очисток и статистика</small></span><span aria-hidden="true">→</span></button>
+      <section class="card dashboard-maintenance-card maintenance-overview-card">
+        <div class="section-heading"><div><p class="eyebrow">Таблица ТО</p><h2>Сводка по обслуживанию</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Все данные</button></div>
+        <dl class="maintenance-overview-list">
+          <div><dt>Всего записей ТО</dt><dd>${formatNumber(service.statistics.total || service.records.length)}</dd></div>
+          <div><dt>Станков с обслуживанием</dt><dd>${formatNumber(service.statistics.machinesWithRecords || topServiceMachine.size)}</dd></div>
+          <div><dt>Последнее ТО</dt><dd>${lastService ? formatDate(lastService.date) : "—"}</dd></div>
+          <div><dt>Чаще обслуживали</dt><dd>${frequentMachineCount ? `Станок ${escapeHtml(frequentMachine)} · ${frequentMachineCount}` : "—"}</dd></div>
+        </dl>
       </section>
     </div>`;
+}
+
+function renderDashboardRole(label, employees) {
+  const names = employees.map(employee => employee.fullName).filter(Boolean);
+  return `<div><span>${label}</span><strong>${names.length ? escapeHtml(names.join(", ")) : "Не отмечены"}</strong></div>`;
+}
+
+function renderDashboardMaintenanceList(records, kind, limit) {
+  if (!records.length) return `<p class="dashboard-empty">В журнале ${kind} записей пока нет.</p>`;
+  return `<div class="dashboard-maintenance-list">${records.slice(0, limit).map(record => `<article><time>${formatDate(record.date)}</time><div><strong>${escapeHtml(record.machine ? `Станок ${record.machine}` : kind)}${record.work ? ` · ${escapeHtml(record.work)}` : ""}</strong><small>${escapeHtml(record.performer || record.category || "Исполнитель не указан")}</small></div>${record.note ? `<span title="${attribute(record.note)}">${escapeHtml(record.note)}</span>` : ""}</article>`).join("")}</div>`;
 }
 
 function renderJournalReadiness() {
