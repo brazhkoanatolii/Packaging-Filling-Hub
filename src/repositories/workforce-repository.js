@@ -2,7 +2,7 @@ const KEY = "googleWorkforceV1";
 const empty = () => ({ personnel: [], shiftTeams: [], attendance: [], vacations: [], years: [], ready: false });
 export class WorkforceRepository {
   constructor(store, provider, actor = () => ({})) {
-    this.store = store; this.provider = provider; this.actor = actor; this.serial = Promise.resolve(); this.syncRunning = null; this.lastError = null;
+    this.store = store; this.provider = provider; this.actor = actor; this.serial = Promise.resolve(); this.syncRunning = null; this.refreshRunning = null; this.lastError = null;
   }
   exclusive(fn) {
     const run = () => globalThis.navigator?.locks ? navigator.locks.request("packaging-workforce", fn) : fn();
@@ -38,6 +38,28 @@ export class WorkforceRepository {
     if (this.syncRunning) return this.syncRunning;
     this.syncRunning = this.performSync().finally(() => { this.syncRunning = null; });
     return this.syncRunning;
+  }
+  async refresh() {
+    if (this.refreshRunning) return this.refreshRunning;
+    this.refreshRunning = this.provider.snapshot()
+      .then(remote => this.storeRemoteSnapshot(remote))
+      .finally(() => { this.refreshRunning = null; });
+    return this.refreshRunning;
+  }
+  async storeRemoteSnapshot(remote) {
+    if (!Array.isArray(remote.personnel) || !Array.isArray(remote.shiftTeams) || !Array.isArray(remote.attendance) || !Array.isArray(remote.vacations)) throw new Error("Google вернул неполный список журналов");
+    return this.exclusive(async () => {
+      const data = await this.load();
+      data.pending = data.pending.filter(operation => {
+        if (operation.kind !== "attendance" || operation.status !== "conflict") return true;
+        const remoteRecord = remote.attendance.find(record => record.id === operation.record.id);
+        return !sameAttendance(remoteRecord, operation.record);
+      });
+      data.confirmed = { ...remote, ready: true };
+      data.lastSync = new Date().toISOString(); this.lastError = null;
+      await this.store.setPreference(KEY, data);
+      return this.snapshot();
+    });
   }
   async performSync() {
     // Network calls deliberately run outside exclusive().  A new local form
@@ -78,23 +100,7 @@ export class WorkforceRepository {
         });
       }
     }
-    const remote = await this.provider.snapshot();
-    if (!Array.isArray(remote.personnel) || !Array.isArray(remote.shiftTeams) || !Array.isArray(remote.attendance) || !Array.isArray(remote.vacations)) throw new Error("Google вернул неполный список журналов");
-    return this.exclusive(async () => {
-      const data = await this.load();
-      // A browser can lose the response after Google has already saved an attendance
-      // row. Treat that as delivered only when the remote row is exactly the same;
-      // never discard a genuine conflicting correction.
-      data.pending = data.pending.filter(operation => {
-        if (operation.kind !== "attendance" || operation.status !== "conflict") return true;
-        const remoteRecord = remote.attendance.find(record => record.id === operation.record.id);
-        return !sameAttendance(remoteRecord, operation.record);
-      });
-      data.confirmed = { ...remote, ready: true };
-      data.lastSync = new Date().toISOString(); this.lastError = null;
-      await this.store.setPreference(KEY, data);
-      return this.snapshot();
-    });
+    return this.storeRemoteSnapshot(await this.provider.snapshot());
   }
   async acceptRemote(requestId) {
     return this.exclusive(async () => {

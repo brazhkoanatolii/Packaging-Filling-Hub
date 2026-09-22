@@ -28,6 +28,7 @@ const publicFiles = new Set(["index.html", "manifest.webmanifest", "service-work
 const publicDirectories = ["assets/", "src/"];
 
 let tokenCache = null;
+let tokenRefreshPromise = null;
 
 createServer(async (request, response) => {
   try {
@@ -254,26 +255,31 @@ async function runAppsScript(functionName, parameters = []) {
 
 async function getAccessToken() {
   if (tokenCache && Date.now() < tokenCache.expiresAt - 60_000) return tokenCache.value;
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
-      client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
-      refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN,
-      grant_type: "refresh_token"
-    }),
-    signal: AbortSignal.timeout(15_000)
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) {
-    throw googleError(response.status || 502, payload.error_description || "Не удалось обновить доступ к Google");
+  if (!tokenRefreshPromise) {
+    tokenRefreshPromise = (async () => {
+      const response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
+          client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+          refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN,
+          grant_type: "refresh_token"
+        }),
+        signal: AbortSignal.timeout(15_000)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.access_token) {
+        throw googleError(response.status || 502, payload.error_description || "Не удалось обновить доступ к Google");
+      }
+      tokenCache = {
+        value: payload.access_token,
+        expiresAt: Date.now() + Number(payload.expires_in || 3600) * 1000
+      };
+      return tokenCache.value;
+    })().finally(() => { tokenRefreshPromise = null; });
   }
-  tokenCache = {
-    value: payload.access_token,
-    expiresAt: Date.now() + Number(payload.expires_in || 3600) * 1000
-  };
-  return tokenCache.value;
+  return tokenRefreshPromise;
 }
 
 

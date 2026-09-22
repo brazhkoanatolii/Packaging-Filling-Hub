@@ -38,6 +38,7 @@ const state = {
   recordMonth: today().slice(0, 7),
   loading: true,
   syncing: false,
+  refreshing: false,
   lastRefresh: null,
   attendanceMonth: today().slice(0, 7),
   attendanceView: "start",
@@ -66,6 +67,7 @@ let shiftService;
 let repository;
 let journalService;
 let productionRefreshPromise = null;
+let refreshFromSourcePromise = null;
 let workforceService;
 let workforceRepository;
 let productSpecificationService;
@@ -124,7 +126,10 @@ async function bootstrap() {
   startClock();
   registerServiceWorker();
   void checkForUpdate();
-  if (navigator.onLine) refreshFromSource({ silent: true }).then(() => syncRecords({ silent: true })).catch(error => toast(error.message, "warning"));
+  if (navigator.onLine) {
+    void refreshFromSource({ silent: true });
+    void syncRecords({ silent: true });
+  }
 }
 
 function createRemoteProvider() {
@@ -617,18 +622,44 @@ async function refreshFromSource({ silent = false } = {}) {
     if (!silent) toast("Нет интернета. Показаны последние сохранённые данные.", "warning");
     return;
   }
-  setBusy(true);
-  try {
-  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones(), refreshMaintenance(), refreshProduction()]);
-  state.journalError = checks[0].status === "rejected" ? checks[0].reason.message : null;
-  const failed = checks.find(item => item.status === "rejected");
-    await reloadLocalState();
-    state.lastRefresh = new Date().toISOString();
-    render();
-    if (!silent) toast(failed ? failed.reason.message : "Данные обновлены.", failed ? "warning" : "success");
-  } finally {
-    setBusy(false);
+  if (refreshFromSourcePromise) {
+    if (!silent) toast("Обновление уже выполняется. Можно продолжать работу.", "warning");
+    return refreshFromSourcePromise;
   }
+  state.refreshing = true;
+  render();
+  refreshFromSourcePromise = refreshCurrentPage()
+    .then(() => {
+      state.lastRefresh = new Date().toISOString();
+      if (!silent) toast("Текущий раздел обновлён.", "success");
+    })
+    .catch(error => {
+      if (!silent) toast(error.message || "Не удалось обновить текущий раздел.", "warning");
+    })
+    .finally(() => {
+      state.refreshing = false;
+      refreshFromSourcePromise = null;
+      render();
+    });
+  return refreshFromSourcePromise;
+}
+
+async function refreshCurrentPage() {
+  if (state.page === "journals") {
+    await repository.refresh();
+    state.journalError = null;
+    await reloadLocalState();
+    return;
+  }
+  if (state.page === "attendance" || state.page === "personnel" || state.page === "vacations" || state.page === "settings") {
+    state.workforce = workforceRepository ? await workforceRepository.refresh() : await workforceService.snapshot();
+    return;
+  }
+  if (state.page === "cyclones") { await refreshCyclones(); return; }
+  if (state.page === "maintenance") { await refreshMaintenance(); return; }
+  if (state.page === "production") { await refreshProduction(); return; }
+  if (state.page === "specifications") { await refreshSpecifications(); return; }
+  await reloadLocalState();
 }
 
 async function checkForUpdate({ announce = false } = {}) {
@@ -660,7 +691,7 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true)]);
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce()]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -689,8 +720,7 @@ function startAutomaticRefresh() {
   clearInterval(refreshTimer);
   refreshTimer = setInterval(async () => {
     if (!state.account || document.hidden || !navigator.onLine) return;
-    await syncRecords({ silent: true });
-    await refreshFromSource({ silent: true });
+    syncInBackground();
   }, APP_CONFIG.refreshIntervalMs);
 }
 
@@ -797,7 +827,7 @@ function renderApplication() {
             <button class="utility-button language-button" data-action="cycle-language" title="${ui("language")}" aria-label="${ui("language")}"><b>${language.label}</b><span>${language.name}</span></button>
             <button class="icon-button theme-button" data-action="toggle-theme" title="${ui("theme")}" aria-label="${ui("theme")}">${state.theme === "dark" ? sunIcon() : moonIcon()}</button>
             ${connectionBadge()}
-            <button class="icon-button" data-action="refresh" title="${ui("refresh")}" aria-label="${ui("refresh")}">${refreshIcon()}</button>
+            <button class="icon-button" data-action="refresh" title="${state.refreshing ? "Обновляем текущий раздел" : ui("refresh")}" aria-label="${ui("refresh")}" ${state.refreshing ? "disabled" : ""}>${state.refreshing ? "…" : refreshIcon()}</button>
           </div>
         </header>
 
