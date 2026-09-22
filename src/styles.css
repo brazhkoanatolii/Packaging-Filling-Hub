@@ -423,10 +423,14 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .field [aria-invalid="true"] { border-color: var(--red-600); box-shadow: 0 0 0 3px rgba(182,74,72,.1); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--line); }
 
-.packaging-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .8fr); gap: 18px; align-items: start; margin: 18px 0; }
-.packaging-catalog, .packaging-entry-panel { padding: 22px; }
-.packaging-item-list { display: grid; gap: 9px; margin-top: 18px; }
-.packaging-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; width: 100%; min-height: 72px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-raised); color: var(--ink-900); text-align: left; cursor: pointer; transition: border-color .16s, background .16s, transform .16s; }
+.packaging-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; margin: 0 0 8px; padding: 0 2px; color: var(--ink-600); font-size: .88rem; }
+.packaging-toolbar p { margin: 0; }
+.packaging-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .8fr); gap: 18px; align-items: start; margin: 0; }
+.packaging-catalog, .packaging-entry-panel { padding: 16px 22px; }
+.packaging-catalog .section-heading h2 { margin: 2px 0; }
+.packaging-catalog .section-heading p { margin: 0; font-size: .9rem; }
+.packaging-item-list { display: grid; gap: 6px; margin-top: 12px; }
+.packaging-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; width: 100%; min-height: 52px; padding: 8px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--ink-900); text-align: left; cursor: pointer; transition: border-color .16s, background .16s, transform .16s; }
 .packaging-item:hover { border-color: var(--blue-500); transform: translateY(-1px); }
 .packaging-item.selected { border-color: var(--blue-500); background: var(--blue-100); box-shadow: 0 0 0 3px rgba(47,111,237,.12); }
 .packaging-item span, .packaging-item b { display: grid; gap: 4px; }
