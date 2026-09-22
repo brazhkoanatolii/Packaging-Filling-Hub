@@ -857,7 +857,7 @@ function renderApplication() {
       <aside class="sidebar">
         <div class="brand-row">
           <div class="brand-emblem">${brandIcon()}</div>
-          <div><strong>Packaging-</strong><strong>Filling-Hub</strong></div>
+          <div><strong>Packaging-</strong><strong>Filling-Hub</strong><small class="company-name">UAB Kordula</small></div>
         </div>
         <nav class="main-nav" aria-label="Основное меню">
           ${modulesForAccount().map(module => navItem(module.id, moduleLabel(module), moduleIcon(module.icon))).join("")}
