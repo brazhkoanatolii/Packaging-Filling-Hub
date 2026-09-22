@@ -39,6 +39,7 @@ const state = {
   loading: true,
   syncing: false,
   refreshing: false,
+  startupSync: { active: false, completed: 0, total: 6, current: "", failed: [], completedAt: null },
   lastRefresh: null,
   attendanceMonth: today().slice(0, 7),
   attendanceView: "start",
@@ -68,6 +69,7 @@ let repository;
 let journalService;
 let productionRefreshPromise = null;
 let refreshFromSourcePromise = null;
+let startupSyncPromise = null;
 let workforceService;
 let workforceRepository;
 let productSpecificationService;
@@ -126,10 +128,7 @@ async function bootstrap() {
   startClock();
   registerServiceWorker();
   void checkForUpdate();
-  if (navigator.onLine) {
-    void refreshFromSource({ silent: true });
-    void syncRecords({ silent: true });
-  }
+  if (navigator.onLine) void startStartupJournalSync().finally(() => syncInBackground());
 }
 
 function createRemoteProvider() {
@@ -401,6 +400,10 @@ async function handleClick(event) {
       await refreshFromSource();
       return;
     }
+    if (action === "sync-all-journals") {
+      await startStartupJournalSync();
+      return;
+    }
     if (action === "check-update") {
       await checkForUpdate({ announce: true });
       return;
@@ -642,6 +645,35 @@ async function refreshFromSource({ silent = false } = {}) {
       render();
     });
   return refreshFromSourcePromise;
+}
+
+async function startStartupJournalSync() {
+  if (startupSyncPromise) return startupSyncPromise;
+  const tasks = [
+    ["Контроль весов", async () => { await repository.refresh(); await reloadLocalState(); }],
+    ["Табель и персонал", async () => { state.workforce = workforceRepository ? await workforceRepository.refresh() : await workforceService.snapshot(); }],
+    ["Спецификации продуктов", async () => { await refreshSpecifications(); if (state.specifications.error) throw new Error(state.specifications.error); }],
+    ["Очистка циклонов", async () => { await refreshCyclones(); if (state.cyclones.error) throw new Error(state.cyclones.error); }],
+    ["Ремонт и ТО", async () => { await refreshMaintenance(); if (state.maintenance.error) throw new Error(state.maintenance.error); }],
+    ["Учёт продукции и брака", async () => { await refreshProduction(); if (state.production.error) throw new Error(state.production.error); }]
+  ];
+  state.startupSync = { active: true, completed: 0, total: tasks.length, current: tasks[0][0], failed: [], completedAt: null };
+  render();
+  startupSyncPromise = (async () => {
+    for (const [label, load] of tasks) {
+      state.startupSync.current = label;
+      render();
+      try { await load(); }
+      catch { state.startupSync.failed.push(label); }
+      state.startupSync.completed += 1;
+    }
+    state.startupSync.active = false;
+    state.startupSync.current = "";
+    state.startupSync.completedAt = new Date().toISOString();
+    state.lastRefresh = state.startupSync.completedAt;
+    render();
+  })().finally(() => { startupSyncPromise = null; });
+  return startupSyncPromise;
 }
 
 async function refreshCurrentPage() {
@@ -954,6 +986,7 @@ function renderDashboard() {
     ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
     ${state.account.role === "senior" ? renderWorkflowPanel() : ""}
+    ${renderJournalReadiness()}
     <div class="metric-grid">
       ${metricCard("Записей сегодня", active.filter(record => record.date === today()).length, "В локальном журнале", "neutral")}
       ${metricCard("В пределах допуска", within, "Контроль 50 г", "success")}
@@ -979,6 +1012,14 @@ function renderDashboard() {
         <button class="journal-tile" data-action="navigate" data-page="cyclones"><span class="journal-symbol muted">${moduleIcon("cyclone")}</span><span><strong>Очистка циклонов</strong><small>Журнал очисток и статистика</small></span><span aria-hidden="true">→</span></button>
       </section>
     </div>`;
+}
+
+function renderJournalReadiness() {
+  const sync = state.startupSync;
+  if (sync.active) return `<section class="workforce-connection"><span>↻</span><p><strong>Подготавливаем журналы: ${sync.completed} из ${sync.total}</strong><br><small>Сейчас: ${escapeHtml(sync.current)}. Программой уже можно пользоваться.</small></p></section>`;
+  if (sync.completedAt && !sync.failed.length) return `<section class="workforce-connection"><span>✓</span><p><strong>Все журналы синхронизированы. Программа готова к работе.</strong><br><small>Проверено: ${formatDateTime(sync.completedAt)}.</small></p><button class="small-button" data-action="sync-all-journals">Проверить снова</button></section>`;
+  if (sync.completedAt) return `<section class="workforce-connection warning"><span>!</span><p><strong>Обновлено журналов: ${sync.completed - sync.failed.length} из ${sync.total}</strong><br><small>Не ответили: ${escapeHtml(sync.failed.join(", "))}. Показаны последние сохранённые данные.</small></p><button class="small-button" data-action="sync-all-journals">Повторить</button></section>`;
+  return `<section class="workforce-connection"><span>↻</span><p>Журналы будут проверены после подключения к сети.</p><button class="small-button" data-action="sync-all-journals">Проверить</button></section>`;
 }
 
 function renderShiftPanel() {
