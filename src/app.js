@@ -57,7 +57,7 @@ const state = {
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
   maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
   maintenanceDue: { records: [], source: "loading", cachedAt: null, error: null },
-  maintenanceView: "overview",
+  maintenanceView: "repair",
   production: { records: [], source: "loading", cachedAt: null, error: null },
   productionLoading: false,
   packaging: { records: [], operations: [], lastReadAt: null, error: null },
@@ -543,7 +543,7 @@ async function handleClick(event) {
     if (action === "add-maintenance-service") { openMaintenanceDialog("service"); return; }
     if (action === "add-maintenance-repair") { openMaintenanceDialog("repair"); return; }
     if (action === "maintenance-view") {
-      state.maintenanceView = actionElement.dataset.view || "overview";
+      state.maintenanceView = actionElement.dataset.view || "repair";
       render();
       return;
     }
@@ -1019,17 +1019,15 @@ function renderMaintenancePage() {
   const service = state.maintenance.service ?? { records: [], statistics: {} };
   const repair = state.maintenance.repair ?? { records: [], statistics: {} };
   const view = state.maintenanceView;
-  const tabs = [["overview", "Обзор"], ["service", "Журнал ТО"], ["repair", "Журнал ремонта"], ["statistics", "Статистика"]];
+  const tabs = [["repair", "Журнал ремонта"], ["service", "Журнал ТО"], ["statistics", "Статистика"]];
   const content = view === "service"
     ? renderMaintenanceTable("Журнал ТО", service.records, "ТО", false, true)
-    : view === "repair"
-      ? renderMaintenanceTable("Журнал ремонта", repair.records, "Ремонт", false, true)
-      : view === "statistics"
-        ? renderMaintenanceStatistics(service, repair)
-        : `${renderMaintenanceTable("Последние записи ТО", service.records, "ТО", true)}${renderMaintenanceTable("Последние записи ремонта", repair.records, "Ремонт", true)}`;
+    : view === "statistics"
+      ? renderMaintenanceStatistics(service, repair)
+      : renderMaintenanceTable("Журнал ремонта", repair.records, "Ремонт", false, true);
   return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два независимых журнала</p><h2>Ремонт и ТО станков</h2><p>ТО и ремонт учитываются отдельно. Данные загружаются из рабочих журналов; незаполненные бумажные записи ремонта появятся после их внесения в таблицу.</p></div><button class="secondary-button" data-action="refresh-maintenance">Обновить</button></section>
     ${state.maintenance.error ? `<p class="form-error">${escapeHtml(state.maintenance.error)}</p>` : ""}
-    <div class="dashboard-grid"><article class="metric-card"><span>Журнал ТО</span><strong>${service.statistics.total || 0}</strong><small>${service.statistics.machinesWithRecords || 0} станков с записями</small></article><article class="metric-card"><span>Журнал ремонта</span><strong>${repair.statistics.total || 0}</strong><small>${repair.statistics.machinesWithRecords || 0} станков с записями</small></article></div>
+    <div class="dashboard-grid"><article class="metric-card"><span>Журнал ремонта</span><strong>${repair.statistics.total || 0}</strong><small>${repair.statistics.machinesWithRecords || 0} станков с записями</small></article><article class="metric-card"><span>Журнал ТО</span><strong>${service.statistics.total || 0}</strong><small>${service.statistics.machinesWithRecords || 0} станков с записями</small></article></div>
     <nav class="settings-tabs card maintenance-tabs" aria-label="Разделы журналов">${tabs.map(([key, label]) => `<button class="${view === key ? "active" : ""}" data-action="maintenance-view" data-view="${key}"><strong>${label}</strong></button>`).join("")}</nav>
     ${content}`;
 }
