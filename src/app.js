@@ -20,6 +20,9 @@ import { CycloneService, cycloneStatistics } from "./services/cyclone-service.js
 import { ProductionGatewayProvider } from "./providers/production-gateway-provider.js";
 import { ProductionRepository } from "./repositories/production-repository.js";
 import { ProductionService, LINES as PRODUCTION_LINES } from "./services/production-service.js";
+import { PackagingGatewayProvider } from "./providers/packaging-gateway-provider.js";
+import { PackagingRepository } from "./repositories/packaging-repository.js";
+import { PackagingService, PACKAGING_FIELDS } from "./services/packaging-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -39,7 +42,7 @@ const state = {
   loading: true,
   syncing: false,
   refreshing: false,
-  startupSync: { active: false, completed: 0, total: 7, current: "", failed: [], completedAt: null },
+  startupSync: { active: false, completed: 0, total: 8, current: "", failed: [], completedAt: null },
   lastRefresh: null,
   attendanceMonth: today().slice(0, 7),
   attendanceView: "start",
@@ -54,6 +57,7 @@ const state = {
   maintenanceView: "overview",
   production: { records: [], source: "loading", cachedAt: null, error: null },
   productionLoading: false,
+  packaging: { records: [], operations: [], lastReadAt: null, error: null },
   update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
@@ -76,6 +80,7 @@ let workforceRepository;
 let productSpecificationService;
 let cycloneService;
 let productionService;
+let packagingService;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -90,6 +95,10 @@ async function bootstrap() {
   cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
     new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.cyclones = await cycloneService.snapshot();
+  const packagingStore = await new IndexedDbDataProvider("packaging-filling-hub-packaging").init();
+  packagingService = new PackagingService(new PackagingRepository(packagingStore,
+    new PackagingGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
+  state.packaging = await packagingService.snapshot();
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
@@ -329,6 +338,12 @@ async function handleClick(event) {
 
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
+    if (action === "new-packaging") { openPackagingDialog(); return; }
+    if (action === "sync-packaging") {
+      state.packaging = await packagingService.sync(); render();
+      toast(state.packaging.error || "Журнал расхода упаковки обновлён", state.packaging.error ? "warning" : "success");
+      return;
+    }
     if (action === "sync-cyclones") {
       state.cyclones = await cycloneService.sync();
       render();
@@ -358,6 +373,10 @@ async function handleClick(event) {
       }
       if (page === "production") {
         await refreshProduction();
+        render();
+      }
+      if (page === "packaging") {
+        await refreshPackaging();
         render();
       }
       return;
@@ -600,6 +619,11 @@ async function refreshCyclones(sync = false) {
   return state.cyclones;
 }
 
+async function refreshPackaging(sync = false) {
+  state.packaging = sync ? await packagingService.sync() : await packagingService.refresh();
+  return state.packaging;
+}
+
 async function refreshMaintenance() {
   try {
     const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance`, { headers: { Accept: "application/json" } });
@@ -672,6 +696,7 @@ async function startStartupJournalSync() {
     ["Контроль весов", async () => { await repository.refresh(); await reloadLocalState(); }],
     ["Спецификации продуктов", async () => { await refreshSpecifications(); if (state.specifications.error) throw new Error(state.specifications.error); }],
     ["Учёт продукции и брака", async () => { await refreshProduction(); if (state.production.error) throw new Error(state.production.error); }],
+    ["Расход упаковки", async () => { await refreshPackaging(); if (state.packaging.error) throw new Error(state.packaging.error); }],
     ["Ремонт и ТО", async () => { await refreshMaintenance(); if (state.maintenance.error) throw new Error(state.maintenance.error); }],
     ["Сводка ТО", async () => { await refreshMaintenanceDue(); if (state.maintenanceDue.error) throw new Error(state.maintenanceDue.error); }],
     ["Очистка циклонов", async () => { await refreshCyclones(); if (state.cyclones.error) throw new Error(state.cyclones.error); }]
@@ -707,6 +732,7 @@ async function refreshCurrentPage() {
     return;
   }
   if (state.page === "cyclones") { await refreshCyclones(); return; }
+  if (state.page === "packaging") { await refreshPackaging(); return; }
   if (state.page === "maintenance") { await refreshMaintenance(); return; }
   if (state.page === "production") { await refreshProduction(); return; }
   if (state.page === "specifications") { await refreshSpecifications(); return; }
@@ -742,8 +768,10 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const checks = await Promise.allSettled([repository.sync(), syncWorkforce()]);
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), packagingService?.sync(), cycloneService?.sync()]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
+    if (checks[2]?.status === "fulfilled" && checks[2].value) state.packaging = checks[2].value;
+    if (checks[3]?.status === "fulfilled" && checks[3].value) state.cyclones = checks[3].value;
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
@@ -917,6 +945,7 @@ function renderPage() {
   if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (state.page === "cyclones") return renderCyclonesPage();
+  if (state.page === "packaging") return renderPackagingPage();
   if (state.page === "maintenance") return renderMaintenancePage();
   if (state.page === "production") return renderProductionPage();
   if (state.page !== "dashboard" && MODULES.some(module => module.id === state.page)) return renderPlannedModulePage();
@@ -1332,6 +1361,21 @@ function renderVacationsPage() {
   const canEdit = state.account.role === "manager";
   return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
     <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 7 : 6}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
+}
+
+function renderPackagingPage() {
+  const { records, operations, lastReadAt, error } = state.packaging;
+  const status = error ? `Google недоступен: ${error}` : lastReadAt ? `Последнее чтение Google: ${formatDateTime(lastReadAt)}` : "Связь с Google ещё не проверена";
+  const pending = new Map(operations.map(operation => [operation.record.id, operation]));
+  return `<section class="card cyclone-heading"><div><p class="eyebrow">Google Sheets · одна таблица</p><h2>Расход упаковки</h2><p>${escapeHtml(status)}</p>
+    ${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются только в очередь этого компьютера.</p>' : ""}
+    <p>В очереди: <strong>${operations.length}</strong>${operations.length ? ". Можно вносить следующие данные, не дожидаясь Google." : "."}</p></div>
+    <div class="dialog-actions"><button class="secondary-button" data-action="sync-packaging">Обновить и отправить очередь</button><button class="primary-button" data-action="new-packaging">+ Внести расход</button></div></section>
+    <section class="card settings-table-wrap"><h3>Последние записи</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Внёс данные</th><th>Состояние</th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${escapeHtml(record.author)}</td><td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 3}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
+}
+
+function shortPackagingLabel(label) {
+  return label.replace(", шт", "").replace(", рул", "");
 }
 
 function renderCyclonesPage() {
@@ -2608,6 +2652,29 @@ function monthDays(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
+}
+
+function openPackagingDialog() {
+  const fields = PACKAGING_FIELDS.map(field => formField(`packaging-${field.key}`, field.label,
+    `<input id="packaging-${field.key}" name="${field.key}" type="number" min="0" step="0.001" value="0" inputmode="decimal">`)).join("");
+  const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><div><p class="eyebrow">Расход упаковки</p><h2>Внести расход</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Укажите только использованную упаковку. Автор будет указан автоматически: <strong>${escapeHtml(state.account.title)}</strong>.</p>
+    ${formField("packaging-date", "Дата", `<input id="packaging-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
+    <div class="form-grid packaging-fields">${fields}</div>
+    <p>Запись сначала сохранится на этом компьютере и автоматически отправится в единую таблицу Google.</p>
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить расход</button></div></form>`);
+  let saving = false;
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault(); if (saving) return; saving = true;
+    const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    try {
+      await packagingService.create(Object.fromEntries(new FormData(form)), state.account);
+      dialog.close(); state.packaging = await packagingService.snapshot(); render();
+      toast("Расход сохранён на этом компьютере. Отправка в Google выполняется в фоне.", "success");
+      if (navigator.onLine) { void refreshPackaging(true).then(() => render()); }
+    } catch (error) { showFormError(form, error); saving = false; submit.disabled = false; }
+  });
+  dialog.showModal();
 }
 
 function formatPercent(value) {

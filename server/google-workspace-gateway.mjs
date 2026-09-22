@@ -17,6 +17,12 @@ const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL
 const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub/main/update-manifest.json";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
+const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
+const packagingSheetName = "Лист";
+const packagingRange = "'Лист'!B2:M";
+const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
+const packagingHeaders = Object.freeze(["Дата", "Коробки с логотипом GARANT 430x285x255, шт", "Коробки с логотипом Garant 570x210x249, шт", "Бумага Dochems 37 GSM, рул", "Банка килла прозрачная", "Банка килла зеленая", "Крышка килла зеленая", "Банка ДЗ прозрачная", "Банка ДЗ зеленая", "Крышка ДЗ черная", "Крышка ДЗ белая", "Внёс данные"]);
+const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
   attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
@@ -157,6 +163,16 @@ createServer(async (request, response) => {
       if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Удалять записи могут только начальник участка и старший механик" });
       const result = await runAppsScript("deleteProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+
+    if (url.pathname === "/api/packaging-records" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      return sendJson(response, 200, await getPackagingSnapshot());
+    }
+    if (url.pathname === "/api/packaging-records" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять расход упаковки могут только начальник участка и старший механик" });
+      return sendJson(response, 200, await createPackagingRecord({ ...(await readJsonBody(request)), role: workstationRole, workstationId }));
     }
 
     if (url.pathname === "/api/specifications" && request.method === "GET") {
@@ -340,6 +356,97 @@ async function getWorkforceSnapshot() {
     officeSchedule: teams.find(team => team.id === "office") ?? null, attendance, vacations,
     years: [year], timeZone: "Europe/Vilnius"
   };
+}
+
+async function getPackagingSnapshot() {
+  const values = await getGoogleSheetRanges(packagingSpreadsheetId, [packagingRange]);
+  const rows = values[0] ?? [];
+  const headers = rows[0] ?? [];
+  if (headers.length !== packagingHeaders.length || headers.some((header, index) => String(header).trim() !== packagingHeaders[index])) {
+    throw new Error("Изменилась структура журнала расхода упаковки");
+  }
+  const notes = await getPackagingDateNotes();
+  return { ok: true, records: rows.slice(1).map((row, index) => packagingRecordFromRow(row, index + 3, notes[index] || "")).filter(Boolean) };
+}
+
+async function createPackagingRecord(input) {
+  const record = validatePackagingRecord(input);
+  const before = await getPackagingSnapshot();
+  const existing = before.records.find(item => item.id === record.id || item.requestId === record.requestId);
+  if (existing) return { ok: true, record: existing };
+  const accessToken = await getAccessToken();
+  const sheetId = await getPackagingSheetId(accessToken);
+  const serial = Math.round((Date.parse(`${record.date}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000);
+  const receipt = `${packagingReceiptPrefix}${JSON.stringify({ id: record.id, requestId: record.requestId, workstationId: record.workstationId, createdAt: new Date().toISOString() })}`;
+  const cells = [
+    { userEnteredValue: { numberValue: serial }, note: receipt, userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } },
+    ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } })),
+    { userEnteredValue: { stringValue: record.author } }
+  ];
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, {
+    method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } }] }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось записать расход упаковки");
+  return { ok: true, record: { id: record.id, requestId: record.requestId, date: record.date, values: record.values, author: record.author } };
+}
+
+function validatePackagingRecord(input) {
+  if (!input || !["manager", "senior"].includes(input.role)) throw new Error("Недостаточно прав");
+  const id = String(input.recordId || ""); const requestId = String(input.requestId || "");
+  if (!/^[a-zA-Z0-9_-]{8,160}$/.test(id) || !/^[a-zA-Z0-9_-]{8,160}$/.test(requestId)) throw new Error("Некорректный идентификатор записи");
+  const date = String(input.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw new Error("Некорректная дата расхода упаковки");
+  const author = String(input.author || "").trim();
+  if (!author || author.length > 120 || /^[=+@-]/.test(author)) throw new Error("Некорректный автор записи");
+  const values = Object.fromEntries(packagingKeys.map(key => {
+    const value = Number(input.values?.[key]);
+    if (!Number.isFinite(value) || value < 0) throw new Error("Некорректный расход упаковки");
+    return [key, value];
+  }));
+  if (!Object.values(values).some(value => value > 0)) throw new Error("Не указан расход упаковки");
+  return { id, requestId, date, values, author, workstationId: String(input.workstationId || "") };
+}
+
+async function getPackagingDateNotes() {
+  assertGoogleConfigured();
+  const accessToken = await getAccessToken();
+  const query = new URLSearchParams({ includeGridData: "true", ranges: `'${packagingSheetName}'!B3:B`, fields: "sheets(data(rowData(values(note))))" });
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}?${query}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать журнал расхода упаковки");
+  return payload.sheets?.[0]?.data?.[0]?.rowData?.map(row => row.values?.[0]?.note || "") ?? [];
+}
+
+async function getPackagingSheetId(accessToken) {
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}?fields=sheets(properties(sheetId,title))`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось открыть журнал расхода упаковки");
+  const sheet = payload.sheets?.find(item => item.properties?.title === packagingSheetName);
+  if (!sheet) throw new Error("Не найден лист расхода упаковки");
+  return sheet.properties.sheetId;
+}
+
+function packagingRecordFromRow(row, rowNumber, note) {
+  if (!row?.some(value => value !== "" && value !== undefined)) return null;
+  const date = googleSerialToDate(row[0]); const author = String(row[11] || "").trim();
+  if (!date || !author) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
+  let receipt = {};
+  if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }
+  return { id: receipt.id || `packaging-row-${rowNumber}`, requestId: receipt.requestId || "", date, values: Object.fromEntries(packagingKeys.map((key, index) => [key, Number(row[index + 1] || 0)])), author };
+}
+
+function googleSerialToDate(value) {
+  const serial = Number(value); if (!Number.isFinite(serial)) return null;
+  return new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000).toISOString().slice(0, 10);
+}
+
+function vilniusDate() {
+  const values = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: "Europe/Vilnius", year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date()).filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 async function getGoogleSheetRanges(spreadsheetId, ranges) {
