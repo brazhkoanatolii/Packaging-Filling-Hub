@@ -1943,14 +1943,14 @@ async function deleteSpecification(id) {
 function openShiftGuestDialog() {
   const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId;
   const guests = activePersonnel()
-    .filter(employee => (employee.shiftTeamId !== teamId || isSubstituteOnly(employee)) && employee.shiftTeamId !== "office" && !state.shiftGuests.some(item => item.employeeId === employee.id))
+    .filter(employee => (employee.shiftTeamId !== teamId || isSubstituteOnly(employee)) && !state.shiftGuests.some(item => item.employeeId === employee.id))
     .sort(comparePersonnel);
   const dialog = createDialog(`
     <form class="dialog-card small-dialog" data-shift-guest-form>
-      <div class="dialog-heading"><div><p class="eyebrow">Подменный выход</p><h2>Добавить сотрудника другой смены</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Подменный выход</p><h2>Добавить сотрудника другой смены или отдела</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
       <p class="dialog-lead">Сотрудник будет учтён в текущей смене. В табеле сохранятся часы и причина выхода.</p>
       <div class="form-grid">
-        ${formField("shift-guest", "Сотрудник", `<select id="shift-guest" name="employeeId" required><option value="">Выберите сотрудника</option>${guests.map(employee => `<option value="${attribute(employee.id)}">${escapeHtml(employee.fullName)} · ${escapeHtml(teamById(employee.shiftTeamId)?.name ?? "Другая смена")}</option>`).join("")}</select>`, "Только действующий персонал другой смены", "full")}
+        ${formField("shift-guest", "Сотрудник", `<select id="shift-guest" name="employeeId" required><option value="">Выберите сотрудника</option>${guests.map(employee => `<option value="${attribute(employee.id)}">${escapeHtml(employee.fullName)} · ${escapeHtml(teamById(employee.shiftTeamId)?.name ?? (employee.shiftTeamId === "office" ? "Другой отдел" : "Другая смена"))}</option>`).join("")}</select>`, "Только действующий персонал другой смены или отдела", "full")}
         ${formField("shift-guest-reason", "Причина выхода", `<select id="shift-guest-reason" name="substitutionReason" required><option value="">Выберите причину</option><option>Подработка</option><option>Производственная необходимость</option></select>`, "Будет указана в журнале табеля", "full")}
       </div>
       <div id="shift-guest-error" class="form-error" hidden></div>
@@ -1963,7 +1963,7 @@ function openShiftGuestDialog() {
     const employee = activePersonnel().find(item => item.id === String(data.get("employeeId") || ""));
     const substitutionReason = String(data.get("substitutionReason") || "");
     if (!employee || (employee.shiftTeamId === teamId && !isSubstituteOnly(employee)) || !substitutionReason) {
-      showFormError(form, new Error("Выберите сотрудника другой смены и причину выхода"));
+      showFormError(form, new Error("Выберите сотрудника другой смены или отдела и причину выхода"));
       return;
     }
     state.shiftGuests = [...state.shiftGuests.filter(item => item.employeeId !== employee.id), { employeeId: employee.id, substitutionReason, homeShiftTeamId: employee.shiftTeamId }];
@@ -2189,7 +2189,8 @@ function presentShiftPersonnel() {
   if (!teamId) return [];
   const attendance = new Map((state.shift?.active && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
     .map(item => [item.employeeId, attendanceCode(item.status)]));
-  return shiftStartMembers(teamId).filter(employee => attendance.get(employee.id) === "11");
+  const unsavedGuests = new Set(state.shiftGuests.map(item => item.employeeId));
+  return shiftStartMembers(teamId).filter(employee => attendance.get(employee.id) === "11" || unsavedGuests.has(employee.id));
 }
 
 function isSubstituteOnly(employee) {

@@ -99,7 +99,7 @@ export class WorkforceService {
     if (![...ATTENDANCE_CODES.map(item => item.value), ...fullHours].includes(value)) throw new Error("Недопустимое значение табеля");
     const snapshot = await this.snapshot();
     const employee = snapshot.personnel.find(person => person.id === input.employeeId);
-    if (!employee || employee.shiftTeamId === "office") throw new Error("В табель фасовочного участка можно вносить только сотрудников смен.");
+    if (!employee || (employee.shiftTeamId === "office" && !input.substitutionReason)) throw new Error("В табель фасовочного участка можно вносить только сотрудников смен или подмену из другого отдела.");
     if (isSubstituteOnly(employee) && !input.substitutionReason) throw new Error("Сотрудника только для подмены добавляйте через кнопку «Добавить сотрудника на подмену».");
     if (this.repository && !snapshot.years.includes(Number(String(input.date).slice(0, 4)))) throw new Error("Этот год ещё не подключён. Табель создан на 2025–2029 годы.");
     const attendance = snapshot.attendance;

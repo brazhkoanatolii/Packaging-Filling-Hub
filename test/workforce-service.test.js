@@ -110,3 +110,19 @@ test("подменный выход сохраняется в табеле от�
   assert.equal(record.substitutionReason, "Подработка");
   assert.equal(record.homeShiftTeamId, "shift-team-a");
 });
+
+test("сотрудник другого отдела сохраняется как подмена текущей смены", async () => {
+  const service = new WorkforceService(createStore({
+    workforcePersonnel: [{ id: "employee-office-1", fullName: "Упаковщик другого отдела", role: "packer", shiftTeamId: "office", active: true }],
+    workforcePersonnelSourceVersion: 3
+  }));
+  await service.initialize();
+
+  const record = await service.saveAttendance({
+    date: "2026-09-22", shiftTeamId: "shift-team-a", employeeId: "employee-office-1", value: "11",
+    substitutionReason: "Производственная необходимость", homeShiftTeamId: "office"
+  });
+
+  assert.equal(record.employeeId, "employee-office-1");
+  assert.equal(record.homeShiftTeamId, "office");
+});
