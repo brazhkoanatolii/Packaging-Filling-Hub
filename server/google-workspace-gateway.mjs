@@ -28,6 +28,14 @@ const rawMaterialsRange = "'Расход сырья'!A3:D500";
 const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
 const cansSheetName = "Банки";
 const cansRange = "'Банки'!A4:J500";
+const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
+const productionSecondRange = "'Учет продукции 2'!A2:M";
+const productionFirstRange = "'Учет продукции 1'!B4:M";
+const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
+const productionMachineRange = "'Станки'!A7:M500";
+const productionPackerRange = "'Упаковщики'!A7:V500";
+const productionScrapRange = "'Брак'!A7:V500";
+const productionMachineColumns = Object.freeze({ A: 2, B: 3, D: 4, F: 5, H: 6, K: 7, L: 8, M: 9 });
 const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 6);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
@@ -50,6 +58,8 @@ let tokenCache = null;
 let tokenRefreshPromise = null;
 let automaticDailyExportCompletedDate = null;
 let automaticDailyExportAttemptAt = 0;
+let automaticDailyProductionExportCompletedDate = null;
+let automaticDailyProductionExportAttemptAt = 0;
 
 createServer(async (request, response) => {
   try {
@@ -151,19 +161,23 @@ createServer(async (request, response) => {
 
     if (url.pathname === "/api/production-records" && request.method === "GET") {
       if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
-      const result = await runAppsScript("getProductionSnapshot");
+      const result = await getProductionSnapshot();
       return sendJson(response, result?.ok === false ? 400 : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
       if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять записи могут только начальник участка и старший механик" });
-      const result = await runAppsScript("createProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
+      const input = await readJsonBody(request);
+      const result = await runAppsScript("createProductionRecord", [{ ...input, role: workstationRole, workstationId }]);
+      if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "PUT") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
       if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Исправлять записи могут только начальник участка и старший механик" });
-      const result = await runAppsScript("updateProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
+      const input = await readJsonBody(request);
+      const result = await runAppsScript("updateProductionRecord", [{ ...input, role: workstationRole, workstationId }]);
+      if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "DELETE") {
@@ -233,6 +247,9 @@ createServer(async (request, response) => {
     console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
     void runAutomaticDailyPackagingExport();
     setInterval(() => void runAutomaticDailyPackagingExport(), 5 * 60_000).unref();
+    console.log(`Суточная сводка продукции: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
+    void runAutomaticDailyProductionExport();
+    setInterval(() => void runAutomaticDailyProductionExport(), 5 * 60_000).unref();
   }
 });
 
@@ -458,6 +475,148 @@ async function runAutomaticDailyPackagingExport() {
   }
 }
 
+async function getProductionSnapshot() {
+  const result = await runAppsScript("getProductionSnapshot");
+  if (!result?.ok || !Array.isArray(result.records)) return result;
+  const shifts = await getProductionShiftRows();
+  const bySignature = new Map();
+  for (const row of shifts.second) {
+    const key = productionSignature(row);
+    const queue = bySignature.get(key) ?? [];
+    queue.push(row.shift);
+    bySignature.set(key, queue);
+  }
+  return {
+    ...result,
+    records: result.records.map(record => ({ ...record, shift: (bySignature.get(productionSignature(record)) ?? []).shift() ?? "" }))
+  };
+}
+
+async function persistProductionShift(record, inputShift) {
+  const shift = String(inputShift || "").trim().toUpperCase();
+  if (!record || !["A", "B"].includes(shift)) throw new Error("Не удалось определить смену из табеля");
+  const rows = await getProductionShiftRows();
+  const signature = productionSignature(record);
+  const second = [...rows.second].reverse().find(row => productionSignature(row) === signature);
+  const first = [...rows.first].reverse().find(row => productionSignature(row) === signature);
+  if (!second || !first) throw new Error("Не удалось найти новую запись в обоих листах продукции");
+  const accessToken = await getAccessToken();
+  await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
+    { range: "'Учет продукции 1'!M2", values: [["Смена"]] },
+    { range: "'Учет продукции 2'!M1", values: [["Смена"]] },
+    { range: `'Учет продукции 1'!M${first.rowNumber}`, values: [[shift]] },
+    { range: `'Учет продукции 2'!M${second.rowNumber}`, values: [[shift]] }
+  ]);
+  return { ...record, shift };
+}
+
+async function getProductionShiftRows() {
+  const [secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, [productionSecondRange, productionFirstRange]);
+  return {
+    second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2)).filter(Boolean),
+    first: (firstRows ?? []).map((row, index) => productionRowFromFirst(row, index + 4)).filter(Boolean)
+  };
+}
+
+function productionRowFromSecond(row, rowNumber) {
+  const date = googleSheetDate(row?.[0]);
+  if (!date || !String(row?.[3] || "").trim()) return null;
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), shift: String(row[12] || "").trim().toUpperCase() };
+}
+
+function productionRowFromFirst(row, rowNumber) {
+  const date = googleSheetDate(row?.[0]);
+  if (!date || !String(row?.[3] || "").trim()) return null;
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase() };
+}
+
+function productionSignature(record) {
+  return [record.date, record.startTime, record.time, record.product, record.packer, record.operator, record.line || record.machineLine]
+    .map(value => String(value || "").trim().toLocaleLowerCase("ru"))
+    .join("\u001f");
+}
+
+async function exportProductionDaily(input) {
+  const date = String(input?.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= vilniusDate()) throw new Error("Передавать можно только завершённый день");
+  const records = (await getProductionSnapshot()).records.filter(record => record.date === date);
+  if (!records.length) return { ok: true, date, empty: true };
+  if (records.some(record => !["A", "B"].includes(String(record.shift)))) throw new Error(`В продукции за ${displayDate(date)} есть записи без смены`);
+  const [machineRows, packerRows, scrapRows, packerHeaders, scrapHeaders] = await Promise.all([
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionMachineRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionPackerRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionScrapRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, ["'Упаковщики'!A6:V6"]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, ["'Брак'!A6:V6"])
+  ]);
+  const accessToken = await getAccessToken();
+  const [machineSheetId, packerSheetId, scrapSheetId] = await Promise.all([
+    getSheetId(productionReportSpreadsheetId, "Станки", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Упаковщики", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Брак", accessToken)
+  ]);
+  const machine = machineRows[0] ?? [];
+  const packers = packerRows[0] ?? [];
+  const scrap = scrapRows[0] ?? [];
+  const packerHeader = packerHeaders[0]?.[0] ?? [];
+  const scrapHeader = scrapHeaders[0]?.[0] ?? [];
+  const writes = [];
+  for (const shift of ["A", "B"]) {
+    const target = findDailyShiftRow(machine, date, shift, 7, "Станки");
+    const values = Array(8).fill(0);
+    records.filter(record => record.shift === shift).forEach(record => {
+      const column = productionMachineColumns[String(record.line || "").toUpperCase()];
+      if (column !== undefined) values[column - 2] += Number(record.quantity || 0) / 240;
+    });
+    writes.push(updateSheetCells(productionReportSpreadsheetId, accessToken, { sheetId: machineSheetId, rowIndex: target.rowNumber - 1, columnIndex: 2 }, values));
+  }
+  const packerTarget = getDailyTargetRowFromRows(packers, date, 7, "Упаковщики");
+  const scrapTarget = getDailyTargetRowFromRows(scrap, date, 7, "Брак");
+  writes.push(
+    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, packerSheetId, packerTarget.rowNumber, packerHeader, records, record => Number(record.quantity || 0) / 240),
+    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, scrapSheetId, scrapTarget.rowNumber, scrapHeader, records, record => Number(record.scrapKg || 0))
+  );
+  await Promise.all(writes);
+  return { ok: true, date, records: records.length };
+}
+
+async function updateDailyPeopleValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, records, valueFor) {
+  const totalIndex = headers.findIndex(value => String(value).trim().startsWith("Всего,"));
+  if (totalIndex < 2) throw new Error("Изменилась структура дневной сводки по сотрудникам");
+  const people = headers.slice(1, totalIndex);
+  const totals = new Map();
+  records.forEach(record => totals.set(record.packer, (totals.get(record.packer) || 0) + valueFor(record)));
+  return updateSheetCells(spreadsheetId, accessToken, { sheetId, rowIndex: rowNumber - 1, columnIndex: 1 }, people.map(name => totals.get(String(name).trim()) || 0));
+}
+
+function findDailyShiftRow(rows, date, shift, startRow, label) {
+  const index = rows.findIndex(row => googleSheetDate(row[0]) === date && String(row[1] || "").trim().toUpperCase() === shift);
+  if (index < 0) throw new Error(`В листе «${label}» не найдена строка ${displayDate(date)} · смена ${shift}`);
+  return { rowNumber: startRow + index };
+}
+
+function getDailyTargetRowFromRows(rows, date, startRow, label) {
+  const index = rows.findIndex(row => googleSheetDate(row[0]) === date);
+  if (index < 0) throw new Error(`В листе «${label}» не найдена строка даты ${displayDate(date)}`);
+  return { rowNumber: startRow + index };
+}
+
+async function runAutomaticDailyProductionExport() {
+  if (!writesEnabled || missingGoogleSettings().length) return;
+  const clock = vilniusClock();
+  if (clock.hour < automaticDailyExportHour || automaticDailyProductionExportCompletedDate === clock.date) return;
+  if (Date.now() - automaticDailyProductionExportAttemptAt < 60 * 60_000) return;
+  automaticDailyProductionExportAttemptAt = Date.now();
+  const date = previousCalendarDate(clock.date);
+  try {
+    const result = await exportProductionDaily({ date });
+    automaticDailyProductionExportCompletedDate = clock.date;
+    console.log(result.empty ? `Сводка продукции: записей за ${date} нет` : `Суточная сводка продукции выполнена: ${date}`);
+  } catch (error) {
+    console.warn(`Суточная сводка продукции не выполнена за ${date}: ${error.message}`);
+  }
+}
+
 async function getDailyTargetRow(spreadsheetId, range, date, startRow, label) {
   const rows = (await getGoogleSheetRanges(spreadsheetId, [range]))[0] ?? [];
   const index = rows.findIndex(row => googleSheetDate(row[0]) === date);
@@ -554,6 +713,17 @@ async function getGoogleSheetRanges(spreadsheetId, ranges) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать рабочий журнал");
   return (payload.valueRanges ?? []).map(range => range.values ?? []);
+}
+
+async function setGoogleSheetRanges(spreadsheetId, accessToken, data) {
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось сохранить смену в журнале продукции");
 }
 
 function workforceTeam(row) {

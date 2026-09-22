@@ -72,13 +72,15 @@ function validateProductionRecord(input, { packers, operators }) {
   if (!operators.includes(operator)) throw new Error("Выберите присутствующего механика-оператора");
   const line = text("machineLine", "Линия (машина)", 4).toUpperCase();
   if (!LINES.includes(line)) throw new Error("Выберите линию из рабочего списка");
+  const shift = text("shift", "Смена", 2).toUpperCase();
+  if (!["A", "B"].includes(shift)) throw new Error("Смена должна быть определена из табеля");
   const note = String(input.note || "").trim();
   if (note.length > 5000) throw new Error("Примечание не должно превышать 5000 символов");
   return {
     requestId: String(input.requestId || makeId("production-request")), date, startTime, time,
     product: text("product", "Продукт"), strength: numeric("strength", "Крепость", true),
     quantity: numeric("quantity", "Количество готовой продукции", true), scrapKg: numeric("scrapKg", "Брак продукции"),
-    canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer, operator, machineLine: line, note
+    canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer, operator, machineLine: line, shift, note
   };
 }
 
@@ -91,5 +93,5 @@ function validTime(value, label) {
 function normalizeRecords(records) { return records.map(normalizeRecord).filter(Boolean); }
 function normalizeRecord(value) {
   if (!value?.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(value.date || ""))) return null;
-  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator: String(value.operator || ""), note: String(value.note || "") };
+  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), shift: String(value.shift || "").toUpperCase(), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator: String(value.operator || ""), note: String(value.note || "") };
 }
