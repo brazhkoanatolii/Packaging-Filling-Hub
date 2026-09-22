@@ -173,6 +173,10 @@ createServer(async (request, response) => {
       if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять расход упаковки могут только начальник участка и старший механик" });
       return sendJson(response, 200, await createPackagingRecord({ ...(await readJsonBody(request)), role: workstationRole, workstationId }));
     }
+    if (url.pathname === "/api/packaging-records" && request.method === "DELETE") {
+      if (!writesEnabled || (workstationRole !== "manager" && workstationRole !== "senior")) return sendJson(response, 403, { ok: false, message: "Удаление расхода упаковки недоступно" });
+      return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
+    }
 
     if (url.pathname === "/api/specifications" && request.method === "GET") {
       const specifications = await runAppsScript("listProductSpecifications");
@@ -371,8 +375,7 @@ async function getPackagingSnapshot() {
 async function createPackagingRecord(input) {
   const record = validatePackagingRecord(input);
   const before = await getPackagingSnapshot();
-  const existing = before.records.find(item => item.id === record.id || item.requestId === record.requestId);
-  if (existing) return { ok: true, record: existing };
+  const existing = before.records.find(item => item.date === record.date);
   const accessToken = await getAccessToken();
   const sheetId = await getPackagingSheetId(accessToken);
   const serial = Math.round((Date.parse(`${record.date}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000);
@@ -382,14 +385,23 @@ async function createPackagingRecord(input) {
     ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } })),
     { userEnteredValue: { stringValue: record.author } }
   ];
+  const request = existing ? { updateCells: { start: { sheetId, rowIndex: existing.rowNumber - 1, columnIndex: 1 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } } : { appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } };
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, {
     method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ requests: [{ appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } }] }),
+    body: JSON.stringify({ requests: [request] }),
     signal: AbortSignal.timeout(20_000)
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось записать расход упаковки");
-  return { ok: true, record: { id: record.id, requestId: record.requestId, date: record.date, values: record.values, author: record.author } };
+  return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values, author: record.author } };
+}
+
+async function deletePackagingRecord(input) {
+  const id = String(input?.id || ""); if (!/^packaging-day-\d{4}-\d{2}-\d{2}$/.test(id)) throw new Error("Некорректный идентификатор дневной записи");
+  const record = (await getPackagingSnapshot()).records.find(item => item.id === id); if (!record) return { ok: true };
+  const accessToken = await getAccessToken(); const sheetId = await getPackagingSheetId(accessToken);
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
+  const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
 }
 
 function validatePackagingRecord(input) {
@@ -434,7 +446,7 @@ function packagingRecordFromRow(row, rowNumber, note) {
   if (!date || !author) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
   let receipt = {};
   if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }
-  return { id: receipt.id || `packaging-row-${rowNumber}`, requestId: receipt.requestId || "", date, values: Object.fromEntries(packagingKeys.map((key, index) => [key, Number(row[index + 1] || 0)])), author };
+  return { id: `packaging-day-${date}`, requestId: receipt.requestId || "", rowNumber, date, values: Object.fromEntries(packagingKeys.map((key, index) => [key, Number(row[index + 1] || 0)])), author };
 }
 
 function googleSerialToDate(value) {

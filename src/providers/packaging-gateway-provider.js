@@ -21,6 +21,7 @@ export class PackagingGatewayProvider {
     if (!payload.record || payload.record.id !== operation.record.id) throw new Error("Google не подтвердил сохранение расхода упаковки");
     return normalizeRecord(payload.record);
   }
+  async remove(id) { await this.#request("DELETE", { id }); }
 
   async #request(method, body) {
     let response;

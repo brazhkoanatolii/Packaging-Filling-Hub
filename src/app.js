@@ -339,6 +339,8 @@ async function handleClick(event) {
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
     if (action === "new-packaging") { openPackagingDialog(); return; }
+    if (action === "edit-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record) openPackagingEditDialog(record); return; }
+    if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } return; }
     if (action === "sync-packaging") {
       state.packaging = await packagingService.sync(); render();
       toast(state.packaging.error || "Журнал расхода упаковки обновлён", state.packaging.error ? "warning" : "success");
@@ -1371,7 +1373,7 @@ function renderPackagingPage() {
     ${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются только в очередь этого компьютера.</p>' : ""}
     <p>В очереди: <strong>${operations.length}</strong>${operations.length ? ". Можно вносить следующие данные, не дожидаясь Google." : "."}</p></div>
     <div class="dialog-actions"><button class="secondary-button" data-action="sync-packaging">Обновить и отправить очередь</button><button class="primary-button" data-action="new-packaging">+ Внести расход</button></div></section>
-    <section class="card settings-table-wrap"><h3>Последние записи</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Внёс данные</th><th>Состояние</th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${escapeHtml(record.author)}</td><td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 3}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
+    <section class="card settings-table-wrap"><h3>Итоги по дням</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Внёс данные</th><th>Состояние</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${escapeHtml(record.author)}</td><td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td><td><div class="row-actions"><button class="small-button" data-action="edit-packaging" data-id="${attribute(record.id)}">Изменить</button><button class="more-button" data-action="delete-packaging" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 4}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
 }
 
 function shortPackagingLabel(label) {
@@ -2655,12 +2657,10 @@ function formatNumber(value) {
 }
 
 function openPackagingDialog() {
-  const fields = PACKAGING_FIELDS.map(field => formField(`packaging-${field.key}`, field.label,
-    `<input id="packaging-${field.key}" name="${field.key}" type="number" min="0" step="0.001" value="0" inputmode="decimal">`)).join("");
   const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><div><p class="eyebrow">Расход упаковки</p><h2>Внести расход</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-    <p>Укажите только использованную упаковку. Автор будет указан автоматически: <strong>${escapeHtml(state.account.title)}</strong>.</p>
-    ${formField("packaging-date", "Дата", `<input id="packaging-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
-    <div class="form-grid packaging-fields">${fields}</div>
+    <p>Выберите упаковку и укажите полученное количество. Программа прибавит его к итогу текущего дня. Автор: <strong>${escapeHtml(state.account.title)}</strong>.</p>
+    ${formField("packaging-date", "Дата", `<input id="packaging-date" name="date" type="date" value="${today()}" readonly required>`)}
+    <div class="form-grid">${formField("packaging-item", "Вид упаковки", `<select id="packaging-item" name="item" required><option value="">Выберите упаковку</option>${PACKAGING_FIELDS.map(field => `<option value="${field.key}">${escapeHtml(field.label)}</option>`).join("")}</select>`)}${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="0.001" step="0.001" inputmode="decimal" required>` )}</div>
     <p>Запись сначала сохранится на этом компьютере и автоматически отправится в единую таблицу Google.</p>
     <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить расход</button></div></form>`);
   let saving = false;
@@ -2668,13 +2668,19 @@ function openPackagingDialog() {
     event.preventDefault(); if (saving) return; saving = true;
     const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
     try {
-      await packagingService.create(Object.fromEntries(new FormData(form)), state.account);
+      await packagingService.add(Object.fromEntries(new FormData(form)), state.account);
       dialog.close(); state.packaging = await packagingService.snapshot(); render();
       toast("Расход сохранён на этом компьютере. Отправка в Google выполняется в фоне.", "success");
       if (navigator.onLine) { void refreshPackaging(true).then(() => render()); }
     } catch (error) { showFormError(form, error); saving = false; submit.disabled = false; }
   });
   dialog.showModal();
+}
+
+function openPackagingEditDialog(record) {
+  const fields = PACKAGING_FIELDS.map(field => formField(`packaging-edit-${field.key}`, field.label, `<input id="packaging-edit-${field.key}" name="${field.key}" type="number" min="0" step="0.001" value="${attribute(record.values?.[field.key] || 0)}" inputmode="decimal">`)).join("");
+  const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><h2>Изменить итог за день</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>${formField("packaging-edit-date", "Дата", `<input id="packaging-edit-date" name="date" type="date" value="${attribute(record.date)}" readonly required>`)}<div class="form-grid packaging-fields">${fields}</div><p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить итог</button></div></form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => { event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true; try { await packagingService.update(record, Object.fromEntries(new FormData(form)), state.account); dialog.close(); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } catch (error) { showFormError(form, error); submit.disabled = false; } }); dialog.showModal();
 }
 
 function formatPercent(value) {
