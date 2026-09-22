@@ -8,6 +8,12 @@ $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) { $ServerUrl = Read-Host "Адрес центрального сервера, например http://PACKAGING-SENIOR:4174" }
 $ServerUrl = $ServerUrl.Trim().TrimEnd("/")
 if ($ServerUrl -notmatch "^https?://[^/]+(?::\d+)?$") { throw "Укажите адрес вида http://ИМЯ-КОМПЬЮТЕРА:4174" }
+try {
+  $health = Invoke-RestMethod -Uri "$ServerUrl/api/health" -Method Get -TimeoutSec 5
+  if ($health.ok -ne $true -or $health.deploymentMode -ne "central") { throw "Указанный адрес не является центральным сервером Packaging-Filling-Hub." }
+} catch {
+  throw "Не удалось проверить центральный сервер: $($_.Exception.Message)"
+}
 
 $chromeCandidates = @(
   (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),

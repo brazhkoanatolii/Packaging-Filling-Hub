@@ -60,6 +60,11 @@ if (-not (Test-Path -LiteralPath $accountsPath -PathType Leaf)) {
 }
 
 & (Join-Path $InstallRoot "scripts\windows\start-program.ps1") -InstallRoot $InstallRoot
+$firewallScript = Join-Path $InstallRoot "scripts\windows\enable-central-firewall.ps1"
+if (Test-Path -LiteralPath $firewallScript -PathType Leaf) {
+  & $firewallScript -Port $Port
+  if ($LASTEXITCODE -eq 2) { Write-Host "Сервер запущен локально, но для сети потребуется правило Firewall." -ForegroundColor Yellow }
+}
 Write-Host "`nЦентральный сервер готов." -ForegroundColor Green
 Write-Host "На этом компьютере программа открывается по адресу: http://127.0.0.1:$Port"
 Write-Host ("Для других компьютеров используйте имя этого ПК или его постоянный IP: http://{0}:{1}" -f $env:COMPUTERNAME, $Port)
