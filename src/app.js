@@ -196,9 +196,12 @@ function handleInput(event) {
 async function handleChange(event) {
   if (event.target.matches("[data-specification-select]")) {
     const field = event.target.dataset.specificationSelect;
-    state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
-    if (field === "line") state.specificationSelection = { line: event.target.value, product: "", variant: "" };
-    if (field === "product") state.specificationSelection = { ...state.specificationSelection, product: event.target.value, variant: "" };
+    const nextSelection = { ...state.specificationSelection, [field]: event.target.value };
+    state.specificationSelection = normalizeSpecificationSelection(
+      state.specifications?.specifications ?? [],
+      nextSelection,
+      field
+    );
     render();
     return;
   }
@@ -1638,29 +1641,66 @@ function openCycloneDialog() {
   dialog.showModal();
 }
 
+function filterSpecifications(specifications, selection, ignoredField = "") {
+  return specifications.filter(item => ["line", "product", "variant"].every(field => {
+    if (field === ignoredField || !selection[field]) return true;
+    return String(item[field]) === String(selection[field]);
+  }));
+}
+
+function uniqueSpecificationValues(specifications, field) {
+  const values = [...new Set(specifications.map(item => String(item[field] ?? "")).filter(Boolean))];
+  return field === "variant"
+    ? values.sort((a, b) => Number(b) - Number(a))
+    : values.sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+function normalizeSpecificationSelection(specifications, selection, lockedField) {
+  const next = { line: selection.line || "", product: selection.product || "", variant: selection.variant || "" };
+  for (const field of ["line", "product", "variant"]) {
+    if (field === lockedField || !next[field]) continue;
+    if (!filterSpecifications(specifications, next).length) next[field] = "";
+  }
+  return next;
+}
+
+function specificationUsageKey(item) {
+  return `${String(item.product ?? "").trim().toLocaleLowerCase("ru")}::${String(item.variant ?? item.strength ?? "").trim()}`;
+}
+
+function specificationUsageFrequency(records) {
+  return records.reduce((frequency, record) => {
+    const key = specificationUsageKey(record);
+    if (key !== "::") frequency.set(key, (frequency.get(key) || 0) + 1);
+    return frequency;
+  }, new Map());
+}
+
 function renderSpecificationsPage() {
   const all = state.specifications?.specifications ?? [];
-  const lines = [...new Set(all.map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
   const selection = state.specificationSelection;
   const query = state.specificationSearch.trim().toLocaleLowerCase("ru");
-  const byLine = all.filter(item => !selection.line || item.line === selection.line);
-  const products = [...new Set(byLine.map(item => item.product))].sort((a, b) => a.localeCompare(b, "ru"));
-  const byProduct = byLine.filter(item => !selection.product || item.product === selection.product);
-  const variants = [...new Set(byProduct.map(item => String(item.variant)))].sort((a, b) => Number(b) - Number(a));
-  const selected = byProduct.find(item => String(item.variant) === selection.variant) || (byProduct.length === 1 ? byProduct[0] : null);
-  const matching = all.filter(item => !query || [item.line, item.product, item.variant, item.processType, item.canType, item.lidColor].some(value => String(value ?? "").toLocaleLowerCase("ru").includes(query)));
-  const catalog = matching.sort((a, b) => String(a.line).localeCompare(String(b.line), "ru") || String(a.product).localeCompare(String(b.product), "ru") || Number(b.variant) - Number(a.variant));
+  const optionsFor = field => uniqueSpecificationValues(filterSpecifications(all, selection, field), field);
+  const lines = optionsFor("line");
+  const products = optionsFor("product");
+  const variants = optionsFor("variant");
+  const selectedCandidates = filterSpecifications(all, selection);
+  const selected = selectedCandidates.length === 1 ? selectedCandidates[0] : null;
+  const matching = filterSpecifications(all.filter(item => !query || [item.line, item.product, item.variant, item.processType, item.canType, item.lidColor].some(value => String(value ?? "").toLocaleLowerCase("ru").includes(query))), selection);
+  const hasSelection = Object.values(selection).some(Boolean);
+  const frequency = specificationUsageFrequency(state.production?.records ?? []);
+  const catalog = [...matching].sort((a, b) => (frequency.get(specificationUsageKey(b)) || 0) - (frequency.get(specificationUsageKey(a)) || 0) || String(a.product).localeCompare(String(b.product), "ru") || String(a.line).localeCompare(String(b.line), "ru") || Number(b.variant) - Number(a.variant));
   const sourceLabel = state.specifications?.source === "google" ? "Google Sheets" : state.specifications?.source === "cache" ? "Офлайн-копия" : state.specifications?.source === "demo" ? "Демонстрационные данные" : "Источник недоступен";
   const error = state.specifications?.error ? `<p class="module-note">${escapeHtml(state.specifications.error)}. Можно открыть последнюю сохранённую копию при следующем запуске.</p>` : "";
   const canEdit = state.account?.role === "manager" && APP_CONFIG.integration.googleWritesEnabled;
   return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>${canEdit ? "Добавляйте и исправляйте продукты прямо в программе. Каталог обновляется из Google Sheets без ручного переноса." : "Рабочий каталог продуктов и технологических норм. Только просмотр."}</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-specifications">↻ Обновить каталог</button>${canEdit ? `<button class="primary-button" data-action="add-specification">+ Добавить продукт</button>` : ""}<a class="quiet-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Источник Google ↗</a></div></section>
     ${error}
     <section class="card specification-picker"><div class="catalog-search-row"><label class="personnel-search"><span>Поиск по каталогу</span><input type="search" value="${attribute(state.specificationSearch)}" data-specification-search placeholder="Название продукта, линейка, mg/g, банка или крышка" autocomplete="off"></label><span class="status-pill neutral">${matching.length} из ${all.length} позиций</span></div><div class="form-grid">
-      ${formField("spec-line", "Линейка", `<select id="spec-line" data-specification-select="line"><option value="">Выберите линейку</option>${lines.map(line => `<option value="${attribute(line)}" ${selection.line === line ? "selected" : ""}>${escapeHtml(line)}</option>`).join("")}</select>`)}
-      ${formField("spec-product", "Продукт", `<select id="spec-product" data-specification-select="product" ${selection.line ? "" : "disabled"}><option value="">Выберите продукт</option>${products.map(product => `<option value="${attribute(product)}" ${selection.product === product ? "selected" : ""}>${escapeHtml(product)}</option>`).join("")}</select>`)}
-      ${formField("spec-variant", "mg/g", `<select id="spec-variant" data-specification-select="variant" ${selection.product ? "" : "disabled"}><option value="">Выберите вариант</option>${variants.map(variant => `<option value="${attribute(variant)}" ${selection.variant === variant ? "selected" : ""}>${escapeHtml(variant)}</option>`).join("")}</select>`)}
+      ${formField("spec-line", "Линейка", `<select id="spec-line" data-specification-select="line"><option value="">Все линейки</option>${lines.map(line => `<option value="${attribute(line)}" ${selection.line === line ? "selected" : ""}>${escapeHtml(line)}</option>`).join("")}</select>`)}
+      ${formField("spec-product", "Продукт", `<select id="spec-product" data-specification-select="product"><option value="">Все продукты</option>${products.map(product => `<option value="${attribute(product)}" ${selection.product === product ? "selected" : ""}>${escapeHtml(product)}</option>`).join("")}</select>`)}
+      ${formField("spec-variant", "mg/g", `<select id="spec-variant" data-specification-select="variant"><option value="">Все варианты</option>${variants.map(variant => `<option value="${attribute(variant)}" ${selection.variant === variant ? "selected" : ""}>${escapeHtml(variant)}</option>`).join("")}</select>`)}
     </div></section>
-    <section class="specification-workspace"><section class="card specification-catalog"><div class="section-heading"><div><p class="eyebrow">Каталог</p><h2>${query ? "Результаты поиска" : "Быстрый выбор"}</h2></div><span class="status-pill neutral">${Math.min(catalog.length, 12)} показано</span></div><div class="specification-result-list">${catalog.slice(0, 12).map(item => `<button class="specification-result ${selected?.id === item.id ? "selected" : ""}" data-action="select-specification" data-id="${attribute(item.id)}"><span><strong>${escapeHtml(item.product)}</strong><small>${escapeHtml(item.line)}</small></span><span><b>${escapeHtml(String(item.variant))}</b><small>mg/g · ${escapeHtml(item.processType || "—")}</small></span></button>`).join("") || '<div class="empty-state compact"><span>⌕</span><p>По этому запросу продуктов нет</p></div>'}</div>${catalog.length > 12 ? `<p class="module-note">Уточните поиск или выберите линейку: найдено ещё ${catalog.length - 12} позиций.</p>` : ""}</section>
+    <section class="specification-workspace"><section class="card specification-catalog"><div class="section-heading"><div><p class="eyebrow">Каталог</p><h2>${query || hasSelection ? "Результаты выбора" : "Быстрый выбор"}</h2>${query || hasSelection ? "" : "<p>Сначала — позиции, которые чаще всего встречаются в журнале продукции.</p>"}</div><span class="status-pill neutral">${Math.min(catalog.length, 12)} показано</span></div><div class="specification-result-list">${catalog.slice(0, 12).map(item => `<button class="specification-result ${selected?.id === item.id ? "selected" : ""}" data-action="select-specification" data-id="${attribute(item.id)}"><span><strong>${escapeHtml(item.product)}</strong><small>${escapeHtml(item.line)}</small></span><span><b>${escapeHtml(String(item.variant))}</b><small>mg/g · ${escapeHtml(item.processType || "—")}</small></span></button>`).join("") || '<div class="empty-state compact"><span>⌕</span><p>По этому запросу продуктов нет</p></div>'}</div>${catalog.length > 12 ? `<p class="module-note">Уточните поиск или выберите любой фильтр: найдено ещё ${catalog.length - 12} позиций.</p>` : ""}</section>
       <div>${selected ? renderSpecificationCard(selected, canEdit) : `<section class="card empty-state specification-empty"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "Найдите продукт или выберите его из каталога — здесь сразу появятся технологические нормы и упаковка." : "Проверьте подключение к Google и обновите каталог."}</p></section>`}</div>
     </section>
     <p class="module-note">Источник — Google Sheets. Новые продукты и изменения появляются после обновления каталога; исходные названия и пустые нормы сухих продуктов сохраняются без изменений.</p>`;
