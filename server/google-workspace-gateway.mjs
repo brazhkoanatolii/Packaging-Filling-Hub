@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CentralAuthService, readCookie } from "./central-auth.mjs";
 
 const projectRoot = normalize(join(fileURLToPath(new URL(".", import.meta.url)), ".."));
 loadEnvironment(join(projectRoot, ".env"));
@@ -11,6 +12,7 @@ const appVersion = JSON.parse(readFileSync(join(projectRoot, "package.json"), "u
 const port = numberFromEnvironment("PORT", 4173);
 const host = process.env.HOST || "127.0.0.1";
 const writesEnabled = process.env.GOOGLE_WRITES_ENABLED === "true";
+const centralMode = process.env.DEPLOYMENT_MODE === "central";
 const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
@@ -57,6 +59,18 @@ const types = {
 };
 const publicFiles = new Set(["index.html", "manifest.webmanifest", "service-worker.js"]);
 const publicDirectories = ["assets/", "src/"];
+const centralAccountsPath = process.env.CENTRAL_ACCOUNTS_PATH
+  ? resolve(process.env.CENTRAL_ACCOUNTS_PATH)
+  : join(projectRoot, ".runtime", "central-accounts.json");
+const centralAuth = centralMode
+  ? new CentralAuthService({ accountsPath: centralAccountsPath })
+  : null;
+if (centralAuth) {
+  centralAuth.initialize({
+    manager: process.env.CENTRAL_MANAGER_PASSWORD,
+    "senior-mechanic": process.env.CENTRAL_SENIOR_PASSWORD
+  });
+}
 
 let tokenCache = null;
 let tokenRefreshPromise = null;
@@ -74,9 +88,10 @@ createServer(async (request, response) => {
         mode: "gateway",
         googleWritesEnabled: writesEnabled,
         gatewayBaseUrl: "",
-        workstationRole,
-        workstationId,
-        workstationLabel
+        workstationRole: centralMode ? null : workstationRole,
+        workstationId: centralMode ? null : workstationId,
+        workstationLabel: centralMode ? "Центральный сервер участка" : workstationLabel,
+        centralAuth: centralMode
       })});`);
     }
 
@@ -86,18 +101,43 @@ createServer(async (request, response) => {
         version: appVersion,
         configured: missingGoogleSettings().length === 0,
         writesEnabled,
-        workstationRole,
-        workstationConfigured: workstationRole !== null,
+        deploymentMode: centralMode ? "central" : "workstation",
+        workstationRole: centralMode ? null : workstationRole,
+        workstationConfigured: centralMode || workstationRole !== null,
         workstationId,
         workstationLabel,
         missing: missingGoogleSettings()
       });
     }
 
+    if (url.pathname === "/api/auth/session" && request.method === "GET") {
+      return sendJson(response, 200, { ok: true, account: centralAuth ? actorFromRequest(request) : null });
+    }
+    if (url.pathname === "/api/auth/login" && request.method === "POST") {
+      if (!centralAuth) return sendJson(response, 404, { ok: false, message: "Центральный вход не настроен" });
+      const input = await readJsonBody(request);
+      const session = centralAuth.login(input.accountId, input.password);
+      return sendJson(response, 200, { ok: true, account: session.account }, {
+        "Set-Cookie": sessionCookie(session.token, session.expiresAt)
+      });
+    }
+    if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+      if (centralAuth) centralAuth.logout(readCookie(request, "PFH_SESSION"));
+      return sendJson(response, 200, { ok: true }, { "Set-Cookie": expiredSessionCookie() });
+    }
+    if (url.pathname === "/api/auth/password" && request.method === "POST") {
+      const actor = requireActor(request);
+      if (!centralAuth) return sendJson(response, 404, { ok: false, message: "Центральный вход не настроен" });
+      const input = await readJsonBody(request);
+      centralAuth.changePassword(actor, input.accountId, input.currentPassword, input.nextPassword);
+      return sendJson(response, 200, { ok: true });
+    }
+
     if (url.pathname === "/api/update-status" && request.method === "GET") {
       return sendJson(response, 200, await getUpdateStatus());
     }
     if (url.pathname === "/api/update" && request.method === "POST") {
+      requireActor(request, ["manager"]);
       const update = await getUpdateStatus();
       if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
       if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });
@@ -113,14 +153,14 @@ createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/cyclone-records") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      const actor = requireActor(request, ["manager", "senior"]);
       if (request.method === "GET") return sendJson(response, 200, await runAppsScript("listCycloneRecords"));
       if (request.method === "POST") {
         if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
         const input = await readJsonBody(request);
         const result = await runAppsScript("createCycloneRecord", [{
           requestId: input.requestId, recordId: input.recordId, date: input.date, performer: input.performer,
-          role: workstationRole, workstationId
+          role: actor.role, workstationId: workstationId || actor.id
         }]);
         return sendJson(response, result?.ok === false ? 400 : 200, result);
       }
@@ -128,115 +168,117 @@ createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/scale-records" && request.method === "GET") {
+      requireActor(request, ["manager", "senior"]);
       const result = await runAppsScript("listScaleRecords");
       return sendJson(response, 200, result);
     }
 
     if (url.pathname === "/api/workforce" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await getWorkforceSnapshot());
     }
     if (url.pathname === "/api/workforce" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена" });
       const payload = await readJsonBody(request);
-      if (!workstationRole || (workstationRole !== "manager" && payload.kind !== "attendance")) return sendJson(response, 403, { ok: false, message: "Недостаточно прав" });
-      const result = await runAppsScript("writeWorkforceOperation", [{ ...payload, role: workstationRole }]);
+      const actor = requireActor(request, payload.kind === "attendance" ? ["manager", "senior"] : ["manager"]);
+      const result = await runAppsScript("writeWorkforceOperation", [{ ...payload, role: actor.role }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 
     if (url.pathname === "/api/maintenance" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       const result = await runAppsScript("getMaintenanceSnapshot");
       return sendJson(response, result?.ok === false ? 400 : 200, result);
     }
     if (url.pathname === "/api/maintenance-due" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await getMaintenanceDueSnapshot());
     }
     if (url.pathname === "/api/maintenance" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять записи могут только начальник участка и старший механик" });
+      const actor = requireActor(request, ["manager", "senior"]);
       const payload = await readJsonBody(request);
       const functionName = payload.journal === "repair" ? "createRepairRecord" : payload.journal === "service" ? "createMaintenanceRecord" : null;
       if (!functionName) return sendJson(response, 400, { ok: false, message: "Укажите журнал: ТО или ремонт" });
-      const result = await runAppsScript(functionName, [{ ...payload, role: workstationRole, workstationId }]);
+      const result = await runAppsScript(functionName, [{ ...payload, role: actor.role, workstationId: workstationId || actor.id }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 
     if (url.pathname === "/api/production-records" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       const result = await getProductionSnapshot();
       return sendJson(response, result?.ok === false ? 400 : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять записи могут только начальник участка и старший механик" });
+      const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
-      const result = await runAppsScript("createProductionRecord", [{ ...input, role: workstationRole, workstationId }]);
+      const result = await runAppsScript("createProductionRecord", [{ ...input, role: actor.role, workstationId: workstationId || actor.id }]);
       if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "PUT") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Исправлять записи могут только начальник участка и старший механик" });
+      const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
-      const result = await runAppsScript("updateProductionRecord", [{ ...input, role: workstationRole, workstationId }]);
+      const result = await runAppsScript("updateProductionRecord", [{ ...input, role: actor.role, workstationId: workstationId || actor.id }]);
       if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "DELETE") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Удалять записи могут только начальник участка и старший механик" });
-      const result = await runAppsScript("deleteProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
+      const actor = requireActor(request, ["manager", "senior"]);
+      const result = await runAppsScript("deleteProductionRecord", [{ ...(await readJsonBody(request)), role: actor.role, workstationId: workstationId || actor.id }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 
     if (url.pathname === "/api/packaging-records" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await getPackagingSnapshot());
     }
     if (url.pathname === "/api/packaging-records" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять расход упаковки могут только начальник участка и старший механик" });
-      return sendJson(response, 200, await createPackagingRecord({ ...(await readJsonBody(request)), role: workstationRole, workstationId }));
+      const actor = requireActor(request, ["manager", "senior"]);
+      return sendJson(response, 200, await createPackagingRecord({ ...(await readJsonBody(request)), role: actor.role, workstationId: workstationId || actor.id }));
     }
     if (url.pathname === "/api/packaging-records" && request.method === "DELETE") {
-      if (!writesEnabled || (workstationRole !== "manager" && workstationRole !== "senior")) return sendJson(response, 403, { ok: false, message: "Удаление расхода упаковки недоступно" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/nonconformities" && request.method === "GET") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await getNonconformitySnapshot());
     }
     if (url.pathname === "/api/nonconformities" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Вносить несоответствия могут только начальник участка и старший механик" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await createNonconformityRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/nonconformities" && request.method === "PUT") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Исправлять несоответствия могут только начальник участка и старший механик" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await updateNonconformityRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/nonconformities" && request.method === "DELETE") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Удалять несоответствия могут только начальник участка и старший механик" });
+      requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await deleteNonconformityRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/specifications" && request.method === "GET") {
+      requireActor(request, ["manager", "senior"]);
       const specifications = await runAppsScript("listProductSpecifications");
       return sendJson(response, 200, { ok: true, specifications: Array.isArray(specifications) ? specifications : [] });
     }
     if (url.pathname === "/api/specifications" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Редактировать спецификации может только начальник участка" });
-      const specification = await runAppsScript("saveProductSpecification", [{ ...(await readJsonBody(request)), role: workstationRole }]);
+      const actor = requireActor(request, ["manager"]);
+      const specification = await runAppsScript("saveProductSpecification", [{ ...(await readJsonBody(request)), role: actor.role }]);
       return sendJson(response, 200, { ok: true, specification });
     }
     if (url.pathname === "/api/specifications" && request.method === "DELETE") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Редактировать спецификации может только начальник участка" });
-      const result = await runAppsScript("deleteProductSpecification", [{ ...(await readJsonBody(request)), role: workstationRole }]);
+      const actor = requireActor(request, ["manager"]);
+      const result = await runAppsScript("deleteProductSpecification", [{ ...(await readJsonBody(request)), role: actor.role }]);
       return sendJson(response, 200, result);
     }
 
@@ -244,6 +286,7 @@ createServer(async (request, response) => {
       if (!writesEnabled) {
         return sendJson(response, 403, { ok: false, message: "Запись в Google пока выключена начальником участка" });
       }
+      requireActor(request, ["manager", "senior"]);
       const payload = await readJsonBody(request);
       const result = await runAppsScript("writeScaleRecordV2", [payload]);
       return sendJson(response, result?.conflict ? 409 : 200, result);
@@ -266,7 +309,7 @@ createServer(async (request, response) => {
   console.log(`Packaging-Filling-Hub: http://${host}:${port}`);
   console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
-  if (workstationRole === "manager") {
+  if (centralMode || workstationRole === "manager") {
     console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
     void runAutomaticDailyPackagingExport();
     setInterval(() => void runAutomaticDailyPackagingExport(), 5 * 60_000).unref();
@@ -930,12 +973,13 @@ function readJsonBody(request) {
   });
 }
 
-function sendJson(response, statusCode, payload) {
+function sendJson(response, statusCode, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    "X-Content-Type-Options": "nosniff",
+    ...extraHeaders
   });
   response.end(body);
 }
@@ -1003,6 +1047,41 @@ function normalizeWorkstationLabel(value) {
   const result = String(value).trim();
   if (result.length <= 80) return result;
   throw new Error("WORKSTATION_LABEL не должен превышать 80 символов");
+}
+
+function actorFromRequest(request) {
+  if (centralAuth) return centralAuth.accountForToken(readCookie(request, "PFH_SESSION"));
+  if (!workstationRole) return null;
+  return {
+    id: workstationRole === "manager" ? "manager" : "senior-mechanic",
+    role: workstationRole,
+    title: workstationRole === "manager" ? "Начальник участка" : "Старший механик",
+    description: workstationLabel || "Рабочее место"
+  };
+}
+
+function requireActor(request, roles = null) {
+  const actor = actorFromRequest(request);
+  if (!actor) {
+    const error = new Error("Сначала войдите в учётную запись");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (roles && !roles.includes(actor.role)) {
+    const error = new Error("Недостаточно прав");
+    error.statusCode = 403;
+    throw error;
+  }
+  return actor;
+}
+
+function sessionCookie(token, expiresAt) {
+  const maxAge = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+  return `PFH_SESSION=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+}
+
+function expiredSessionCookie() {
+  return "PFH_SESSION=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0";
 }
 
 function loadEnvironment(filePath) {

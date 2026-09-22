@@ -75,3 +75,5 @@ npm run check
 Подробности: [docs/architecture.md](docs/architecture.md), [docs/google-integration.md](docs/google-integration.md) и [пошаговая инструкция](docs/GOOGLE-SETUP-RU.md).
 
 Утверждённые правила и поэтапный план развития: [docs/PROJECT-RULES-ROADMAP-RU.md](docs/PROJECT-RULES-ROADMAP-RU.md).
+
+Для работы двух и более компьютеров в одной заводской сети: [центральный сервер участка](docs/CENTRAL-SERVER-RU.md).

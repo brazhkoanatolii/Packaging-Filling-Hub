@@ -111,7 +111,11 @@ async function bootstrap() {
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
-  authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
+  authService = new AuthService(store, {
+    allowedRole: APP_CONFIG.workstationRole,
+    apiBaseUrl: APP_CONFIG.integration.gatewayBaseUrl,
+    remote: APP_CONFIG.centralAuth
+  });
   shiftService = new ShiftService(store);
   workforceRepository = APP_CONFIG.integration.mode === "gateway" ? new WorkforceRepository(store,
     new WorkforceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl, writesEnabled: APP_CONFIG.integration.googleWritesEnabled }),
@@ -149,7 +153,7 @@ async function bootstrap() {
   startClock();
   registerServiceWorker();
   void checkForUpdate();
-  if (navigator.onLine) void startStartupJournalSync().finally(() => syncInBackground());
+  if (navigator.onLine && (!APP_CONFIG.centralAuth || state.account)) void startStartupJournalSync().finally(() => syncInBackground());
 }
 
 function createRemoteProvider() {
@@ -280,6 +284,7 @@ async function handleSubmit(event) {
       if (responsibility) await store.setPreference("sessionShiftResponsible", responsibility);
       state.page = "dashboard";
       render();
+      if (navigator.onLine) void startStartupJournalSync().finally(() => syncInBackground());
     } catch (error) {
       const panel = form.querySelector("[data-login-error]");
       if (panel) { panel.textContent = error.message || "Не удалось выполнить вход"; panel.hidden = false; }
@@ -297,7 +302,7 @@ async function handleSubmit(event) {
     try {
       await authService.changePassword(String(data.get("accountId") || ""), String(data.get("currentPassword") || ""), nextPassword);
       form.reset();
-      toast("Пароль учётной записи изменён на этом компьютере.", "success");
+      toast(APP_CONFIG.centralAuth ? "Пароль учётной записи изменён на центральном сервере." : "Пароль учётной записи изменён на этом компьютере.", "success");
     } catch (error) {
       toast(error.message || "Не удалось изменить пароль.", "error");
     }
@@ -902,7 +907,7 @@ function renderLogin() {
         <div class="panel-heading">
           <span class="mode-pill">${productionMode ? escapeHtml(APP_CONFIG.workstationLabel || "Рабочее место") : "Тестовый режим"}</span>
           <h2>Кто работает?</h2>
-          <p>${APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
+          <p>${APP_CONFIG.centralAuth ? "Выберите рабочую учётную запись. Права определяются центральным сервером." : APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
         </div>
         <div class="account-list">
           ${accounts.map(account => `
@@ -920,7 +925,7 @@ function renderLogin() {
             </form>
           `).join("")}
         </div>
-        <p class="privacy-note">Первый пароль для каждой учётной записи: <b>0000</b>. Начальник участка меняет пароли в «Настройках». ${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
+        <p class="privacy-note">${APP_CONFIG.centralAuth ? "Пароли хранятся только на центральном сервере. Начальник участка меняет их в «Настройках»." : "Первый пароль для каждой учётной записи: <b>0000</b>. Начальник участка меняет пароли в «Настройках"} ${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
       </section>
     </main>`;
 }
@@ -1818,8 +1823,8 @@ function renderSettingsPage() {
           ${settingRow("Дата и время", APP_CONFIG.timeZone, "Часы отображаются постоянно")}
         </section>
         <section class="card settings-section">
-          <div class="section-heading"><div><p class="eyebrow">Доступ к программе</p><h2>Пароли учётных записей</h2></div><span class="status-pill warning">Только этот компьютер</span></div>
-          <p class="settings-copy">Первоначальный пароль — <b>0000</b>. Чтобы изменить пароль, укажите текущий пароль выбранной учётной записи.</p>
+          <div class="section-heading"><div><p class="eyebrow">Доступ к программе</p><h2>Пароли учётных записей</h2></div><span class="status-pill warning">${APP_CONFIG.centralAuth ? "Центральный сервер" : "Только этот компьютер"}</span></div>
+          <p class="settings-copy">${APP_CONFIG.centralAuth ? "Пароли едины для рабочих компьютеров. Чтобы изменить пароль, укажите текущий пароль выбранной учётной записи." : "Первоначальный пароль — <b>0000</b>. Чтобы изменить пароль, укажите текущий пароль выбранной учётной записи."}</p>
           <form class="settings-password-form" data-form="password-change">
             <label class="field"><span>Учётная запись</span><select name="accountId">${authService.availableAccounts().map(account => `<option value="${account.id}">${escapeHtml(account.title)}</option>`).join("")}</select></label>
             <label class="field"><span>Текущий пароль</span><input name="currentPassword" type="password" minlength="4" required autocomplete="current-password"></label>

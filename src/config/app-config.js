@@ -2,7 +2,7 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.8.51",
+  version: "0.8.52",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,
@@ -15,6 +15,7 @@ export const APP_CONFIG = Object.freeze({
   workstationLabel: typeof runtimeConfig.workstationLabel === "string"
     ? runtimeConfig.workstationLabel
     : null,
+  centralAuth: runtimeConfig.centralAuth === true,
   integration: {
     mode: "gateway",
     googleWritesEnabled: runtimeConfig.googleWritesEnabled === true,

@@ -48,3 +48,17 @@ test("изменённый пароль заменяет первоначаль�
   assert.equal((await service.login("senior-mechanic", "2468")).role, "senior");
   assert.equal((await service.login("manager", "0000")).role, "manager");
 });
+
+test("central authentication uses the same-origin server even without an explicit gateway URL", async () => {
+  const requests = [];
+  const service = new AuthService(new PreferenceStore(), {
+    remote: true,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ ok: true, account: { id: "manager", role: "manager" } }) };
+    }
+  });
+  assert.equal((await service.current()).role, "manager");
+  assert.equal(requests[0].url, "/api/auth/session");
+  assert.equal(requests[0].options.credentials, "same-origin");
+});

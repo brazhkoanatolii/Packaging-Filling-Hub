@@ -30,6 +30,8 @@ try {
     "INSTALL-HOME-MANAGER.cmd",
     "INSTALL-MANAGER.cmd",
     "INSTALL-SENIOR-MECHANIC.cmd",
+    "INSTALL-CENTRAL-SERVER.cmd",
+    "INSTALL-MANAGER-NETWORK-CLIENT.cmd",
     "UPDATE-MANAGER-WORK.cmd",
     "UPDATE-SENIOR-MECHANIC-WORK.cmd",
     "CONNECT-GOOGLE.cmd",
@@ -39,6 +41,8 @@ try {
   )) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination (Join-Path $stagePath $file)
   }
+  New-Item -ItemType Directory -Path (Join-Path $stagePath "docs") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $projectRoot "docs\CENTRAL-SERVER-RU.md") -Destination (Join-Path $stagePath "docs\CENTRAL-SERVER-RU.md")
 
   if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
   if (Test-Path -LiteralPath $hashPath) { Remove-Item -LiteralPath $hashPath -Force }

@@ -19,6 +19,16 @@ function Get-EnvironmentValue {
   return ($match -split "=", 2)[1].Trim().Trim('"').Trim("'")
 }
 
+function Set-EnvironmentValue {
+  param([string]$Path, [string]$Name, [string]$Value)
+  $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8)
+  $replacement = "$Name=$Value"
+  $index = -1
+  for ($i = 0; $i -lt $lines.Count; $i += 1) { if ($lines[$i] -match "^\s*$([regex]::Escape($Name))\s*=") { $index = $i } }
+  if ($index -ge 0) { $lines[$index] = $replacement } else { $lines += $replacement }
+  Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
+}
+
 $targetRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 $environmentPath = Join-Path $targetRoot ".env"
 if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) { throw "Не найдено локальное подключение программы." }
@@ -32,6 +42,9 @@ if ($uri.Scheme -ne "https" -or $uri.Host -ne "raw.githubusercontent.com" -or $u
 $workstation = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ROLE"
 $workstationId = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ID"
 $workstationLabel = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_LABEL"
+$deploymentMode = Get-EnvironmentValue -Path $environmentPath -Name "DEPLOYMENT_MODE"
+$host = Get-EnvironmentValue -Path $environmentPath -Name "HOST"
+$port = Get-EnvironmentValue -Path $environmentPath -Name "PORT"
 if ($workstation -notin @("manager", "senior")) { throw "Не определена роль рабочего компьютера." }
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "packaging-filling-hub-update-$([guid]::NewGuid().ToString('N'))"
@@ -48,7 +61,15 @@ try {
   Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedPath -Force
   $installer = Join-Path $expandedPath "scripts\windows\install.ps1"
   if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "В пакете нет сценария установки." }
-  & $installer -Workstation $workstation -WorkstationId $workstationId -WorkstationLabel $workstationLabel -InstallRoot $targetRoot
+  if ($deploymentMode -eq "central") {
+    & $installer -Workstation $workstation -WorkstationId $workstationId -WorkstationLabel $workstationLabel -InstallRoot $targetRoot -NoStart
+    Set-EnvironmentValue -Path $environmentPath -Name "DEPLOYMENT_MODE" -Value "central"
+    Set-EnvironmentValue -Path $environmentPath -Name "HOST" -Value $(if ($host) { $host } else { "0.0.0.0" })
+    if ($port) { Set-EnvironmentValue -Path $environmentPath -Name "PORT" -Value $port }
+    & (Join-Path $targetRoot "scripts\windows\start-program.ps1") -InstallRoot $targetRoot
+  } else {
+    & $installer -Workstation $workstation -WorkstationId $workstationId -WorkstationLabel $workstationLabel -InstallRoot $targetRoot
+  }
 } catch {
   $message = $_.Exception.Message
   $logDirectory = Join-Path $targetRoot "logs"
