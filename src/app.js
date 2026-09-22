@@ -371,6 +371,7 @@ async function handleClick(event) {
       toast(state.packaging.error || "Журнал расхода упаковки обновлён", state.packaging.error ? "warning" : "success");
       return;
     }
+    if (action === "export-packaging-daily") { openPackagingDailyExportDialog(); return; }
     if (action === "sync-cyclones") {
       state.cyclones = await cycloneService.sync();
       render();
@@ -1397,7 +1398,7 @@ function renderPackagingPage() {
   const current = records.find(record => record.date === today());
   const selected = PACKAGING_FIELDS.find(field => field.key === state.packagingEntryItem) ?? null;
   const canSubmit = Boolean(selected);
-  return `<section class="packaging-toolbar"><p>${escapeHtml(status)} · В очереди: <strong>${operations.length}</strong>${!APP_CONFIG.integration.googleWritesEnabled ? " · Отправка в Google выключена" : ""}</p><button class="secondary-button" data-action="sync-packaging">Обновить</button></section>
+  return `<section class="packaging-toolbar"><p>${escapeHtml(status)} · В очереди: <strong>${operations.length}</strong>${!APP_CONFIG.integration.googleWritesEnabled ? " · Отправка в Google выключена" : ""}</p><div class="packaging-toolbar-actions"><button class="secondary-button" data-action="sync-packaging">Обновить</button>${state.account.role === "manager" ? '<button class="primary-button" data-action="export-packaging-daily">Передать итоги дня</button>' : ""}</div></section>
     <section class="packaging-workspace"><article class="card packaging-catalog"><div class="section-heading"><div><p class="eyebrow">Сегодня</p><h2>Вид упаковки</h2><p>Нажмите на нужную позицию. Рядом показан уже взятый итог за день.</p></div></div><div class="packaging-item-list">${PACKAGING_FIELDS.map(field => { const total = Number(current?.values?.[field.key] || 0); const active = selected?.key === field.key; return `<button type="button" class="packaging-item ${active ? "selected" : ""}" data-action="select-packaging-item" data-item="${attribute(field.key)}"><span><strong>${escapeHtml(shortPackagingLabel(field.label))}</strong><small>Уже взято сегодня</small></span><b>${formatNumber(total)} <small>${escapeHtml(packagingUnit(field))}</small></b></button>`; }).join("")}</div></article>
     <form class="card packaging-entry-panel" data-form="packaging-quick"><p class="eyebrow">Быстрый ввод</p><h2>${selected ? escapeHtml(shortPackagingLabel(selected.label)) : "Выберите упаковку"}</h2><p class="packaging-current-total">${selected ? `Уже взято: <strong>${formatNumber(Number(current?.values?.[selected.key] || 0))} ${escapeHtml(packagingUnit(selected))}</strong>` : "Сначала выберите позицию слева."}</p><input type="hidden" name="item" value="${attribute(selected?.key || "")}">${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="0" required ${selected ? "" : "disabled"}>`, "Новое количество будет прибавлено к итогу за сегодня. Только целое положительное число.", "full")}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="submit" class="primary-button packaging-submit" ${canSubmit ? "" : "disabled"}>Прибавить к итогу</button></div></form></section>
     <section class="card settings-table-wrap"><h3>Итоги по дням</h3><div class="table-scroll"><table class="settings-data-table"><thead><tr><th>Дата</th>${PACKAGING_FIELDS.map(field => `<th>${escapeHtml(shortPackagingLabel(field.label))}</th>`).join("")}<th>Состояние</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td>${formatDate(record.date)}</td>${PACKAGING_FIELDS.map(field => `<td>${formatNumber(record.values?.[field.key] || 0)}</td>`).join("")}<td>${record.syncState === "synced" ? "Подтверждено Google" : `Ожидает отправки${pending.get(record.id)?.error ? `<br><small>${escapeHtml(pending.get(record.id).error)}</small>` : ""}`}</td><td><div class="row-actions"><button class="small-button" data-action="edit-packaging" data-id="${attribute(record.id)}">Изменить</button><button class="more-button" data-action="delete-packaging" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td></tr>`).join("") || `<tr><td colspan="${PACKAGING_FIELDS.length + 3}">Записей пока нет. Новая запись сразу сохранится на этом компьютере.</td></tr>`}</tbody></table></div></section>`;
@@ -2695,6 +2696,13 @@ function openPackagingDialog() {
 
 function focusPackagingQuantity() {
   window.setTimeout(() => root.querySelector("#packaging-quantity:not(:disabled)")?.focus(), 0);
+}
+
+function openPackagingDailyExportDialog() {
+  const defaultDate = new Date(`${today()}T12:00:00`); defaultDate.setDate(defaultDate.getDate() - 1);
+  const date = defaultDate.toISOString().slice(0, 10);
+  const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><h2>Передать итоги дня</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><p>Будут переданы итоговые данные выбранного завершённого дня: коробки и бумага — в «Расход сырья», банки и крышки — в лист «Банки». Повторная передача обновит тот же день без создания дублей.</p>${formField("packaging-export-date", "Дата завершённого дня", `<input id="packaging-export-date" name="date" type="date" max="${attribute(date)}" value="${attribute(date)}" required>`)}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Передать итоги</button></div></form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => { event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true; try { const result = await packagingService.exportDaily(new FormData(form).get("date")); dialog.close(); toast(`Итоги за ${formatDate(result.date)} переданы в два журнала`, "success"); } catch (error) { showFormError(form, error); submit.disabled = false; } }); dialog.showModal();
 }
 
 function openPackagingEditDialog(record) {

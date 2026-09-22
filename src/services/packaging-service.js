@@ -11,6 +11,7 @@ export class PackagingService {
   async add(input) { const date = validDate(input.date); const item = PACKAGING_FIELDS.find(field => field.key === input.item); if (!item) throw new Error("Выберите вид упаковки"); const quantity = positiveInteger(input.quantity); const current = (await this.repository.list()).find(record => record.date === date); return this.repository.save({ ...(current || {}), id: current?.id || `packaging-day-${date}`, date, values: { ...emptyValues(), ...(current?.values || {}), [item.key]: Number(current?.values?.[item.key] || 0) + quantity } }); }
   async update(record, input) { return this.repository.save({ ...record, date: validDate(input.date), values: values(input) }); }
   async remove(record) { if (!record?.id) throw new Error("Не найдена дневная запись"); return this.repository.remove(record); }
+  async exportDaily(date) { const value = validDate(date); if (value >= getVilniusDate()) throw new Error("Передавать можно только завершённый день: выберите вчера или более раннюю дату"); return this.repository.exportDaily(value); }
 }
 function validDate(value) { const date = String(value || ""); if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > getVilniusDate()) throw new Error("Дата должна быть сегодняшней или более ранней"); return date; }
 function positiveInteger(value) { const text = String(value ?? "").trim(); if (!/^\d+$/.test(text) || Number(text) <= 0) throw new Error("Количество указывается целым положительным числом"); return Number(text); }

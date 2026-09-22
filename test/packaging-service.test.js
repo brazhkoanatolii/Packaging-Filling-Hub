@@ -11,6 +11,7 @@ class MemoryRepository {
     this.records = [...this.records.filter(item => item.id !== value.id), value];
     return structuredClone(value);
   }
+  async exportDaily(date) { this.exportedDate = date; return { ok: true, date }; }
 }
 
 test("расход упаковки суммируется в одной дневной записи без выбора автора", async () => {
@@ -29,4 +30,14 @@ test("расход упаковки принимает только целое �
   for (const quantity of ["", "0", "1.5", "-2"]) {
     await assert.rejects(service.add({ ...base, quantity }, { title: "Начальник участка" }), /целым положительным числом/);
   }
+});
+
+test("суточная передача разрешена только после окончания дня", async () => {
+  const repository = new MemoryRepository();
+  const service = new PackagingService(repository);
+  const yesterday = new Date(`${getVilniusDate()}T12:00:00`); yesterday.setDate(yesterday.getDate() - 1);
+  const date = yesterday.toISOString().slice(0, 10);
+  await service.exportDaily(date);
+  assert.equal(repository.exportedDate, date);
+  await assert.rejects(service.exportDaily(getVilniusDate()), /завершённый день/);
 });

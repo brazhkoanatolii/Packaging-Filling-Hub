@@ -22,11 +22,12 @@ export class PackagingGatewayProvider {
     return normalizeRecord(payload.record);
   }
   async remove(id) { await this.#request("DELETE", { id }); }
+  async exportDaily(date) { return this.#request("POST", { date }, "/api/packaging-daily-export"); }
 
-  async #request(method, body) {
+  async #request(method, body, path = "/api/packaging-records") {
     let response;
     try {
-      response = await this.fetch(`${this.baseUrl}/api/packaging-records`, {
+      response = await this.fetch(`${this.baseUrl}${path}`, {
         method,
         headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
         signal: AbortSignal.timeout(30_000),
@@ -46,8 +47,8 @@ export class PackagingGatewayProvider {
 }
 
 function normalizeRecord(record) {
-  if (!record?.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(record.date || "")) || !record.values || !record.author) {
+  if (!record?.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(record.date || "")) || !record.values) {
     throw new Error("Google вернул некорректную запись расхода упаковки");
   }
-  return { ...record, id: String(record.id), date: String(record.date), author: String(record.author), values: { ...record.values }, source: "google", syncState: "synced" };
+  return { ...record, id: String(record.id), date: String(record.date), author: String(record.author || ""), values: { ...record.values }, source: "google", syncState: "synced" };
 }

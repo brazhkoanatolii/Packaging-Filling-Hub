@@ -22,6 +22,12 @@ const packagingSheetName = "Лист";
 const packagingRange = "'Лист'!B2:M";
 const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
 const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
+const rawMaterialsSpreadsheetId = "1jXf8oZLrFLGEJo15VoFQBe_FjC0_dz_3p0cVxgV4xGo";
+const rawMaterialsSheetName = "Расход сырья";
+const rawMaterialsRange = "'Расход сырья'!A3:D500";
+const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
+const cansSheetName = "Банки";
+const cansRange = "'Банки'!A4:J500";
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
   attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
@@ -176,6 +182,11 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/packaging-records" && request.method === "DELETE") {
       if (!writesEnabled || (workstationRole !== "manager" && workstationRole !== "senior")) return sendJson(response, 403, { ok: false, message: "Удаление расхода упаковки недоступно" });
       return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
+    }
+    if (url.pathname === "/api/packaging-daily-export" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Передавать суточные итоги может только начальник участка" });
+      return sendJson(response, 200, await exportPackagingDaily(await readJsonBody(request)));
     }
 
     if (url.pathname === "/api/specifications" && request.method === "GET") {
@@ -405,6 +416,44 @@ async function deletePackagingRecord(input) {
   const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
 }
 
+async function exportPackagingDaily(input) {
+  const date = String(input?.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= vilniusDate()) throw new Error("Передавать можно только завершённый день");
+  const source = (await getPackagingSnapshot()).records.find(record => record.date === date);
+  if (!source) throw new Error(`В журнале упаковки нет итогов за ${displayDate(date)}`);
+  const [rawRow, cansRow] = await Promise.all([
+    getDailyTargetRow(rawMaterialsSpreadsheetId, rawMaterialsRange, date, 3, "Расход сырья"),
+    getDailyTargetRow(cansSpreadsheetId, cansRange, date, 4, "Банки")
+  ]);
+  const accessToken = await getAccessToken();
+  const [rawSheetId, cansSheetId] = await Promise.all([
+    getSheetId(rawMaterialsSpreadsheetId, rawMaterialsSheetName, accessToken),
+    getSheetId(cansSpreadsheetId, cansSheetName, accessToken)
+  ]);
+  await Promise.all([
+    updateSheetCells(rawMaterialsSpreadsheetId, accessToken, { sheetId: rawSheetId, rowIndex: rawRow.rowNumber - 1, columnIndex: 1 }, [source.values.garantBox430, source.values.garantBox570, source.values.dochemsPaper]),
+    Promise.all([
+      updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 1 }, [source.values.killaCanClear, source.values.killaCanGreen]),
+      updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 5 }, [source.values.killaLidGreen, source.values.dzCanClear, source.values.dzCanGreen, source.values.dzLidBlack, source.values.dzLidWhite])
+    ])
+  ]);
+  return { ok: true, date, rawMaterials: { rowNumber: rawRow.rowNumber }, cans: { rowNumber: cansRow.rowNumber } };
+}
+
+async function getDailyTargetRow(spreadsheetId, range, date, startRow, label) {
+  const rows = (await getGoogleSheetRanges(spreadsheetId, [range]))[0] ?? [];
+  const index = rows.findIndex(row => googleSheetDate(row[0]) === date);
+  if (index < 0) throw new Error(`В листе «${label}» не найдена строка даты ${displayDate(date)}`);
+  return { rowNumber: startRow + index };
+}
+
+async function updateSheetCells(spreadsheetId, accessToken, start, values) {
+  const request = { updateCells: { start, rows: [{ values: values.map(value => ({ userEnteredValue: { numberValue: Number(value || 0) } })) }], fields: "userEnteredValue" } };
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [request] }), signal: AbortSignal.timeout(20_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось передать суточные итоги");
+}
+
 function validatePackagingRecord(input) {
   if (!input || !["manager", "senior"].includes(input.role)) throw new Error("Недостаточно прав");
   const id = String(input.recordId || ""); const requestId = String(input.requestId || "");
@@ -430,18 +479,20 @@ async function getPackagingDateNotes() {
   return payload.sheets?.[0]?.data?.[0]?.rowData?.map(row => row.values?.[0]?.note || "") ?? [];
 }
 
-async function getPackagingSheetId(accessToken) {
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}?fields=sheets(properties(sheetId,title))`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
+async function getPackagingSheetId(accessToken) { return getSheetId(packagingSpreadsheetId, packagingSheetName, accessToken); }
+
+async function getSheetId(spreadsheetId, sheetName, accessToken) {
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties(sheetId,title))`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось открыть журнал расхода упаковки");
-  const sheet = payload.sheets?.find(item => item.properties?.title === packagingSheetName);
-  if (!sheet) throw new Error("Не найден лист расхода упаковки");
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось открыть рабочий журнал");
+  const sheet = payload.sheets?.find(item => item.properties?.title === sheetName);
+  if (!sheet) throw new Error(`Не найден лист «${sheetName}»`);
   return sheet.properties.sheetId;
 }
 
 function packagingRecordFromRow(row, rowNumber, note) {
   if (!row?.some(value => value !== "" && value !== undefined)) return null;
-  const date = googleSerialToDate(row[0]);
+  const date = googleSheetDate(row[0]);
   if (!date) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
   let receipt = {};
   if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }
@@ -452,6 +503,14 @@ function googleSerialToDate(value) {
   const serial = Number(value); if (!Number.isFinite(serial)) return null;
   return new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000).toISOString().slice(0, 10);
 }
+
+function googleSheetDate(value) {
+  const serialDate = googleSerialToDate(value); if (serialDate) return serialDate;
+  const match = String(value || "").trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  return match ? `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}` : null;
+}
+
+function displayDate(value) { const [year, month, day] = String(value).split("-"); return `${day}.${month}.${year}`; }
 
 function vilniusDate() {
   const values = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: "Europe/Vilnius", year: "numeric", month: "2-digit", day: "2-digit" })
