@@ -2289,7 +2289,10 @@ function shiftGuestEntries(teamId) {
     ? (state.shift.attendance || []).filter(item => item.isSubstitute)
     : [];
   return [...saved, ...state.shiftGuests]
-    .filter(item => item.homeShiftTeamId && item.homeShiftTeamId !== teamId)
+    .filter(item => {
+      const employee = activePersonnel().find(person => person.id === item.employeeId);
+      return item.homeShiftTeamId && (item.homeShiftTeamId !== teamId || isSubstituteOnly(employee));
+    })
     .filter((item, index, list) => list.findIndex(other => other.employeeId === item.employeeId) === index);
 }
 
