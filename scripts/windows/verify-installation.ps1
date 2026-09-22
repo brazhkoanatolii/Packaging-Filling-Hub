@@ -58,7 +58,7 @@ if ($workstationId -notmatch "^[a-z0-9][a-z0-9-]{1,63}$") {
   Write-Host "[OK] Устройство: $workstationLabel ($workstationId)" -ForegroundColor Green
 }
 
-$port = if ($environment["PORT"]) { $environment["PORT"] } else { "4173" }
+$port = if ($environment["PORT"]) { $environment["PORT"] } else { "4174" }
 $healthUrl = "http://127.0.0.1:$port/api/health"
 try {
   $health = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 3

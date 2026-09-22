@@ -58,6 +58,14 @@ export class WorkforceRepository {
       }
       const remote = await this.provider.snapshot();
       if (!Array.isArray(remote.personnel) || !Array.isArray(remote.shiftTeams) || !Array.isArray(remote.attendance) || !Array.isArray(remote.vacations)) throw new Error("Google вернул неполный список журналов");
+      // A browser can lose the response after Google has already saved an attendance
+      // row. Treat that as delivered only when the remote row is exactly the same;
+      // never discard a genuine conflicting correction.
+      data.pending = data.pending.filter(operation => {
+        if (operation.kind !== "attendance" || operation.status !== "conflict") return true;
+        const remoteRecord = remote.attendance.find(record => record.id === operation.record.id);
+        return !sameAttendance(remoteRecord, operation.record);
+      });
       data.confirmed = { ...remote, ready: true };
       data.lastSync = new Date().toISOString(); this.lastError = null;
       await this.store.setPreference(KEY, data);
@@ -76,4 +84,50 @@ export class WorkforceRepository {
       await this.store.setPreference(KEY, data);
     });
   }
+  async retryMissingAttendance(requestId) {
+    return this.exclusive(async () => {
+      const data = await this.load();
+      const item = data.pending.find(operation => operation.requestId === requestId);
+      if (!item || item.kind !== "attendance" || !["conflict", "error"].includes(item.status)) throw new Error("Для этой записи повторная отправка недоступна");
+
+      // Never overwrite a record that has appeared in Google since the conflict.
+      const remote = await this.provider.snapshot();
+      if (!Array.isArray(remote.attendance)) throw new Error("Google вернул неполный список табеля");
+      if (remote.attendance.some(record => record.id === item.record.id)) {
+        throw new Error("В Google уже есть запись за этого сотрудника и дату. Выберите версию вручную.");
+      }
+
+      item.expectedRevision = "empty";
+      item.status = "pending";
+      item.attempted = false;
+      delete item.error;
+      data.confirmed = { ...remote, ready: true };
+      data.lastSync = new Date().toISOString();
+      await this.store.setPreference(KEY, data);
+      try {
+        const result = await this.provider.write(item);
+        const index = data.confirmed.attendance.findIndex(record => record.id === result.record.id);
+        if (index < 0) data.confirmed.attendance.push(result.record); else data.confirmed.attendance[index] = result.record;
+        data.pending = data.pending.filter(operation => operation.requestId !== requestId);
+        this.lastError = null;
+        await this.store.setPreference(KEY, data);
+        return result.record;
+      } catch (error) {
+        item.status = error.conflict || error.status === 409 ? "conflict" : "error";
+        item.attempted = true;
+        item.error = error.message;
+        this.lastError = error.message;
+        await this.store.setPreference(KEY, data);
+        throw error;
+      }
+    });
+  }
+}
+
+function sameAttendance(remote, local) {
+  if (!remote || !local) return false;
+  return String(remote.value || "") === String(local.value || "")
+    && Boolean(remote.overtime) === Boolean(local.overtime)
+    && String(remote.substitutionReason || "") === String(local.substitutionReason || "")
+    && String(remote.homeShiftTeamId || "") === String(local.homeShiftTeamId || "");
 }

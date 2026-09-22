@@ -1,4 +1,4 @@
-import { ATTENDANCE_CODES, SHIFT_TEAMS, WORKFORCE_PERSONNEL } from "../config/workforce-config.js";
+import { ATTENDANCE_CODES, SHIFT_TEAMS, SUBSTITUTE_ONLY_EMPLOYEE_IDS, WORKFORCE_PERSONNEL } from "../config/workforce-config.js";
 
 const PERSONNEL_KEY = "workforcePersonnel";
 const PERSONNEL_SOURCE_VERSION_KEY = "workforcePersonnelSourceVersion";
@@ -100,6 +100,7 @@ export class WorkforceService {
     const snapshot = await this.snapshot();
     const employee = snapshot.personnel.find(person => person.id === input.employeeId);
     if (!employee || employee.shiftTeamId === "office") throw new Error("В табель фасовочного участка можно вносить только сотрудников смен.");
+    if (isSubstituteOnly(employee) && !input.substitutionReason) throw new Error("Сотрудника только для подмены добавляйте через кнопку «Добавить сотрудника на подмену».");
     if (this.repository && !snapshot.years.includes(Number(String(input.date).slice(0, 4)))) throw new Error("Этот год ещё не подключён. Табель создан на 2025–2029 годы.");
     const attendance = snapshot.attendance;
     const id = `${input.date}:${input.shiftTeamId}:${input.employeeId}`;
@@ -128,7 +129,7 @@ export class WorkforceService {
     const year = Number(input.year);
     if (!snapshot.years.includes(year)) throw new Error("Выберите год 2025–2029");
     const employee = snapshot.personnel.find(person => person.id === input.employeeId);
-    if (!employee || employee.shiftTeamId === "office") throw new Error("Для графика отпусков можно выбрать только сотрудника участка.");
+    if (!employee || employee.shiftTeamId === "office" || isSubstituteOnly(employee)) throw new Error("Для графика отпусков можно выбрать только сотрудника участка из постоянного состава.");
     const startDate = String(input.startDate || ""), endDate = String(input.endDate || "");
     if (!startDate || !endDate || startDate > endDate || Number(startDate.slice(0, 4)) !== year || Number(endDate.slice(0, 4)) !== year) throw new Error("Укажите начало и окончание в пределах выбранного года");
     if (!["Запланирован", "Согласован", "Использован", "Аннулирован"].includes(input.status)) throw new Error("Выберите статус отпуска");
@@ -174,6 +175,7 @@ function parseDate(value) {
 function utcDay(value) { return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()); }
 function dateKey(value) { return [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"), String(value.getDate()).padStart(2, "0")].join("-"); }
 function clone(value) { return structuredClone(value); }
+function isSubstituteOnly(employee) { return Boolean(employee?.substituteOnly) || SUBSTITUTE_ONLY_EMPLOYEE_IDS.includes(employee?.id); }
 function migratePersonnel(personnel) {
   return personnel.map(person => {
     if (person.id === "employee-0001" && person.role === "senior-mechanic") return { ...person, role: "mechanic" };

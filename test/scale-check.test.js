@@ -71,9 +71,10 @@ test("быстрый обход содержит все 13 весов из ра�
 
 test("разделы расположены в согласованном рабочем порядке", () => {
   assert.deepEqual(MODULES.map(module => module.id), [
-    "dashboard", "attendance", "journals", "maintenance",
-    "specifications", "cyclones", "personnel",
-    "vacations", "statistics", "settings"
+    "dashboard", "attendance", "journals", "packaging", "maintenance",
+    "nonconformities", "specifications", "production", "parts-warehouse",
+    "ppe-warehouse", "cyclones", "documents", "personnel", "vacations",
+    "statistics", "settings"
   ]);
   assert.notEqual(MODULES.find(module => module.id === "vacations").managerOnly, true);
   assert.equal(MODULES.find(module => module.id === "statistics").managerOnly, true);

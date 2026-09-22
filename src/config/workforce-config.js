@@ -9,6 +9,16 @@ export const ROLE_LABELS = Object.freeze({
   packer: "Упаковщик"
 });
 
+// These people remain in the common personnel directory and can be added to a
+// shift manually for substitution, but are not permanent members of the area.
+export const SUBSTITUTE_ONLY_EMPLOYEE_IDS = Object.freeze([
+  "employee-0015", // Danuta Jankovskaja
+  "employee-0016", // Tatjana Vasilevska
+  "employee-0030", // Malgožata Blinstrubaitė
+  "employee-0031", // Jolanta Blinstrubaitė
+  "employee-0032"  // Viktoriia Hryhorenko
+]);
+
 export const ATTENDANCE_CODES = Object.freeze([
   { value: "11", label: "На работе · полная смена", tone: "worked", isWork: true },
   { value: "A", label: "Ежегодный отпуск", tone: "vacation" },

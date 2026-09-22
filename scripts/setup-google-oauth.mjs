@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { basename, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,6 +110,9 @@ server.listen(0, "127.0.0.1", () => {
 
   console.log("Откройте эту ссылку в браузере и подтвердите два разрешения Google:");
   console.log(authorizationUrl.toString());
+  if (process.platform === "win32") {
+    spawn("cmd.exe", ["/c", "start", "", authorizationUrl.toString()], { detached: true, stdio: "ignore" }).unref();
+  }
 });
 
 let redirectUri = "";

@@ -22,6 +22,20 @@ function Set-EnvironmentValue {
   Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
+function Get-EnvironmentValue {
+  param([string]$Path, [string]$Name, [string]$Fallback)
+  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    $match = Get-Content -LiteralPath $Path -Encoding UTF8 |
+      Where-Object { $_ -match "^\s*$([regex]::Escape($Name))\s*=" } |
+      Select-Object -Last 1
+    if ($match) {
+      $value = ($match -split "=", 2)[1].Trim().Trim('"').Trim("'")
+      if ($value) { return $value }
+    }
+  }
+  return $Fallback
+}
+
 $ErrorActionPreference = "Stop"
 $WorkstationId = $WorkstationId.Trim().ToLowerInvariant()
 $WorkstationLabel = $WorkstationLabel.Trim()
@@ -84,11 +98,26 @@ if (-not $NoShortcuts) {
   $shell = New-Object -ComObject WScript.Shell
 
   $desktopShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "Packaging-Filling-Hub.lnk"))
-  $desktopShortcut.TargetPath = $powerShellPath
-  $desktopShortcut.Arguments = $shortcutArguments
+  $chromeCandidates = @(
+    (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
+    (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+  )
+  $chromePath = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+  if ($chromePath) {
+    # The gateway starts from Windows Startup; opening Chrome directly avoids a hidden
+    # PowerShell shortcut that can silently fail to foreground the application.
+    $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT" -Fallback "4173"
+    $desktopShortcut.TargetPath = $chromePath
+    $desktopShortcut.Arguments = "--app=http://127.0.0.1:$port/"
+    $desktopShortcut.IconLocation = "$chromePath,0"
+  } else {
+    $desktopShortcut.TargetPath = $powerShellPath
+    $desktopShortcut.Arguments = $shortcutArguments
+    $desktopShortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,13"
+  }
   $desktopShortcut.WorkingDirectory = $targetRoot
   $desktopShortcut.Description = "Открыть Packaging-Filling-Hub"
-  $desktopShortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,13"
   $desktopShortcut.Save()
 
   $startupDirectory = [Environment]::GetFolderPath("Startup")

@@ -56,19 +56,6 @@ createServer(async (request, response) => {
       });
     }
 
-    if (url.pathname === "/api/maintenance-records") {
-      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
-      if (request.method === "GET") return sendJson(response, 200, await runAppsScript("listMaintenanceRecords"));
-      if (request.method === "POST") {
-        if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-        const input = await readJsonBody(request);
-        const result = await runAppsScript("createMaintenanceRecord", [{ requestId: input.requestId, recordId: input.recordId,
-          machine: input.machine, date: input.date, performer: input.performer, note: input.note, role: workstationRole, workstationId }]);
-        return sendJson(response, result?.ok === false ? 400 : 200, result);
-      }
-      return sendJson(response, 405, { ok: false, message: "Допускаются чтение и добавление ТО" });
-    }
-
     if (url.pathname === "/api/cyclone-records") {
       if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
       if (request.method === "GET") return sendJson(response, 200, await runAppsScript("listCycloneRecords"));
@@ -99,6 +86,45 @@ createServer(async (request, response) => {
       const payload = await readJsonBody(request);
       if (!workstationRole || (workstationRole !== "manager" && payload.kind !== "attendance")) return sendJson(response, 403, { ok: false, message: "Недостаточно прав" });
       const result = await runAppsScript("writeWorkforceOperation", [{ ...payload, role: workstationRole }]);
+      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+
+    if (url.pathname === "/api/maintenance" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      const result = await runAppsScript("getMaintenanceSnapshot");
+      return sendJson(response, result?.ok === false ? 400 : 200, result);
+    }
+    if (url.pathname === "/api/maintenance" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять записи могут только начальник участка и старший механик" });
+      const payload = await readJsonBody(request);
+      const functionName = payload.journal === "repair" ? "createRepairRecord" : payload.journal === "service" ? "createMaintenanceRecord" : null;
+      if (!functionName) return sendJson(response, 400, { ok: false, message: "Укажите журнал: ТО или ремонт" });
+      const result = await runAppsScript(functionName, [{ ...payload, role: workstationRole, workstationId }]);
+      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+
+    if (url.pathname === "/api/production-records" && request.method === "GET") {
+      if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
+      const result = await runAppsScript("getProductionSnapshot");
+      return sendJson(response, result?.ok === false ? 400 : 200, result);
+    }
+    if (url.pathname === "/api/production-records" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Добавлять записи могут только начальник участка и старший механик" });
+      const result = await runAppsScript("createProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
+      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+    if (url.pathname === "/api/production-records" && request.method === "PUT") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Исправлять записи могут только начальник участка и старший механик" });
+      const result = await runAppsScript("updateProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
+      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+    }
+    if (url.pathname === "/api/production-records" && request.method === "DELETE") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (workstationRole !== "manager" && workstationRole !== "senior") return sendJson(response, 403, { ok: false, message: "Удалять записи могут только начальник участка и старший механик" });
+      const result = await runAppsScript("deleteProductionRecord", [{ ...(await readJsonBody(request)), role: workstationRole, workstationId }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 

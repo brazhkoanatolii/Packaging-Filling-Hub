@@ -1,5 +1,5 @@
 import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
-import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS } from "./config/workforce-config.js";
+import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYEE_IDS } from "./config/workforce-config.js";
 import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
@@ -17,9 +17,9 @@ import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-con
 import { CycloneGatewayProvider } from "./providers/cyclone-gateway-provider.js";
 import { CycloneRepository } from "./repositories/cyclone-repository.js";
 import { CycloneService, cycloneStatistics } from "./services/cyclone-service.js";
-import { MaintenanceGatewayProvider } from "./providers/maintenance-gateway-provider.js";
-import { MaintenanceRepository } from "./repositories/maintenance-repository.js";
-import { MaintenanceService, maintenanceStatistics } from "./services/maintenance-service.js";
+import { ProductionGatewayProvider } from "./providers/production-gateway-provider.js";
+import { ProductionRepository } from "./repositories/production-repository.js";
+import { ProductionService, LINES as PRODUCTION_LINES } from "./services/production-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -35,6 +35,7 @@ const state = {
   journalError: null,
   operations: [],
   page: "dashboard",
+  recordMonth: today().slice(0, 7),
   loading: true,
   syncing: false,
   lastRefresh: null,
@@ -46,11 +47,12 @@ const state = {
   shiftGuests: [],
   specifications: { specifications: [], source: "loading", cachedAt: null },
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
+  maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
+  maintenanceView: "overview",
+  production: { records: [], source: "loading", cachedAt: null, error: null },
   cycloneYear: Number(today().slice(0, 4)),
-  maintenance: { records: [], operations: [], machines: [], performers: [], lastReadAt: null, error: null },
-  maintenanceYear: Number(today().slice(0, 4)),
-  maintenanceMachine: "",
   specificationSelection: { line: "", product: "", variant: "" },
+  specificationSearch: "",
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
   language: "ru",
   theme: "light"
@@ -65,7 +67,7 @@ let workforceService;
 let workforceRepository;
 let productSpecificationService;
 let cycloneService;
-let maintenanceService;
+let productionService;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
@@ -80,10 +82,6 @@ async function bootstrap() {
   cycloneService = new CycloneService(new CycloneRepository(cycloneStore,
     new CycloneGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.cyclones = await cycloneService.snapshot();
-  const maintenanceStore = await new IndexedDbDataProvider("packaging-filling-hub-maintenance").init();
-  maintenanceService = new MaintenanceService(new MaintenanceRepository(maintenanceStore,
-    new MaintenanceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
-  state.maintenance = await maintenanceService.snapshot();
   const remoteProvider = createRemoteProvider();
   repository = new JournalRepository(store, remoteProvider);
   authService = new AuthService(store, { allowedRole: APP_CONFIG.workstationRole });
@@ -94,6 +92,9 @@ async function bootstrap() {
   workforceService = new WorkforceService(store, workforceRepository);
   productSpecificationService = new ProductSpecificationService(store, APP_CONFIG.integration.mode === "gateway"
     ? new ProductSpecificationGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl }) : null);
+  productionService = new ProductionService(store, new ProductionRepository(
+    new ProductionGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })
+  ));
   journalService = new JournalService(repository, journal, {
     workstationId: APP_CONFIG.workstationId,
     workstationLabel: APP_CONFIG.workstationLabel
@@ -102,8 +103,11 @@ async function bootstrap() {
   await repository.init();
   state.account = await authService.current();
   state.shift = await shiftService.current();
+  // Do not hold the whole interface on a slow Google request.  A fresh
+  // attendance snapshot is still required immediately before each save below.
   state.workforce = await workforceService.snapshot();
   state.specifications = await productSpecificationService.snapshot();
+  state.production = await productionService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
   state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
   state.language = normalizeLanguage(await store.preference("interfaceLanguage", "ru"));
@@ -131,6 +135,12 @@ function bindGlobalEvents() {
   root.addEventListener("input", handleInput);
   root.addEventListener("change", handleChange);
   root.addEventListener("submit", handleSubmit);
+  window.addEventListener("keydown", event => {
+    if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "F5") {
+      event.preventDefault();
+      refreshFromSource();
+    }
+  });
   window.addEventListener("online", async () => {
     render();
     toast("Интернет появился. Отправляем сохранённые записи…", "success");
@@ -144,12 +154,17 @@ function bindGlobalEvents() {
 
 function handleInput(event) {
   if (event.target.matches("[data-personnel-filter]")) filterPersonnelCards();
+  if (event.target.matches("[data-specification-search]")) {
+    const cursor = event.target.selectionStart ?? event.target.value.length;
+    state.specificationSearch = event.target.value;
+    render();
+    const search = root.querySelector("[data-specification-search]");
+    if (search) { search.focus(); search.setSelectionRange(cursor, cursor); }
+  }
   if (event.target.matches("[data-attendance-status]")) updateAttendanceCounter(event.target.form);
 }
 
 async function handleChange(event) {
-  if (event.target.matches("[data-maintenance-year]")) { state.maintenanceYear = Number(event.target.value); render(); return; }
-  if (event.target.matches("[data-maintenance-machine]")) { state.maintenanceMachine = event.target.value; render(); return; }
   if (event.target.matches("[data-specification-select]")) {
     const field = event.target.dataset.specificationSelect;
     state.specificationSelection = { ...state.specificationSelection, [field]: event.target.value };
@@ -161,6 +176,11 @@ async function handleChange(event) {
 
   if (event.target.matches("[data-cyclone-year]")) {
     state.cycloneYear = Number(event.target.value);
+    render();
+    return;
+  }
+  if (event.target.matches("[data-record-month]")) {
+    state.recordMonth = event.target.value;
     render();
     return;
   }
@@ -296,8 +316,6 @@ async function handleClick(event) {
   const { action, id, page, accountId } = actionElement.dataset;
 
   try {
-    if (action === "new-maintenance") { openMaintenanceDialog(); return; }
-    if (action === "sync-maintenance") { await refreshMaintenance(true); render(); return; }
     if (action === "new-cyclone") { openCycloneDialog(); return; }
     if (action === "sync-cyclones") {
       state.cyclones = await cycloneService.sync();
@@ -322,6 +340,14 @@ async function handleClick(event) {
     if (action === "navigate") {
       state.page = page;
       render();
+      if (page === "maintenance") {
+        await refreshMaintenance();
+        render();
+      }
+      if (page === "production") {
+        await refreshProduction();
+        render();
+      }
       return;
     }
     if (action === "new-record") {
@@ -362,6 +388,52 @@ async function handleClick(event) {
     }
     if (action === "refresh") {
       await refreshFromSource();
+      return;
+    }
+    if (action === "refresh-maintenance") {
+      await refreshMaintenance();
+      render();
+      return;
+    }
+    if (action === "refresh-production") {
+      await refreshProduction(); render();
+      toast(state.production.error || "Журнал продукции обновлён из Google Sheets.", state.production.error ? "warning" : "success");
+      return;
+    }
+    if (action === "add-production") { openProductionDialog(); return; }
+    if (action === "edit-production") {
+      const record = state.production.records.find(item => item.id === id);
+      if (record) openProductionDialog(record);
+      return;
+    }
+    if (action === "delete-production") {
+      const record = state.production.records.find(item => item.id === id);
+      if (!record || !window.confirm(`Удалить запись «${record.product}» (${formatDate(record.date)} ${record.time}) из обоих листов журнала?`)) return;
+      try {
+        await productionService.remove(record.id);
+        await refreshProduction(); render();
+        toast("Запись удалена из обоих листов журнала.", "success");
+      } catch (error) { toast(error.message, "warning"); }
+      return;
+    }
+    if (action === "refresh-specifications") {
+      state.specifications = await productSpecificationService.initialize();
+      render();
+      toast(state.specifications.error || "Каталог продуктов обновлён из Google Sheets.", state.specifications.error ? "warning" : "success");
+      return;
+    }
+    if (action === "select-specification") {
+      const specification = state.specifications.specifications.find(item => item.id === id);
+      if (!specification) return;
+      state.specificationSelection = { line: specification.line, product: specification.product, variant: String(specification.variant) };
+      render();
+      return;
+    }
+    if (action === "add-maintenance-service") { openMaintenanceDialog("service"); return; }
+    if (action === "add-maintenance-repair") { openMaintenanceDialog("repair"); return; }
+    if (action === "maintenance-view") {
+      state.maintenanceView = actionElement.dataset.view || "overview";
+      render();
       return;
     }
     if (action === "sync") {
@@ -431,6 +503,13 @@ async function handleClick(event) {
       await workforceRepository?.acceptRemote(id);
       state.workforce = await workforceService.snapshot(); render(); return;
     }
+    if (action === "workforce-retry-missing-attendance") {
+      await workforceRepository?.retryMissingAttendance(id);
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast("Строка табеля проверена и отправлена в Google.", "success");
+      return;
+    }
     if (action === "edit-vacation" || action === "add-vacation") {
       if (state.account.role !== "manager") { toast("График отпусков доступен для редактирования только начальнику участка.", "error"); return; }
       openVacationDialog(action === "edit-vacation" ? id : null); return;
@@ -480,9 +559,20 @@ async function refreshCyclones(sync = false) {
   state.cyclones = sync ? await cycloneService.sync() : await cycloneService.refresh();
   return state.cyclones;
 }
-async function refreshMaintenance(sync = false) {
-  state.maintenance = sync ? await maintenanceService.sync() : await maintenanceService.refresh();
+
+async function refreshMaintenance() {
+  try {
+    const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance`, { headers: { Accept: "application/json" } });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Не удалось загрузить журналы ремонта и ТО");
+    state.maintenance = { service: payload.service ?? state.maintenance.service, repair: payload.repair ?? state.maintenance.repair, error: null };
+  } catch (error) { state.maintenance = { ...state.maintenance, error: error.message }; }
   return state.maintenance;
+}
+
+async function refreshProduction() {
+  state.production = await productionService.refresh();
+  return state.production;
 }
 
 async function refreshFromSource({ silent = false } = {}) {
@@ -492,7 +582,7 @@ async function refreshFromSource({ silent = false } = {}) {
   }
   setBusy(true);
   try {
-  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones(), refreshMaintenance()]);
+  const checks = await Promise.allSettled([repository.refresh(), syncWorkforce(), refreshSpecifications(), refreshCyclones(), refreshMaintenance(), refreshProduction()]);
   state.journalError = checks[0].status === "rejected" ? checks[0].reason.message : null;
   const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -513,7 +603,7 @@ async function syncRecords({ silent = false } = {}) {
   state.syncing = true;
   render();
   try {
-    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true), refreshMaintenance(true)]);
+    const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), refreshCyclones(true)]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
@@ -673,7 +763,6 @@ function renderWorkforceConnection() {
 }
 
 function renderPage() {
-  if (state.page === "maintenance") return renderMaintenancePage();
   if (state.page === "journals") return renderJournalsPage();
   if (state.page === "attendance") return renderAttendancePage();
   if (state.page === "personnel") return renderPersonnelPage();
@@ -683,7 +772,83 @@ function renderPage() {
   if (state.page === "statistics" && state.account.role === "manager") return renderStatisticsPage();
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (state.page === "cyclones") return renderCyclonesPage();
+  if (state.page === "maintenance") return renderMaintenancePage();
+  if (state.page === "production") return renderProductionPage();
+  if (state.page !== "dashboard" && MODULES.some(module => module.id === state.page)) return renderPlannedModulePage();
   return renderDashboard();
+}
+
+function renderMaintenancePage() {
+  const service = state.maintenance.service ?? { records: [], statistics: {} };
+  const repair = state.maintenance.repair ?? { records: [], statistics: {} };
+  const view = state.maintenanceView;
+  const tabs = [["overview", "Обзор"], ["service", "Журнал ТО"], ["repair", "Журнал ремонта"], ["statistics", "Статистика"]];
+  const content = view === "service"
+    ? renderMaintenanceTable("Журнал ТО", service.records, "ТО", false, true)
+    : view === "repair"
+      ? renderMaintenanceTable("Журнал ремонта", repair.records, "Ремонт", false, true)
+      : view === "statistics"
+        ? renderMaintenanceStatistics(service, repair)
+        : `${renderMaintenanceTable("Последние записи ТО", service.records, "ТО", true)}${renderMaintenanceTable("Последние записи ремонта", repair.records, "Ремонт", true)}`;
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два независимых журнала</p><h2>Ремонт и ТО станков</h2><p>ТО и ремонт учитываются отдельно. Данные загружаются из рабочих журналов; незаполненные бумажные записи ремонта появятся после их внесения в таблицу.</p></div><button class="secondary-button" data-action="refresh-maintenance">Обновить</button></section>
+    ${state.maintenance.error ? `<p class="form-error">${escapeHtml(state.maintenance.error)}</p>` : ""}
+    <div class="dashboard-grid"><article class="metric-card"><span>Журнал ТО</span><strong>${service.statistics.total || 0}</strong><small>${service.statistics.machinesWithRecords || 0} станков с записями</small></article><article class="metric-card"><span>Журнал ремонта</span><strong>${repair.statistics.total || 0}</strong><small>${repair.statistics.machinesWithRecords || 0} станков с записями</small></article></div>
+    <nav class="settings-tabs card maintenance-tabs" aria-label="Разделы журналов">${tabs.map(([key, label]) => `<button class="${view === key ? "active" : ""}" data-action="maintenance-view" data-view="${key}"><strong>${label}</strong></button>`).join("")}</nav>
+    ${content}`;
+}
+
+function renderProductionPage() {
+  const all = state.production.records ?? [];
+  const records = all.filter(record => record.date === today()).sort((left, right) =>
+    String(left.line).localeCompare(String(right.line), "ru") || String(left.time).localeCompare(String(right.time)) || String(left.product).localeCompare(String(right.product), "ru"));
+  const totalQuantity = records.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const totalScrap = records.reduce((sum, item) => sum + Number(item.scrapKg || 0), 0);
+  const totalCanScrap = records.reduce((sum, item) => sum + Number(item.canScrapKg || 0), 0);
+  const canAdd = state.account?.role === "manager" || state.account?.role === "senior";
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Запись завершённого продукта переносится одновременно в оба рабочих листа. Показан текущий день; линии идут по алфавиту.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production">Обновить</button>${canAdd ? `<button class="primary-button" data-action="add-production">+ Завершить продукт</button>` : ""}</div></section>
+    ${state.production.error ? `<p class="form-error">${escapeHtml(state.production.error)}</p>` : ""}
+    <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)}</strong><small>шт. за сегодня</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
+    <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · A → M</span></div><div class="table-scroll"><table><thead><tr><th>Начало</th><th>Окончание</th><th>Линия</th><th>Продукт</th><th>mg/g</th><th>Готово, шт</th><th>Брак продукции, кг</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${escapeHtml(record.product)}</td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatNumber(record.scrapKg)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 12 : 11}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>`;
+}
+
+function renderMaintenanceTable(title, records, type, compact, canAdd = false) {
+  const visible = compact ? records.slice(0, 10) : records;
+  const empty = '<tr><td colspan="6">Записей пока нет.</td></tr>';
+  const action = type === "ТО" ? "add-maintenance-service" : "add-maintenance-repair";
+  const add = canAdd ? `<button class="primary-button" data-action="${action}">+ Добавить ${type === "ТО" ? "ТО" : "ремонт"}</button>` : "";
+  const label = compact ? `Последние ${Math.min(10, records.length)} из ${records.length} записей` : `${records.length} записей`;
+  return `<section class="card table-card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(type)}</p><h2>${title}</h2></div><div class="header-actions">${add}<span class="status-pill neutral">${label}</span></div></div><div class="table-scroll"><table><thead><tr><th>Дата</th><th>Станок</th><th>Категория</th><th>Вид работ</th><th>Исполнитель</th><th>Примечание</th></tr></thead><tbody>${visible.length ? visible.map(item => `<tr><td>${formatDate(item.date)}</td><td>${item.machine}</td><td>${escapeHtml(item.category || type)}</td><td>${escapeHtml(item.work)}</td><td>${escapeHtml(item.performer || "—")}</td><td>${escapeHtml(item.note || "—")}</td></tr>`).join("") : empty}</tbody></table></div></section>`;
+}
+
+function renderMaintenanceStatistics(service, repair) {
+  const byMachine = new Map();
+  const byPerformer = new Map();
+  const collect = (records, kind) => records.forEach(record => {
+    const machine = String(record.machine || "—");
+    const machineItem = byMachine.get(machine) || { service: 0, repair: 0 };
+    machineItem[kind] += 1;
+    byMachine.set(machine, machineItem);
+    if (record.performer) {
+      const performerItem = byPerformer.get(record.performer) || { service: 0, repair: 0 };
+      performerItem[kind] += 1;
+      byPerformer.set(record.performer, performerItem);
+    }
+  });
+  collect(service.records, "service");
+  collect(repair.records, "repair");
+  const machineRows = [...byMachine.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  const performerRows = [...byPerformer.entries()].sort((a, b) => (b[1].service + b[1].repair) - (a[1].service + a[1].repair));
+  const makeRows = (items, label) => items.length ? items.map(([name, item]) => `<tr><td>${escapeHtml(name)}</td><td>${item.service}</td><td>${item.repair}</td><td><strong>${item.service + item.repair}</strong></td></tr>`).join("") : `<tr><td colspan="4">${label}</td></tr>`;
+  return `<div class="dashboard-grid maintenance-statistics"><section class="card table-card"><div class="section-heading"><div><p class="eyebrow">По оборудованию</p><h2>Записи по станкам</h2></div></div><div class="table-scroll"><table><thead><tr><th>Станок</th><th>ТО</th><th>Ремонт</th><th>Всего</th></tr></thead><tbody>${makeRows(machineRows, "Записей по станкам пока нет.")}</tbody></table></div></section><section class="card table-card"><div class="section-heading"><div><p class="eyebrow">По персоналу</p><h2>Исполнители</h2></div></div><div class="table-scroll"><table><thead><tr><th>Исполнитель</th><th>ТО</th><th>Ремонт</th><th>Всего</th></tr></thead><tbody>${makeRows(performerRows, "Исполнители пока не указаны.")}</tbody></table></div></section></div>`;
+}
+
+function renderPlannedModulePage() {
+  const module = MODULES.find(item => item.id === state.page);
+  const title = moduleLabel(module);
+  return `<section class="card placeholder-hero">
+    <span class="placeholder-icon">${moduleIcon(module?.icon)}</span>
+    <div><p class="eyebrow">Рабочий раздел</p><h2>${escapeHtml(title)}</h2><p>Раздел уже добавлен в программу. Дальше заполним его журналом, полями и статистикой по вашему рабочему порядку.</p></div>
+  </section>`;
 }
 
 function renderDashboard() {
@@ -758,6 +923,8 @@ function renderJournalsPage() {
   const todayRecords = state.records.filter(record => record.date === today() && record.status !== "Аннулировано");
   const checkedScales = new Set(todayRecords.map(record => record.scaleName));
   const failedToday = todayRecords.filter(record => record.result === "Вне допуска").length;
+  const availableMonths = [...new Set([state.recordMonth, ...state.records.map(record => String(record.date || "").slice(0, 7)).filter(Boolean)])].sort().reverse();
+  const visibleRecords = state.records.filter(record => String(record.date || "").startsWith(state.recordMonth));
   return `
     <section class="journal-header card">
       <div class="journal-title-block">
@@ -777,20 +944,21 @@ function renderJournalsPage() {
     </div>
     <section class="card table-card">
       <div class="table-toolbar">
-        <div><strong>${state.records.length}</strong> ${plural(state.records.length, "запись", "записи", "записей")}</div>
+        <div><strong>${visibleRecords.length}</strong> ${plural(visibleRecords.length, "запись", "записи", "записей")} за ${monthTitle(state.recordMonth)}</div>
+        <label class="table-filter">Период<select data-record-month aria-label="Период журнала весов">${availableMonths.map(month => `<option value="${month}" ${month === state.recordMonth ? "selected" : ""}>${escapeHtml(monthTitle(month))}</option>`).join("")}</select></label>
         <div class="legend"><span class="legend-item"><i class="dot synced"></i>Отправлено</span><span class="legend-item"><i class="dot pending"></i>В очереди</span></div>
       </div>
       <div class="table-scroll">
         <table>
           <thead><tr><th>Дата</th><th>Весы</th><th>Факт</th><th>Отклонение</th><th>Результат</th><th>Исполнитель</th><th>Состояние записи</th><th></th></tr></thead>
-          <tbody>${state.records.length ? state.records.map(renderRecordRow).join("") : renderEmptyRow()}</tbody>
+          <tbody>${visibleRecords.length ? visibleRecords.map(renderRecordRow).join("") : renderEmptyRow()}</tbody>
         </table>
       </div>
     </section>`;
 }
 
 function renderAttendancePage() {
-  const teamCounts = state.workforce.shiftTeams.map(team => ({ code: team.code, count: activePersonnel().filter(employee => employee.shiftTeamId === team.id).length }));
+  const teamCounts = state.workforce.shiftTeams.map(team => ({ code: team.code, count: regularAreaPersonnel().filter(employee => employee.shiftTeamId === team.id).length }));
   return `
     <section class="workforce-hero card">
       <div><p class="eyebrow">Рабочее время и смены</p><h2>Табель участка</h2><p>График 2/2, фактические часы, причины отсутствия и начало смены — в одном разделе.</p></div>
@@ -883,8 +1051,8 @@ function renderTimesheetView() {
 function renderTimesheetTeam(team, days) {
   const schedule = new Map(getScheduleMonth(team, ...monthParts(state.attendanceMonth)).map(day => [day.date, day]));
   const records = new Map(state.workforce.attendance.filter(item => item.shiftTeamId === team.id).map(item => [`${item.employeeId}:${item.date}`, item]));
-  const regularMembers = activePersonnel().filter(employee => employee.shiftTeamId === team.id);
-  const substituteMembers = activePersonnel().filter(employee => employee.shiftTeamId !== team.id && [...records.values()].some(record => record.employeeId === employee.id && record.substitutionReason));
+  const regularMembers = regularAreaPersonnel().filter(employee => employee.shiftTeamId === team.id);
+  const substituteMembers = activePersonnel().filter(employee => (employee.shiftTeamId !== team.id || isSubstituteOnly(employee)) && [...records.values()].some(record => record.employeeId === employee.id && record.substitutionReason));
   const members = [...regularMembers, ...substituteMembers].sort(comparePersonnel);
   return `<section class="card schedule-team-card timesheet-team-card">
     <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>Фактические часы и причины отсутствия</small></span></div><span class="autosave-note">Сохраняется автоматически</span></header>
@@ -950,10 +1118,12 @@ function renderPersonnelPrivateDetails(employee) {
 }
 
 function renderStatisticsPage() {
-  const rows = [["Контроль весов", state.records.filter(r=>r.source==="google" && r.syncState==="synced" && r.status!=="Аннулировано").length],
-    ["Очистка циклонов",state.cyclones.records.filter(r=>r.syncState==="synced").length],
-    ["Техническое обслуживание",state.maintenance.records.filter(r=>r.syncState==="synced").length]];
-  return `<section class="card cyclone-statistics"><div><h2>Статистика журналов</h2><p>Подтверждённые записи в последней сохранённой копии Google за все годы. Локальная очередь не включена.</p><table class="settings-data-table"><thead><tr><th>Журнал</th><th>Записей</th></tr></thead><tbody>${rows.map(([name,n])=>`<tr><td>${name}</td><td>${n}</td></tr>`).join("")}</tbody></table><p>Подробная статистика ТО и очисток доступна в соответствующих разделах.</p></div><div><h3>Записи по журналам</h3>${renderMaintenanceChart(rows)}</div></section>`;
+  return `
+    <section class="settings-hero card">
+      <div><p class="eyebrow">Сводные показатели участка</p><h2>Статистика</h2><p>Общие данные по персоналу, сменам, табелю и доступным журналам. Личные сведения сотрудников здесь не отображаются.</p></div>
+      <span class="status-pill success">Только начальник</span>
+    </section>
+    <section class="card empty-state"><span>◌</span><h3>Раздел подготовлен</h3><p>Показатели и графики добавим после того, как вы определите нужный состав статистики.</p></section>`;
 }
 
 function formatPersonnelDate(value) {
@@ -962,7 +1132,7 @@ function formatPersonnelDate(value) {
 }
 
 function renderVacationsPage() {
-  const rows = [...(state.workforce.vacations || [])].sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
+  const rows = [...(state.workforce.vacations || [])].filter(vacation => isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId))).sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
   const canEdit = state.account.role === "manager";
   return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
     <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 7 : 6}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
@@ -987,54 +1157,115 @@ function renderCyclonesPage() {
     <section class="card settings-table-wrap"><h3>Записи журнала</h3><table class="settings-data-table"><thead><tr><th>Дата</th><th>Исполнитель</th><th>Состояние</th></tr></thead><tbody>${records.map(r => `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(r.performer)}</td><td>${r.syncState === "synced" ? "Подтверждено Google" : "Ожидает отправки"}${operations.find(o => o.record.id === r.id)?.error ? `<br><small>${escapeHtml(operations.find(o => o.record.id === r.id).error)}</small>` : ""}</td></tr>`).join("") || '<tr><td colspan="3">Записи ещё не загружены. Можно сохранить новую очистку в локальную очередь.</td></tr>'}</tbody></table></section>`;
 }
 
-function renderMaintenancePage() {
-  const { records, operations, machines, lastReadAt, error } = state.maintenance;
-  const stats = maintenanceStatistics(records, state.maintenanceYear, machines);
-  const years = [...new Set([Number(today().slice(0,4)), state.maintenanceYear, ...stats.years.map(([y]) => y)])].sort((a,b)=>b-a);
-  const status = error ? `Ошибка чтения: ${error}` : lastReadAt ? `Последнее чтение Google: ${formatDateTime(lastReadAt)}` : "Журнал ещё не загружен";
-  const months = ["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
-  const table = (headers, rows) => `<table class="settings-data-table"><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(v=>`<td>${escapeHtml(String(v))}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${headers.length}">Нет подтверждённых записей</td></tr>`}</tbody></table>`;
-  const pair = (title, headers, rows, chartRows) => `<section class="card cyclone-statistics"><div><h3>${title}</h3>${table(headers,rows)}</div><div><h3>${title}</h3>${renderMaintenanceChart(chartRows)}</div></section>`;
-  const visible = records.filter(r => (!state.maintenanceMachine || r.machine === state.maintenanceMachine) && Number(r.date.slice(0,4)) === state.maintenanceYear);
-  return `<section class="card cyclone-heading"><div><h2>Техническое обслуживание станков</h2><p>${escapeHtml(status)}</p><p>Всего подтверждено: <strong>${stats.all}</strong>. За выбранный год: <strong>${stats.total}</strong>. В очереди: <strong>${operations.length}</strong>.</p>${!APP_CONFIG.integration.googleWritesEnabled ? '<p class="cyclone-warning">Отправка в Google выключена. Новые записи сохраняются на этом компьютере.</p>' : ""}<label>Год <select data-maintenance-year>${years.map(y=>`<option ${y===state.maintenanceYear?"selected":""}>${y}</option>`).join("")}</select></label></div><div class="dialog-actions"><button class="secondary-button" data-action="sync-maintenance">Обновить и отправить очередь</button><button class="primary-button" data-action="new-maintenance" ${machines.length?"":"disabled"}>Записать ТО</button></div></section>
-  ${pair("ТО по станкам",["Станок","Всего","За год","Последнее ТО"],stats.machines.map(m=>[m.title,m.total,m.year,m.last?formatDate(m.last):"—"]),stats.machines.map(m=>[m.title,m.year]))}
-  ${pair(`ТО по месяцам — ${state.maintenanceYear}`,["Месяц","ТО"],stats.months.map((n,i)=>[months[i],n]),stats.months.map((n,i)=>[months[i],n]))}
-  ${pair("ТО по годам",["Год","ТО"],stats.years,stats.years)}
-  ${pair("ТО по сотрудникам",["Сотрудник","Всего","За год"],stats.people.map(p=>[p.name,p.total,p.year]),stats.people.map(p=>[p.name,p.year]))}
-  <section class="card settings-table-wrap"><h3>Записи за ${state.maintenanceYear}</h3><label>Станок <select data-maintenance-machine><option value="">Все станки</option>${machines.map(m=>`<option value="${attribute(m.id)}" ${m.id===state.maintenanceMachine?"selected":""}>${escapeHtml(m.title)}</option>`).join("")}</select></label>
-  ${table(["Дата","Станок","Исполнитель","Примечание","Состояние"],visible.map(r=>[formatDate(r.date),`ТО ${r.machine}`,r.performer,r.note||"—",r.syncState==="synced"?"Подтверждено Google":operations.find(o=>o.record.id===r.id)?.error||"Ожидает отправки"]))}
-  <p>Статистика учитывает только подтверждённые записи Google. Графики по станкам и сотрудникам показывают выбранный год.</p></section>`;
-}
-
-function renderMaintenanceChart(rows) {
-  const max = Math.max(1,...rows.map(r=>r[1]));
-  return `<div class="maintenance-chart" role="img" aria-label="${attribute(rows.map(([name,n])=>`${name}: ${n}`).join(", "))}">${rows.map(([name,n])=>`<div class="maintenance-chart-row"><span>${escapeHtml(String(name))}</span><div><i style="width:${n/max*100}%"></i></div><b>${n}</b></div>`).join("") || "Нет данных"}</div>`;
-}
-
-function openMaintenanceDialog() {
-  const names = employeeNames().filter(n => state.maintenance.performers.includes(n));
-  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><h2>Записать ТО</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-    ${formField("to-machine","Станок",`<select id="to-machine" name="machine" required><option value="">Выберите станок</option>${state.maintenance.machines.map(m=>`<option value="${attribute(m.id)}">${escapeHtml(m.title)}</option>`).join("")}</select>`)}
-    ${formField("to-date","Дата ТО",`<input id="to-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
-    ${formField("to-performer","Исполнитель",`<select id="to-performer" name="performer" required><option value="">Выберите сотрудника</option>${names.map(n=>`<option>${escapeHtml(n)}</option>`).join("")}</select>`)}
-    ${formField("to-note","Примечание",'<textarea id="to-note" name="note" maxlength="5000" rows="3"></textarea>')}
-    <p>Дата сохраняется вместе с записью. До подтверждения Google запись остаётся в очереди этого компьютера.</p><p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить ТО</button></div></form>`);
-  let saving = false;
-  dialog.querySelector("form").addEventListener("submit",async event=>{
-    event.preventDefault(); if(saving)return; saving=true;
-    const form=event.currentTarget; form.querySelector('[type="submit"]').disabled=true;
+function openMaintenanceDialog(journalType) {
+  const isRepair = journalType === "repair";
+  const journal = isRepair ? state.maintenance.repair : state.maintenance.service;
+  const title = isRepair ? "Добавить запись о ремонте" : "Добавить запись о ТО";
+  const machines = journal.machines ?? Array.from({ length: 16 }, (_, index) => index + 1);
+  const performers = journal.performers ?? [];
+  const categories = journal.categories ?? [];
+  const workByCategory = journal.workByCategory ?? {};
+  const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  const repairFields = isRepair ? `<div class="form-grid">${formField("maintenance-category", "Категория работ", `<select id="maintenance-category" name="category" required>${optionList(categories, "Выберите категорию")}</select>`)}${formField("maintenance-work", "Вид работ", `<select id="maintenance-work" name="work" required disabled><option value="">Сначала выберите категорию</option></select>`)}</div>` : "";
+  const dialog = createDialog(`<form class="dialog-card"><div class="dialog-heading"><div><p class="eyebrow">${isRepair ? "Журнал ремонта" : "Журнал ТО"}</p><h2>${title}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Запись будет сразу внесена в соответствующий лист рабочего журнала Google.</p>
+    <div class="form-grid">${formField("maintenance-date", "Дата", `<input id="maintenance-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("maintenance-machine", "Станок", `<select id="maintenance-machine" name="machine" required>${optionList(machines.map(machine => String(machine).padStart(2, "0")), "Выберите станок")}</select>`)}</div>
+    ${repairFields}
+    ${formField("maintenance-performer", "Исполнитель", `<select id="maintenance-performer" name="performer" required>${optionList(performers, "Выберите исполнителя")}</select>`)}
+    ${formField("maintenance-note", "Примечание", `<textarea id="maintenance-note" name="note" rows="3" maxlength="5000" placeholder="При необходимости укажите детали выполненных работ"></textarea>`, "Для ремонта с пометкой «описать в примечании» поле обязательно.")}
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Внести в журнал</button></div></form>`);
+  const form = dialog.querySelector("form");
+  const categorySelect = form.elements.category;
+  const workSelect = form.elements.work;
+  if (isRepair) categorySelect.addEventListener("change", () => {
+    const works = workByCategory[categorySelect.value] ?? [];
+    workSelect.innerHTML = optionList(works, works.length ? "Выберите вид работ" : "Нет вариантов в справочнике");
+    workSelect.disabled = !works.length;
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    if (isRepair && /описать в примечании/i.test(data.work || "") && !String(data.note || "").trim()) {
+      showFormError(form, new Error("Для выбранного вида работ заполните примечание.")); return;
+    }
+    const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
     try {
-      await maintenanceService.create(Object.fromEntries(new FormData(form)),state.account,names);
-      dialog.close(); state.maintenance=await maintenanceService.snapshot(); render();
-      toast("ТО сохранено на этом компьютере. Ожидает подтверждения Google.","success");
-      if(navigator.onLine){await refreshMaintenance(true);render();}
-    } catch(error){showFormError(form,error);saving=false;form.querySelector('[type="submit"]').disabled=false;}
+      const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance`, {
+        method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ ...data, journal: journalType, requestId: `maintenance-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` })
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Не удалось внести запись в журнал.");
+      dialog.close(); await refreshMaintenance(); render();
+      toast(isRepair ? "Запись о ремонте внесена в Google журнал." : "Запись ТО внесена в Google журнал.", "success");
+    } catch (error) { showFormError(form, error); submit.disabled = false; }
+  });
+  dialog.showModal();
+}
+
+function openProductionDialog(record = null) {
+  if (!record && !state.shift?.active) { toast("Сначала заполните табель и начните смену.", "warning"); return; }
+  const present = presentShiftPersonnel();
+  const packers = present.filter(person => person.role === "packer");
+  const operators = present.filter(person => person.role === "mechanic-operator");
+  const packerNames = [...new Set([...packers.map(person => person.fullName), ...(record?.packer ? [record.packer] : [])])];
+  const operatorNames = [...new Set([...operators.map(person => person.fullName), ...(record?.operator ? [record.operator] : [])])];
+  if (!record && (!packers.length || !operators.length)) { toast("В табеле должны быть отмечены присутствующий упаковщик и механик-оператор.", "warning"); return; }
+  const specifications = state.specifications.specifications ?? [];
+  const strengths = [...new Set(specifications.map(item => Number(item.variant)).filter(Number.isFinite))].sort((a, b) => b - a);
+  const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  const dialog = createDialog(`<form class="dialog-card production-dialog"><div class="dialog-heading"><div><p class="eyebrow">Учёт продукции и брака</p><h2>${record ? "Исправить запись" : "Завершить продукт"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Дата ставится автоматически. Сначала выберите крепость, затем продукт и линейку — неподходящие варианты не появятся.</p>
+    <div class="form-grid">${formField("production-date", "Дата", `<input id="production-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("production-start-time", "Время начала", `<input id="production-start-time" name="startTime" type="time" value="${attribute(record?.startTime || "")}" required>`)}${formField("production-time", "Время окончания", `<input id="production-time" name="time" type="time" value="${attribute(record?.time || "")}" required>`)}${formField("production-strength", "Крепость, mg/g", `<select id="production-strength" name="strength" required>${optionList(strengths, "Выберите крепость")}</select>`)}${formField("production-product-search", "Поиск продукта", `<input id="production-product-search" type="search" placeholder="Введите часть названия" disabled>`)}${formField("production-product", "Продукт", `<select id="production-product" name="product" required disabled><option value="">Сначала выберите крепость</option></select>`)}${formField("production-catalog-line", "Линейка", `<select id="production-catalog-line" name="catalogLine" required disabled><option value="">Сначала выберите продукт</option></select>`)}</div>
+    <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
+    <div class="form-grid">${formField("production-packer", "Упаковщик", `<select id="production-packer" name="packer" required>${optionList(packerNames, "Выберите упаковщика")}</select>`)}${formField("production-operator", "Механик-оператор", `<select id="production-operator" name="operator" required>${optionList(operatorNames, "Выберите механика-оператора")}</select>`)}</div>
+    ${formField("production-note", "Примечание", `<textarea id="production-note" name="note" rows="3" maxlength="5000" placeholder="При необходимости добавьте комментарий">${escapeHtml(record?.note || "")}</textarea>`) }
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить исправления" : "Сохранить в оба листа"}</button></div></form>`);
+  const form = dialog.querySelector("form");
+  const strength = form.elements.strength, product = form.elements.product, catalogLine = form.elements.catalogLine, search = form.querySelector("#production-product-search");
+  const matching = () => specifications.filter(item => String(item.variant) === String(strength.value));
+  const fillProducts = () => {
+    const query = String(search.value || "").trim().toLocaleLowerCase("ru");
+    const names = [...new Set(matching().map(item => item.product).filter(name => name.toLocaleLowerCase("ru").includes(query)))].sort((a, b) => a.localeCompare(b, "ru"));
+    product.innerHTML = optionList(names, names.length ? "Выберите продукт" : "Нет подходящих продуктов"); product.disabled = !names.length; catalogLine.innerHTML = '<option value="">Сначала выберите продукт</option>'; catalogLine.disabled = true;
+  };
+  strength.addEventListener("change", () => { search.disabled = !strength.value; search.value = ""; fillProducts(); });
+  search.addEventListener("input", fillProducts);
+  product.addEventListener("change", () => {
+    const lines = [...new Set(matching().filter(item => item.product === product.value).map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
+    catalogLine.innerHTML = optionList(lines, lines.length ? "Выберите линейку" : "Нет вариантов"); catalogLine.disabled = !lines.length;
+  });
+  if (record) {
+    strength.value = String(record.strength);
+    search.disabled = false;
+    fillProducts();
+    product.value = record.product;
+    product.dispatchEvent(new Event("change"));
+    if (catalogLine.options.length > 1) catalogLine.value = catalogLine.options[1].value;
+    form.elements.quantity.value = record.quantity;
+    form.elements.scrapKg.value = record.scrapKg;
+    form.elements.canScrapKg.value = record.canScrapKg;
+    form.elements.machineLine.value = record.line;
+    form.elements.packer.value = record.packer;
+    form.elements.operator.value = record.operator;
+  }
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    if (!catalogLine.value) { showFormError(form, new Error("Выберите линейку продукта")); return; }
+    const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    try {
+      const people = { packers: packerNames, operators: operatorNames };
+      if (record) await productionService.update(record.id, data, people);
+      else await productionService.create({ ...data, requestId: `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people);
+      dialog.close(); await refreshProduction(); render(); toast(record ? "Исправления сохранены в обоих листах журнала." : "Запись сохранена в оба листа журнала.", "success");
+    } catch (error) { showFormError(form, error); submit.disabled = false; }
   });
   dialog.showModal();
 }
 
 function openCycloneDialog() {
-  const names = employeeNames();
+  const names = operationalAuthorNames();
   const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><h2>Записать очистку циклонов</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
     ${formField("cyclone-date", "Дата очистки", `<input id="cyclone-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}
     ${formField("cyclone-performer", "Кто выполнил очистку", `<select id="cyclone-performer" name="performer" required><option value="">Выберите сотрудника</option>${names.map(name => `<option>${escapeHtml(name)}</option>`).join("")}</select>`)}
@@ -1067,28 +1298,33 @@ function renderSpecificationsPage() {
   const all = state.specifications?.specifications ?? [];
   const lines = [...new Set(all.map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
   const selection = state.specificationSelection;
+  const query = state.specificationSearch.trim().toLocaleLowerCase("ru");
   const byLine = all.filter(item => !selection.line || item.line === selection.line);
   const products = [...new Set(byLine.map(item => item.product))].sort((a, b) => a.localeCompare(b, "ru"));
   const byProduct = byLine.filter(item => !selection.product || item.product === selection.product);
   const variants = [...new Set(byProduct.map(item => String(item.variant)))].sort((a, b) => Number(b) - Number(a));
   const selected = byProduct.find(item => String(item.variant) === selection.variant) || (byProduct.length === 1 ? byProduct[0] : null);
+  const matching = all.filter(item => !query || [item.line, item.product, item.variant, item.processType, item.canType, item.lidColor].some(value => String(value ?? "").toLocaleLowerCase("ru").includes(query)));
+  const catalog = matching.sort((a, b) => String(a.line).localeCompare(String(b.line), "ru") || String(a.product).localeCompare(String(b.product), "ru") || Number(b.variant) - Number(a.variant));
   const sourceLabel = state.specifications?.source === "google" ? "Google Sheets" : state.specifications?.source === "cache" ? "Офлайн-копия" : state.specifications?.source === "demo" ? "Демонстрационные данные" : "Источник недоступен";
   const error = state.specifications?.error ? `<p class="module-note">${escapeHtml(state.specifications.error)}. Можно открыть последнюю сохранённую копию при следующем запуске.</p>` : "";
   const canEdit = state.account?.role === "manager" && APP_CONFIG.integration.googleWritesEnabled;
-  return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>${canEdit ? "Добавляйте и исправляйте параметры прямо в программе. Изменения сразу сохраняются в Google Sheets." : "Выберите линейку, продукт и вариант. Все нормы доступны только для просмотра."}</p></div><div class="header-actions">${canEdit ? `<button class="primary-button" data-action="add-specification">+ Добавить продукт</button>` : ""}<a class="secondary-button journal-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Открыть источник ↗</a></div></section>
+  return `<section class="module-header card"><div><p class="eyebrow">${escapeHtml(sourceLabel)} · утверждённые нормы</p><h2>Спецификация продуктов</h2><p>${canEdit ? "Добавляйте и исправляйте продукты прямо в программе. Каталог обновляется из Google Sheets без ручного переноса." : "Рабочий каталог продуктов и технологических норм. Только просмотр."}</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-specifications">↻ Обновить каталог</button>${canEdit ? `<button class="primary-button" data-action="add-specification">+ Добавить продукт</button>` : ""}<a class="quiet-link" href="https://docs.google.com/spreadsheets/d/${PRODUCT_SPECIFICATION_SOURCE.spreadsheetId}/edit" target="_blank" rel="noreferrer">Источник Google ↗</a></div></section>
     ${error}
-    <section class="card specification-picker"><div class="form-grid">
+    <section class="card specification-picker"><div class="catalog-search-row"><label class="personnel-search"><span>Поиск по каталогу</span><input type="search" value="${attribute(state.specificationSearch)}" data-specification-search placeholder="Название продукта, линейка, mg/g, банка или крышка" autocomplete="off"></label><span class="status-pill neutral">${matching.length} из ${all.length} позиций</span></div><div class="form-grid">
       ${formField("spec-line", "Линейка", `<select id="spec-line" data-specification-select="line"><option value="">Выберите линейку</option>${lines.map(line => `<option value="${attribute(line)}" ${selection.line === line ? "selected" : ""}>${escapeHtml(line)}</option>`).join("")}</select>`)}
       ${formField("spec-product", "Продукт", `<select id="spec-product" data-specification-select="product" ${selection.line ? "" : "disabled"}><option value="">Выберите продукт</option>${products.map(product => `<option value="${attribute(product)}" ${selection.product === product ? "selected" : ""}>${escapeHtml(product)}</option>`).join("")}</select>`)}
       ${formField("spec-variant", "mg/g", `<select id="spec-variant" data-specification-select="variant" ${selection.product ? "" : "disabled"}><option value="">Выберите вариант</option>${variants.map(variant => `<option value="${attribute(variant)}" ${selection.variant === variant ? "selected" : ""}>${escapeHtml(variant)}</option>`).join("")}</select>`)}
     </div></section>
-    ${selected ? renderSpecificationCard(selected, canEdit) : `<section class="card empty-state"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "После выбора варианта программа покажет технологические нормы и упаковку." : "Проверьте подключение к Google и обновите страницу."}</p></section>`}
-    <p class="module-note">В справочнике доступно ${all.length} позиций. Исходные названия и пустые нормы сухих продуктов сохранены без изменений.</p>`;
+    <section class="specification-workspace"><section class="card specification-catalog"><div class="section-heading"><div><p class="eyebrow">Каталог</p><h2>${query ? "Результаты поиска" : "Быстрый выбор"}</h2></div><span class="status-pill neutral">${Math.min(catalog.length, 12)} показано</span></div><div class="specification-result-list">${catalog.slice(0, 12).map(item => `<button class="specification-result ${selected?.id === item.id ? "selected" : ""}" data-action="select-specification" data-id="${attribute(item.id)}"><span><strong>${escapeHtml(item.product)}</strong><small>${escapeHtml(item.line)}</small></span><span><b>${escapeHtml(String(item.variant))}</b><small>mg/g · ${escapeHtml(item.processType || "—")}</small></span></button>`).join("") || '<div class="empty-state compact"><span>⌕</span><p>По этому запросу продуктов нет</p></div>'}</div>${catalog.length > 12 ? `<p class="module-note">Уточните поиск или выберите линейку: найдено ещё ${catalog.length - 12} позиций.</p>` : ""}</section>
+      <div>${selected ? renderSpecificationCard(selected, canEdit) : `<section class="card empty-state specification-empty"><span>⌁</span><h3>${all.length ? "Выберите позицию" : "Спецификации пока не загружены"}</h3><p>${all.length ? "Найдите продукт или выберите его из каталога — здесь сразу появятся технологические нормы и упаковка." : "Проверьте подключение к Google и обновите каталог."}</p></section>`}</div>
+    </section>
+    <p class="module-note">Источник — Google Sheets. Новые продукты и изменения появляются после обновления каталога; исходные названия и пустые нормы сухих продуктов сохраняются без изменений.</p>`;
 }
 
 function renderSpecificationCard(specification, canEdit = false) {
   const value = number => number === null || number === undefined ? "—" : formatNumber(number);
-  return `<section class="specification-detail card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(specification.line)}</p><h2>${escapeHtml(specification.product)} · ${escapeHtml(String(specification.variant))} mg/g</h2></div><div class="header-actions"><span class="status-pill success">${escapeHtml(specification.processType || "Тип не указан")}</span>${canEdit ? `<button class="small-button" data-action="edit-specification" data-id="${attribute(specification.id)}">Изменить</button><button class="small-button danger-outline" data-action="delete-specification" data-id="${attribute(specification.id)}">Удалить</button>` : ""}</div></div><dl class="specification-values">
+  return `<section class="specification-detail card"><div class="section-heading"><div><p class="eyebrow">${escapeHtml(specification.line)}</p><h2>${escapeHtml(specification.product)}</h2><p class="specification-variant">${escapeHtml(String(specification.variant))} mg/g</p></div><div class="header-actions"><span class="status-pill success">${escapeHtml(specification.processType || "Тип не указан")}</span>${canEdit ? `<button class="small-button" data-action="edit-specification" data-id="${attribute(specification.id)}">Изменить</button><button class="small-button danger-outline" data-action="delete-specification" data-id="${attribute(specification.id)}">Удалить</button>` : ""}</div></div><dl class="specification-values">
     <div><dt>Вес сухого продукта</dt><dd>${value(specification.dryMass)} г</dd></div><div><dt>Вес мокрого продукта</dt><dd>${value(specification.wetMass)} г</dd></div><div><dt>Жидкость</dt><dd>${value(specification.liquidVolume)} мл</dd></div><div><dt>Подушек в банке</dt><dd>${value(specification.pouchCount)}</dd></div><div><dt>Цвет крышки</dt><dd>${escapeHtml(specification.lidColor || "—")}</dd></div><div><dt>Вид банки</dt><dd>${escapeHtml(specification.canType || "—")}</dd>
   </dl></section>`;
 }
@@ -1268,7 +1504,7 @@ function openScaleWalkDialog() {
         <div id="walk-error" class="form-error" hidden></div>
         <div class="form-grid">
           ${formField("walk-date", "Дата проверки", `<input id="walk-date" name="date" type="date" value="${attribute(walk.date)}" required>`)}
-          ${formField("walk-performer", "Кто проводит проверку", `<select id="walk-performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново перед каждым обходом")}
+          ${formField("walk-performer", "Кто проводит проверку", `<select id="walk-performer" name="performer" required><option value="">Выберите имя и фамилию</option>${operationalAuthorNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`, "Только ответственный за текущую смену")}
         </div>
         <div class="walk-route">${SCALES.map(scale => `<span>${scale.code}</span>`).join("")}</div>
         <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Начать с F1</button></div>
@@ -1477,7 +1713,7 @@ function openRecordDialog(id = null) {
         ${formField("scaleName", "Весы", `<select id="scaleName" name="scaleName" required>${journal.scaleOptions.map(option => `<option ${option === values.scaleName ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`)}
         ${formField("actual", "Фактический вес, г", `<input id="actual" name="actual" type="number" inputmode="decimal" step="0.001" min="0" value="${attribute(values.actual)}" placeholder="Например, 50,000" required />`, "Номинал: 50 г")}
         ${formField("condition", "Состояние весов", `<select id="condition" name="condition"><option ${values.condition === "Рабочие" ? "selected" : ""}>Рабочие</option><option ${values.condition === "Нерабочие" ? "selected" : ""}>Нерабочие</option></select>`)}
-        ${formField("performer", "Кто внёс данные", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option ${employee === values.performer && !existing ? "selected" : ""}>${escapeHtml(employee)}</option>`).join("")}</select>`, "Выбирается заново для каждой записи", "full")}
+        ${formField("performer", "Кто внёс данные", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${operationalAuthorNames().map(employee => `<option ${employee === values.performer && !existing ? "selected" : ""}>${escapeHtml(employee)}</option>`).join("")}</select>`, "Только ответственный за текущую смену", "full")}
         ${formField("note", "Примечание", `<textarea id="note" name="note" rows="3" placeholder="Необязательно">${escapeHtml(values.note)}</textarea>`, "", "full")}
       </div>
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${existing ? "Сохранить исправление" : "Добавить запись"}</button></div>
@@ -1513,7 +1749,7 @@ function openAnnulDialog(id) {
       <div class="dialog-heading"><div><p class="eyebrow">Без удаления данных</p><h2>Аннулировать запись?</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
       <p class="dialog-lead">Запись ${formatDate(record.date)} · ${escapeHtml(record.scaleName)} останется в журнале и получит статус «Аннулировано».</p>
       <div id="form-error" class="form-error" hidden></div>
-      ${formField("performer", "Кто аннулирует", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${employeeNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`)}
+       ${formField("performer", "Кто аннулирует", `<select id="performer" name="performer" required><option value="">Выберите имя и фамилию</option>${operationalAuthorNames().map(employee => `<option>${escapeHtml(employee)}</option>`).join("")}</select>`)}
       ${formField("reason", "Причина", `<textarea id="reason" name="reason" rows="3" placeholder="Причина обязательна" required></textarea>`)}
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="danger-button">Аннулировать</button></div>
     </form>`);
@@ -1636,7 +1872,7 @@ async function deleteSpecification(id) {
 function openShiftGuestDialog() {
   const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId;
   const guests = activePersonnel()
-    .filter(employee => employee.shiftTeamId !== teamId && employee.shiftTeamId !== "office" && !state.shiftGuests.some(item => item.employeeId === employee.id))
+    .filter(employee => (employee.shiftTeamId !== teamId || isSubstituteOnly(employee)) && employee.shiftTeamId !== "office" && !state.shiftGuests.some(item => item.employeeId === employee.id))
     .sort(comparePersonnel);
   const dialog = createDialog(`
     <form class="dialog-card small-dialog" data-shift-guest-form>
@@ -1655,7 +1891,7 @@ function openShiftGuestDialog() {
     const data = new FormData(form);
     const employee = activePersonnel().find(item => item.id === String(data.get("employeeId") || ""));
     const substitutionReason = String(data.get("substitutionReason") || "");
-    if (!employee || employee.shiftTeamId === teamId || !substitutionReason) {
+    if (!employee || (employee.shiftTeamId === teamId && !isSubstituteOnly(employee)) || !substitutionReason) {
       showFormError(form, new Error("Выберите сотрудника другой смены и причину выхода"));
       return;
     }
@@ -1684,7 +1920,9 @@ function renderBirthdayReminders() {
 function renderWorkforceOperation(operation) {
   const conflict = operation.status === "conflict" || operation.status === "error";
   const labels = { personnel: "Персонал", shiftTeams: "Смены", attendance: "Табель", vacations: "График отпусков" };
-  return `<div class="queue-item"><span class="queue-icon ${conflict ? "conflict" : "pending"}">${conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(labels[operation.kind] || "Журнал")}</strong><small>${escapeHtml(operation.actor?.performer || "Автор не указан")} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}</small></span><span class="status-pill ${conflict ? "danger" : "warning"}">${conflict ? "Конфликт" : "В очереди"}</span>${conflict ? `<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(operation.requestId)}">Оставить версию Google</button>` : ""}</div>`;
+  const retry = operation.kind === "attendance" && conflict
+    ? `<button class="small-button" data-action="workforce-retry-missing-attendance" data-id="${attribute(operation.requestId)}">Отправить, если в Google пусто</button>` : "";
+  return `<div class="queue-item"><span class="queue-icon ${conflict ? "conflict" : "pending"}">${conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(labels[operation.kind] || "Журнал")}</strong><small>${escapeHtml(operation.actor?.performer || "Автор не указан")} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}</small></span><span class="status-pill ${conflict ? "danger" : "warning"}">${conflict ? "Конфликт" : "В очереди"}</span>${conflict ? `<span class="queue-actions">${retry}<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(operation.requestId)}">Оставить версию Google</button></span>` : ""}</div>`;
 }
 
 function openVacationDialog(id = null) {
@@ -1697,7 +1935,7 @@ function openVacationDialog(id = null) {
       <div id="form-error" class="form-error" hidden></div>
       <div class="form-grid">
         ${formField("vacation-year", "Год", `<select id="vacation-year" name="year" required>${WORKFORCE_YEARS.map(year => `<option value="${year}" ${Number(vacation?.year || WORKFORCE_YEARS[0]) === year ? "selected" : ""}>${year}</option>`).join("")}</select>`)}
-        ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().filter(employee => employee.shiftTeamId !== "office").sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
+        ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().filter(isRegularAreaEmployee).sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
         ${formField("vacation-start", "Начало", `<input id="vacation-start" name="startDate" type="date" value="${attribute(vacation?.startDate || "")}" required>`)}
         ${formField("vacation-end", "Окончание", `<input id="vacation-end" name="endDate" type="date" value="${attribute(vacation?.endDate || "")}" required>`)}
         ${formField("vacation-status", "Статус", `<select id="vacation-status" name="status" required>${["Запланирован", "Согласован", "Использован", "Аннулирован"].map(status => `<option ${vacation?.status === status ? "selected" : ""}>${status}</option>`).join("")}</select>`)}
@@ -1724,16 +1962,16 @@ function openVacationDialog(id = null) {
   dialog.showModal();
 }
 
-function withWorkforceActor(action) {
+function withWorkforceActor(action, allowedNames = employeeNames()) {
   if (!workforceRepository) return action();
-  return chooseWorkforceActor().then(async performer => {
+  return chooseWorkforceActor(allowedNames).then(async performer => {
     workforceActor = { performer };
     return action();
   });
 }
 
-function chooseWorkforceActor() {
-  const names = employeeNames();
+function chooseWorkforceActor(allowedNames = employeeNames()) {
+  const names = [...new Set(allowedNames)].filter(Boolean).sort((a, b) => a.localeCompare(b, "ru"));
   if (!names.length) return Promise.reject(new Error("Сначала добавьте сотрудника в журнал «Персонал»"));
   return new Promise((resolve, reject) => {
     const dialog = createDialog(`
@@ -1874,6 +2112,26 @@ function activePersonnel() {
   return personnel().filter(employee => employee.active !== false);
 }
 
+function presentShiftPersonnel() {
+  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  if (!teamId) return [];
+  const attendance = new Map((state.shift?.active && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
+    .map(item => [item.employeeId, attendanceCode(item.status)]));
+  return shiftStartMembers(teamId).filter(employee => attendance.get(employee.id) === "11");
+}
+
+function isSubstituteOnly(employee) {
+  return Boolean(employee?.substituteOnly) || SUBSTITUTE_ONLY_EMPLOYEE_IDS.includes(employee?.id);
+}
+
+function isRegularAreaEmployee(employee) {
+  return Boolean(employee) && employee.shiftTeamId !== "office" && !isSubstituteOnly(employee);
+}
+
+function regularAreaPersonnel() {
+  return activePersonnel().filter(isRegularAreaEmployee);
+}
+
 function employeeNames() {
   return activePersonnel().map(employee => employee.fullName).sort((left, right) => left.localeCompare(right, "ru"));
 }
@@ -1912,7 +2170,7 @@ function shiftGuestEntries(teamId) {
 }
 
 function shiftStartMembers(teamId) {
-  const regular = activePersonnel().filter(employee => employee.shiftTeamId === teamId);
+  const regular = regularAreaPersonnel().filter(employee => employee.shiftTeamId === teamId);
   const guests = shiftGuestEntries(teamId)
     .map(item => {
       const employee = activePersonnel().find(person => person.id === item.employeeId);
@@ -2042,6 +2300,9 @@ function attendanceCode(value) {
 
 async function saveShiftAttendanceToTimesheet(teamId, attendance) {
   const date = today();
+  // Starting a shift must stay responsive.  The attendance is first written
+  // to the local queue, so that a slow Google Sheets request never blocks the
+  // responsible-person dialog or the transition to scale control.
   await withWorkforceActor(async () => {
     for (const item of attendance) {
       await workforceService.saveAttendance({
@@ -2053,8 +2314,31 @@ async function saveShiftAttendanceToTimesheet(teamId, attendance) {
         homeShiftTeamId: item.isSubstitute ? item.homeShiftTeamId : ""
       });
     }
+  }, attendanceAuthorNames(teamId));
+  sendWorkforceInBackground();
+}
+
+function sendWorkforceInBackground() {
+  if (!workforceRepository || !navigator.onLine) return;
+  void syncWorkforce().catch(error => {
+    toast(`Табель сохранён на этом компьютере. Отправка в Google будет повторена автоматически: ${error.message}`, "warning");
   });
-  if (workforceRepository) await syncWorkforce();
+}
+
+function attendanceAuthorNames(teamId) {
+  const responsible = state.shiftResponsible;
+  const responsibleEmployee = responsible?.teamId === teamId
+    ? activePersonnel().find(employee => employee.id === responsible.employeeId)
+    : null;
+  if (responsibleEmployee?.role === "mechanic-operator") return [responsibleEmployee.fullName];
+  return activePersonnel()
+    .filter(employee => employee.shiftTeamId === teamId && ["senior-mechanic", "mechanic"].includes(employee.role))
+    .map(employee => employee.fullName);
+}
+
+function operationalAuthorNames() {
+  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  return attendanceAuthorNames(teamId);
 }
 
 function showInlineFormError(form, message) {
