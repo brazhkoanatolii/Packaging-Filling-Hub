@@ -17,6 +17,11 @@ const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL
 const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub/main/update-manifest.json";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
+const workforceSpreadsheetIds = Object.freeze({
+  personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
+  attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
+  vacations: "1zenc0sBGtD8KHQdrBxULsoA9jSaUcZeW83XIiz5YxSo"
+});
 const maximumBodyBytes = 1024 * 1024;
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -101,8 +106,7 @@ createServer(async (request, response) => {
 
     if (url.pathname === "/api/workforce" && request.method === "GET") {
       if (!workstationRole) return sendJson(response, 403, { ok: false, message: "Назначьте роль рабочего компьютера" });
-      const result = await runAppsScript("getWorkforceSnapshot", [{ role: workstationRole }]);
-      return sendJson(response, result?.ok === false ? 400 : 200, result);
+      return sendJson(response, 200, await getWorkforceSnapshot());
     }
     if (url.pathname === "/api/workforce" && request.method === "POST") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена" });
@@ -318,6 +322,111 @@ function googleNumber(value) {
   const normalized = String(value ?? "").replace(/\s/g, "").replace(",", ".");
   const number = Number(normalized);
   return Number.isFinite(number) ? number : NaN;
+}
+
+async function getWorkforceSnapshot() {
+  const year = new Date().getFullYear();
+  const [masterRanges, attendanceRanges, vacationRanges] = await Promise.all([
+    getGoogleSheetRanges(workforceSpreadsheetIds.personnel, ["'Смены'!A6:H", "'Персонал'!A6:P"]),
+    getGoogleSheetRanges(workforceSpreadsheetIds.attendance, [`'${year}'!A6:AR`]),
+    getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:L`])
+  ]);
+  const teams = (masterRanges[0] ?? []).filter(row => row[6]).map(workforceTeam);
+  const personnel = (masterRanges[1] ?? []).filter(row => row[7]).map(row => workforcePerson(row, teams));
+  const attendance = workforceAttendance(attendanceRanges[0] ?? [], personnel, teams, year);
+  const vacations = workforceVacations(vacationRanges[0] ?? [], year);
+  return {
+    ok: true, ready: true, personnel, shiftTeams: teams.filter(team => team.id !== "office"),
+    officeSchedule: teams.find(team => team.id === "office") ?? null, attendance, vacations,
+    years: [year], timeZone: "Europe/Vilnius"
+  };
+}
+
+async function getGoogleSheetRanges(spreadsheetId, ranges) {
+  assertGoogleConfigured();
+  const accessToken = await getAccessToken();
+  const parameters = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE" });
+  ranges.forEach(range => parameters.append("ranges", range));
+  const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${parameters}`;
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" }, signal: AbortSignal.timeout(12_000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать рабочий журнал");
+  return (payload.valueRanges ?? []).map(range => range.values ?? []);
+}
+
+function workforceTeam(row) {
+  return {
+    id: String(row[6] || ""), name: String(row[0] || ""),
+    code: row[6] === "shift-team-a" ? "A" : row[6] === "shift-team-b" ? "B" : "5/2",
+    anchorDate: googleDate(row[1]), cycleLengthDays: googleNumber(row[2]),
+    workDayOffsets: String(row[3] || "").split(",").map(Number).filter(Number.isFinite),
+    shiftDurationHours: googleNumber(row[4]), accountingHours: googleNumber(row[5]), active: true,
+    revision: workforceRevision(row)
+  };
+}
+
+function workforcePerson(row, teams) {
+  return {
+    id: String(row[7] || ""), fullName: String(row[0] || ""), role: workforceRole(row[1]),
+    shiftTeamId: teams.find(team => team.name === String(row[2] || ""))?.id || String(row[11] || ""),
+    active: String(row[5] || "") === "Работает", note: String(row[6] || ""),
+    pakNumber: String(row[3] || ""), pakCode: String(row[4] || ""), birthday: googleDate(row[12]), hireDate: googleDate(row[13]),
+    phone: String(row[14] || ""), email: String(row[15] || ""), revision: workforceRevision(row), updatedAt: googleDate(row[9])
+  };
+}
+
+function workforceAttendance(rows, personnel, teams, year) {
+  const personnelById = new Map(personnel.map(person => [person.id, person]));
+  return rows.flatMap(row => {
+    const employee = personnelById.get(String(row[38] || ""));
+    const month = Number(row[0]);
+    if (!employee || !month) return [];
+    const shiftTeamId = teams.find(team => team.name === String(row[2] || ""))?.id || String(row[43] || "") || employee.shiftTeamId;
+    const overtimeDays = new Set(String(row[42] || "").split(",").filter(Boolean));
+    return Array.from({ length: new Date(year, month, 0).getDate() }, (_, index) => {
+      const day = index + 1;
+      const value = String(row[day + 2] || "");
+      if (!value || value === "—") return null;
+      const substitute = workforceSubstitute(row[37], day);
+      return {
+        id: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}:${shiftTeamId}:${employee.id}`,
+        date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`, employeeId: employee.id, shiftTeamId, value,
+        overtime: overtimeDays.has(String(day)), substitutionReason: substitute?.reason || "", homeShiftTeamId: substitute?.homeShiftTeamId || "",
+        revision: workforceRevision([value, overtimeDays.has(String(day)), substitute?.reason || "", substitute?.homeShiftTeamId || ""]),
+        updatedAt: googleDate(row[40]), updatedBy: String(row[41] || "")
+      };
+    }).filter(Boolean);
+  });
+}
+
+function workforceVacations(rows, year) {
+  return rows.filter(row => row[7]).map(row => ({
+    id: String(row[7]), employeeId: String(row[8] || ""), year, startDate: googleDate(row[2]), endDate: googleDate(row[3]),
+    days: Number.isFinite(googleNumber(row[4])) ? googleNumber(row[4]) : null, status: String(row[5] || ""), note: String(row[6] || ""),
+    revision: workforceRevision(row), updatedAt: googleDate(row[10]), updatedBy: String(row[11] || "")
+  }));
+}
+
+function workforceRole(value) {
+  return ({ "Начальник участка": "head-of-area", "Начальник производства": "production-manager", "Администратор": "administrator", "Начальник склада": "warehouse-manager", "Старший механик": "senior-mechanic", "Механик": "mechanic", "Механик-оператор": "mechanic-operator", "Упаковщик": "packer" })[String(value || "")] || "";
+}
+
+function workforceSubstitute(note, day) {
+  const match = String(note || "").match(/Подменный выход \(штатная смена ([AB])\):\s*([^\n]+)/);
+  const item = match?.[2].split(";").map(value => value.trim()).find(value => value.startsWith(`${day} — `));
+  return item ? { homeShiftTeamId: `shift-team-${match[1].toLowerCase()}`, reason: item.slice(`${day} — `.length).trim() } : null;
+}
+
+function googleDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  return match ? `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}` : text;
+}
+
+function workforceRevision(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
 
