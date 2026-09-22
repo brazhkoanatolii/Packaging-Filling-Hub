@@ -245,7 +245,9 @@ function isSafeUpdateManifest(manifest) {
   if (!manifest || typeof manifest !== "object" || !/^\d+\.\d+\.\d+$/.test(manifest.version || "") || !/^[A-Fa-f0-9]{64}$/.test(manifest.sha256 || "")) return false;
   try {
     const packageUrl = new URL(manifest.packageUrl);
-    return packageUrl.protocol === "https:" && packageUrl.hostname === "raw.githubusercontent.com" && /^\/brazhkoanatolii\/Packaging-Filling-Hub(?:-Updates)?\//.test(packageUrl.pathname) && packageUrl.pathname.endsWith(".zip");
+    return packageUrl.protocol === "https:"
+      && packageUrl.hostname === "raw.githubusercontent.com"
+      && /^\/brazhkoanatolii\/(Packaging-Filling-Hub|Packaging-Filling-Hub-Updates)\/.+\.zip$/.test(packageUrl.pathname);
   } catch {
     return false;
   }

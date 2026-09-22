@@ -25,7 +25,7 @@ if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) { throw "Не
 if ($ExpectedSha256 -notmatch "^[A-Fa-f0-9]{64}$") { throw "Некорректная контрольная сумма обновления." }
 
 $uri = [Uri]$PackageUrl
-if ($uri.Scheme -ne "https" -or $uri.Host -ne "raw.githubusercontent.com" -or -not $uri.AbsolutePath.StartsWith("/brazhkoanatolii/Packaging-Filling-Hub/") -or -not $uri.AbsolutePath.EndsWith(".zip")) {
+if ($uri.Scheme -ne "https" -or $uri.Host -ne "raw.githubusercontent.com" -or $uri.AbsolutePath -notmatch "^/brazhkoanatolii/(Packaging-Filling-Hub|Packaging-Filling-Hub-Updates)/.+\.zip$") {
   throw "Источник обновления не прошёл проверку."
 }
 
