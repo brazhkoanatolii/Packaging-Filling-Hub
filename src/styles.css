@@ -919,7 +919,6 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .packaging-workspace { grid-template-columns: 1fr; }
   .packaging-entry-panel { position: static; }
   .packaging-toolbar { align-items: flex-start; flex-direction: column; }
-  .packaging-toolbar-actions { width: 100%; }
   .field.full { grid-column: auto; }
   .dialog-card { padding: 19px; }
   .dialog-actions { flex-direction: column-reverse; }

@@ -22,12 +22,10 @@ export class PackagingGatewayProvider {
     return normalizeRecord(payload.record);
   }
   async remove(id) { await this.#request("DELETE", { id }); }
-  async exportDaily(date) { return this.#request("POST", { date }, "/api/packaging-daily-export"); }
-
-  async #request(method, body, path = "/api/packaging-records") {
+  async #request(method, body) {
     let response;
     try {
-      response = await this.fetch(`${this.baseUrl}${path}`, {
+      response = await this.fetch(`${this.baseUrl}/api/packaging-records`, {
         method,
         headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
         signal: AbortSignal.timeout(30_000),

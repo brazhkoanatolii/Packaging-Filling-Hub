@@ -28,6 +28,7 @@ const rawMaterialsRange = "'Расход сырья'!A3:D500";
 const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
 const cansSheetName = "Банки";
 const cansRange = "'Банки'!A4:J500";
+const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 6);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
   attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
@@ -47,6 +48,8 @@ const publicDirectories = ["assets/", "src/"];
 
 let tokenCache = null;
 let tokenRefreshPromise = null;
+let automaticDailyExportCompletedDate = null;
+let automaticDailyExportAttemptAt = 0;
 
 createServer(async (request, response) => {
   try {
@@ -183,12 +186,6 @@ createServer(async (request, response) => {
       if (!writesEnabled || (workstationRole !== "manager" && workstationRole !== "senior")) return sendJson(response, 403, { ok: false, message: "Удаление расхода упаковки недоступно" });
       return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
     }
-    if (url.pathname === "/api/packaging-daily-export" && request.method === "POST") {
-      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      if (workstationRole !== "manager") return sendJson(response, 403, { ok: false, message: "Передавать суточные итоги может только начальник участка" });
-      return sendJson(response, 200, await exportPackagingDaily(await readJsonBody(request)));
-    }
-
     if (url.pathname === "/api/specifications" && request.method === "GET") {
       const specifications = await runAppsScript("listProductSpecifications");
       return sendJson(response, 200, { ok: true, specifications: Array.isArray(specifications) ? specifications : [] });
@@ -232,6 +229,11 @@ createServer(async (request, response) => {
   console.log(`Packaging-Filling-Hub: http://${host}:${port}`);
   console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
+  if (workstationRole === "manager") {
+    console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
+    void runAutomaticDailyPackagingExport();
+    setInterval(() => void runAutomaticDailyPackagingExport(), 5 * 60_000).unref();
+  }
 });
 
 async function getUpdateStatus() {
@@ -440,6 +442,22 @@ async function exportPackagingDaily(input) {
   return { ok: true, date, rawMaterials: { rowNumber: rawRow.rowNumber }, cans: { rowNumber: cansRow.rowNumber } };
 }
 
+async function runAutomaticDailyPackagingExport() {
+  if (!writesEnabled || missingGoogleSettings().length) return;
+  const clock = vilniusClock();
+  if (clock.hour < automaticDailyExportHour || automaticDailyExportCompletedDate === clock.date) return;
+  if (Date.now() - automaticDailyExportAttemptAt < 60 * 60_000) return;
+  automaticDailyExportAttemptAt = Date.now();
+  const date = previousCalendarDate(clock.date);
+  try {
+    await exportPackagingDaily({ date });
+    automaticDailyExportCompletedDate = clock.date;
+    console.log(`Суточный перенос расхода упаковки выполнен: ${date}`);
+  } catch (error) {
+    console.warn(`Суточный перенос расхода упаковки не выполнен за ${date}: ${error.message}`);
+  }
+}
+
 async function getDailyTargetRow(spreadsheetId, range, date, startRow, label) {
   const rows = (await getGoogleSheetRanges(spreadsheetId, [range]))[0] ?? [];
   const index = rows.findIndex(row => googleSheetDate(row[0]) === date);
@@ -513,10 +531,16 @@ function googleSheetDate(value) {
 function displayDate(value) { const [year, month, day] = String(value).split("-"); return `${day}.${month}.${year}`; }
 
 function vilniusDate() {
-  const values = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: "Europe/Vilnius", year: "numeric", month: "2-digit", day: "2-digit" })
-    .formatToParts(new Date()).filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return vilniusClock().date;
 }
+
+function vilniusClock() {
+  const values = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: "Europe/Vilnius", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date()).filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour) };
+}
+
+function previousCalendarDate(date) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() - 1); return value.toISOString().slice(0, 10); }
 
 async function getGoogleSheetRanges(spreadsheetId, ranges) {
   assertGoogleConfigured();
@@ -704,6 +728,12 @@ function numberFromEnvironment(name, fallback) {
   const value = Number(process.env[name] || fallback);
   if (Number.isInteger(value) && value > 0 && value <= 65535) return value;
   throw new Error(`${name} должен быть корректным номером порта`);
+}
+
+function hourFromEnvironment(name, fallback) {
+  const value = Number(process.env[name] ?? fallback);
+  if (Number.isInteger(value) && value >= 0 && value <= 23) return value;
+  throw new Error(`${name} должен быть целым числом от 0 до 23`);
 }
 
 function normalizeWorkstationRole(value) {
