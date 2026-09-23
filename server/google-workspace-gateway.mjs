@@ -78,6 +78,8 @@ let automaticDailyExportCompletedDate = null;
 let automaticDailyExportAttemptAt = 0;
 let automaticDailyProductionExportCompletedDate = null;
 let automaticDailyProductionExportAttemptAt = 0;
+let automaticUpdateAttemptAt = 0;
+let automaticUpdateRunning = false;
 
 createServer(async (request, response) => {
   try {
@@ -141,14 +143,7 @@ createServer(async (request, response) => {
       const update = await getUpdateStatus();
       if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
       if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });
-      const updater = join(projectRoot, "scripts", "windows", "update-program.ps1");
-      if (!existsSync(updater)) return sendJson(response, 500, { ok: false, message: "Не найден сценарий обновления" });
-      const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      child.unref();
+      startVerifiedUpdate(update, "ручной запуск");
       return sendJson(response, 202, { ok: true, version: update.version });
     }
 
@@ -317,7 +312,39 @@ createServer(async (request, response) => {
     void runAutomaticDailyProductionExport();
     setInterval(() => void runAutomaticDailyProductionExport(), 5 * 60_000).unref();
   }
+  if (process.platform === "win32") {
+    console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
+    void runAutomaticUpdate();
+    setInterval(() => void runAutomaticUpdate(), 60_000).unref();
+  }
 });
+
+async function runAutomaticUpdate() {
+  if (automaticUpdateRunning || Date.now() - automaticUpdateAttemptAt < 55_000) return;
+  automaticUpdateAttemptAt = Date.now();
+  const update = await getUpdateStatus();
+  if (!update.available) return;
+  automaticUpdateRunning = true;
+  try {
+    startVerifiedUpdate(update, "автоматический запуск");
+  } catch (error) {
+    automaticUpdateRunning = false;
+    console.error(`[update] Не удалось запустить обновление: ${error.message}`);
+  }
+}
+
+function startVerifiedUpdate(update, source) {
+  const updater = join(projectRoot, "scripts", "windows", "update-program.ps1");
+  if (!existsSync(updater)) throw new Error("Не найден сценарий обновления");
+  console.log(`[update] ${source}: версия ${update.version}.`);
+  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.once("error", error => console.error(`[update] PowerShell не запущен: ${error.message}`));
+  child.unref();
+}
 
 async function getUpdateStatus() {
   const base = { ok: true, currentVersion: appVersion, available: false, message: "Новая версия не найдена" };

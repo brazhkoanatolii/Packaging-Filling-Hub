@@ -1881,14 +1881,14 @@ function renderSettingsPage() {
         <section class="card settings-section">
           <div class="section-heading"><div><p class="eyebrow">Интеграция</p><h2>Google Workspace</h2></div><span class="status-pill ${APP_CONFIG.integration.mode === "demo" ? "warning" : "success"}">${APP_CONFIG.integration.mode === "demo" ? "Тестовый режим" : "Рабочий шлюз"}</span></div>
           ${settingRow("Рабочая таблица", journal.sheetName, "Подключение подготовлено")}
-          ${settingRow("Автообновление", "Каждые 60 секунд", "Также доступна ручная кнопка")}
+          ${settingRow("Автообновление", "Каждую минуту", "Доступная проверенная версия устанавливается автоматически")}
           ${settingRow("Запись в Google", APP_CONFIG.integration.googleWritesEnabled ? "Включена" : "Выключена", APP_CONFIG.integration.googleWritesEnabled ? "Через защищённый шлюз" : "До контролируемой проверки")}
           ${settingRow("Часовой пояс", APP_CONFIG.timeZone, "Дата и время заполняются автоматически")}
         </section>
         <section class="card settings-section">
           <div class="section-heading"><div><p class="eyebrow">Программа</p><h2>Обновление</h2></div><span class="status-pill ${state.update.available ? "warning" : "success"}">${state.update.available ? "Доступно" : "Актуально"}</span></div>
           ${settingRow("Установлено", `Версия ${APP_CONFIG.version}`, state.update.checked ? (state.update.message || "Проверено при запуске") : "Проверяем наличие новой версии")}
-          ${state.update.available ? `<p class="settings-copy">Доступна версия <b>${escapeHtml(state.update.version)}</b>. Настройки Google и локальная очередь сохранятся.</p><button class="primary-button" data-action="install-update" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Устанавливаем…" : "Установить обновление"}</button>` : `<button class="secondary-button" data-action="check-update">Проверить сейчас</button>`}
+          ${state.update.available ? `<p class="settings-copy">Доступна версия <b>${escapeHtml(state.update.version)}</b>. Она будет установлена автоматически не позднее чем через минуту. Настройки Google и локальная очередь сохранятся.</p>` : `<button class="secondary-button" data-action="check-update">Проверить сейчас</button>`}
         </section>
         <section class="card settings-section">
           <div class="section-heading"><div><p class="eyebrow">Интерфейс</p><h2>Язык и оформление</h2></div></div>

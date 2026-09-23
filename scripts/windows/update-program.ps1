@@ -30,6 +30,9 @@ function Set-EnvironmentValue {
 }
 
 $targetRoot = [System.IO.Path]::GetFullPath($InstallRoot)
+$logDirectory = Join-Path $targetRoot "logs"
+New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $logDirectory "update-status.log") -Value "$(Get-Date -Format s) Запущено обновление." -Encoding UTF8
 $environmentPath = Join-Path $targetRoot ".env"
 if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) { throw "Не найдено локальное подключение программы." }
 if ($ExpectedSha256 -notmatch "^[A-Fa-f0-9]{64}$") { throw "Некорректная контрольная сумма обновления." }
@@ -70,11 +73,11 @@ try {
   } else {
     & $installer -Workstation $workstation -WorkstationId $workstationId -WorkstationLabel $workstationLabel -InstallRoot $targetRoot
   }
+  Set-Content -LiteralPath (Join-Path $logDirectory "update-status.log") -Value "$(Get-Date -Format s) Обновление установлено успешно." -Encoding UTF8
 } catch {
   $message = $_.Exception.Message
-  $logDirectory = Join-Path $targetRoot "logs"
-  New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $logDirectory "update-error.log") -Value "$(Get-Date -Format s) $message" -Encoding UTF8
+  Set-Content -LiteralPath (Join-Path $logDirectory "update-status.log") -Value "$(Get-Date -Format s) Обновление не установлено: $message" -Encoding UTF8
 } finally {
   if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
 }
