@@ -963,7 +963,7 @@ function renderApplication() {
         <div class="sidebar-footer">
           <div class="signed-user">
             <span class="avatar">${state.account.role === "manager" ? "НУ" : "СМ"}</span>
-            <span><strong>${state.account.title}</strong><small>${escapeHtml(APP_CONFIG.workstationLabel || ui("account"))}</small></span>
+            <span><strong>${state.account.title}</strong><small>${escapeHtml(APP_CONFIG.workstationLabel || ui("account"))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
           </div>
           <button class="text-button" data-action="logout">${ui("logout")}</button>
         </div>

@@ -154,6 +154,7 @@ h3 { margin-bottom: 5px; }
 .signed-user > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
 .signed-user strong { overflow: hidden; font-size: .84rem; text-overflow: ellipsis; white-space: nowrap; }
 .signed-user small { color: rgba(255,255,255,.55); font-size: .7rem; }
+.signed-user .app-version { margin-top: 2px; color: rgba(255,255,255,.4); font-size: .64rem; }
 .avatar { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--forest-700); color: white; font-size: .74rem; font-weight: 800; }
 .avatar.small { width: 35px; height: 35px; font-size: .66rem; }
 .text-button { margin-top: 12px; padding: 5px 0; border: 0; background: transparent; color: rgba(255,255,255,.65); font-size: .78rem; }
