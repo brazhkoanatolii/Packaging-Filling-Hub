@@ -31,8 +31,8 @@ const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
 const cansSheetName = "Банки";
 const cansRange = "'Банки'!A4:J500";
 const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
-const productionSecondRange = "'Учет продукции 2'!A2:M";
-const productionFirstRange = "'Учет продукции 1'!B4:M";
+const productionSecondRange = "'Учет продукции 2'!A2:O";
+const productionFirstRange = "'Учет продукции 1'!B4:O";
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -634,12 +634,20 @@ async function getProductionSnapshot() {
   for (const row of shifts.second) {
     const key = productionSignature(row);
     const queue = bySignature.get(key) ?? [];
-    queue.push(row.shift);
+    queue.push(row);
     bySignature.set(key, queue);
   }
   return {
     ...result,
-    records: result.records.map(record => ({ ...record, shift: (bySignature.get(productionSignature(record)) ?? []).shift() ?? "" }))
+    records: result.records.map(record => {
+      const source = (bySignature.get(productionSignature(record)) ?? []).shift() ?? {};
+      return {
+        ...record,
+        shift: source.shift ?? "",
+        seniorMechanic: source.seniorMechanic ?? "",
+        mechanic: source.mechanic ?? ""
+      };
+    })
   };
 }
 
@@ -651,14 +659,33 @@ async function persistProductionShift(record, inputShift) {
   const second = [...rows.second].reverse().find(row => productionSignature(row) === signature);
   const first = [...rows.first].reverse().find(row => productionSignature(row) === signature);
   if (!second || !first) throw new Error("Не удалось найти новую запись в обоих листах продукции");
+  const leaders = await productionShiftLeaders(record.date, shift);
   const accessToken = await getAccessToken();
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: "'Учет продукции 1'!M2", values: [["Смена"]] },
+    { range: "'Учет продукции 1'!N2:O2", values: [["Старший механик", "Механик"]] },
     { range: "'Учет продукции 2'!M1", values: [["Смена"]] },
+    { range: "'Учет продукции 2'!N1:O1", values: [["Старший механик", "Механик"]] },
     { range: `'Учет продукции 1'!M${first.rowNumber}`, values: [[shift]] },
+    { range: `'Учет продукции 1'!N${first.rowNumber}:O${first.rowNumber}`, values: [[leaders.seniorMechanic, leaders.mechanic]] },
     { range: `'Учет продукции 2'!M${second.rowNumber}`, values: [[shift]] }
+    , { range: `'Учет продукции 2'!N${second.rowNumber}:O${second.rowNumber}`, values: [[leaders.seniorMechanic, leaders.mechanic]] }
   ]);
-  return { ...record, shift };
+  return { ...record, shift, ...leaders };
+}
+
+async function productionShiftLeaders(date, shift) {
+  const workforce = await getWorkforceSnapshot();
+  const teamId = shift === "A" ? "shift-team-a" : "shift-team-b";
+  const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
+  const present = (workforce.attendance ?? [])
+    .filter(item => item.date === date && item.shiftTeamId === teamId && item.value === "K")
+    .map(item => peopleById.get(item.employeeId))
+    .filter(Boolean);
+  return {
+    seniorMechanic: present.filter(person => person.role === "senior-mechanic").map(person => person.fullName).join("; "),
+    mechanic: present.filter(person => person.role === "mechanic").map(person => person.fullName).join("; ")
+  };
 }
 
 async function getProductionShiftRows() {
@@ -672,13 +699,13 @@ async function getProductionShiftRows() {
 function productionRowFromSecond(row, rowNumber) {
   const date = googleSheetDate(row?.[0]);
   if (!date || !String(row?.[3] || "").trim()) return null;
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), shift: String(row[12] || "").trim().toUpperCase() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
 }
 
 function productionRowFromFirst(row, rowNumber) {
   const date = googleSheetDate(row?.[0]);
   if (!date || !String(row?.[3] || "").trim()) return null;
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase(), seniorMechanic: String(row[12] || "").trim(), mechanic: String(row[13] || "").trim() };
 }
 
 function productionSignature(record) {

@@ -100,7 +100,7 @@ function normalizeRecords(records) { return records.map(normalizeRecord).filter(
 function normalizeRecord(value) {
   if (!value?.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(value.date || ""))) return null;
   const operator = String(value.operator || "");
-  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), shift: String(value.shift || "").toUpperCase(), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator, operators: splitParticipants(operator), note: String(value.note || "") };
+  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), shift: String(value.shift || "").toUpperCase(), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator, operators: splitParticipants(operator), seniorMechanic: String(value.seniorMechanic || ""), mechanic: String(value.mechanic || ""), note: String(value.note || "") };
 }
 
 function splitParticipants(value) {
