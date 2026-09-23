@@ -48,3 +48,13 @@ export function cycloneStatistics(records, year) {
   }
   return { months, total: months.reduce((sum, count) => sum + count, 0), people: [...people].sort((a, b) => b[1] - a[1]) };
 }
+
+export function pendingCycloneCleaningDates(records, currentDate = getVilniusDate()) {
+  const date = String(currentDate || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  const [year, month, day] = date.split("-").map(Number);
+  const dueDates = [1, 15].filter(dueDay => day >= dueDay)
+    .map(dueDay => `${year}-${String(month).padStart(2, "0")}-${String(dueDay).padStart(2, "0")}`);
+  const completed = new Set((records ?? []).map(record => String(record?.date || "")));
+  return dueDates.filter(dueDate => !completed.has(dueDate));
+}

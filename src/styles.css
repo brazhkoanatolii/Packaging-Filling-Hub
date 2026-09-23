@@ -657,6 +657,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .preparation-reminder small { margin-top: 1px; color: #856d45; }
 .preparation-reminder > b { font-size: .75rem; }
 .preparation-reminder.scales > span { background: var(--green-600); }
+.preparation-reminder.cyclone-reminder > span { background: #2478bc; }
 
 .workforce-hero, .settings-hero { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 16px; padding: 25px 28px; background: linear-gradient(120deg,var(--surface),color-mix(in srgb,var(--green-100) 58%,var(--surface))); }
 .workforce-hero::after, .settings-hero::after { position: absolute; right: -54px; bottom: -86px; width: 220px; height: 220px; border: 34px solid color-mix(in srgb,var(--green-600) 9%,transparent); border-radius: 50%; content: ""; }

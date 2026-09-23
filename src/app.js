@@ -16,7 +16,7 @@ import { ProductSpecificationService } from "./services/product-specification-se
 import { PRODUCT_SPECIFICATION_SOURCE } from "./config/product-specification-config.js";
 import { CycloneGatewayProvider } from "./providers/cyclone-gateway-provider.js";
 import { CycloneRepository } from "./repositories/cyclone-repository.js";
-import { CycloneService, cycloneStatistics } from "./services/cyclone-service.js";
+import { CycloneService, cycloneStatistics, pendingCycloneCleaningDates } from "./services/cyclone-service.js";
 import { ProductionGatewayProvider } from "./providers/production-gateway-provider.js";
 import { ProductionRepository } from "./repositories/production-repository.js";
 import { ProductionService, LINES as PRODUCTION_LINES } from "./services/production-service.js";
@@ -2537,14 +2537,15 @@ function showFormError(form, error) {
 
 
 function renderPreparationReminder() {
-  if (state.account?.role !== "senior") return "";
-  if (!state.shift?.active) {
-    return `<button class="preparation-reminder" data-action="navigate" data-page="attendance"><span>1</span><div><strong>Смена ещё не начата</strong><small>Заполните табель. Разделы доступны — это напоминание, а не блокировка.</small></div><b>Перейти →</b></button>`;
+  const reminders = [];
+  if (state.account?.role === "senior" && !state.shift?.active) reminders.push(`<button class="preparation-reminder" data-action="navigate" data-page="attendance"><span>1</span><div><strong>Смена ещё не начата</strong><small>Заполните табель. Разделы доступны — это напоминание, а не блокировка.</small></div><b>Перейти →</b></button>`);
+  if (state.account?.role === "senior" && state.shift?.active && state.shift.requiresScaleControl && !state.shift.weightsCompletedAt) reminders.push(`<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>13</span><div><strong>Не завершён контроль весов F1–F13</strong><small>Продолжить работу можно, но напоминание останется до сохранения полного обхода.</small></div><b>Проверить →</b></button>`);
+  const overdueCyclones = pendingCycloneCleaningDates(state.cyclones.records);
+  if (overdueCyclones.length) {
+    const days = overdueCyclones.map(date => Number(date.slice(-2))).join(" и ");
+    reminders.push(`<button class="preparation-reminder cyclone-reminder" data-action="navigate" data-page="cyclones"><span>◌</span><div><strong>Требуется очистка циклонов</strong><small>Нет записи за ${days}-е ${overdueCyclones.length === 1 ? "число" : "числа"} этого месяца. Напоминание исчезнет после внесения записи в журнал.</small></div><b>Открыть →</b></button>`);
   }
-  if (state.shift.requiresScaleControl && !state.shift.weightsCompletedAt) {
-    return `<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>13</span><div><strong>Не завершён контроль весов F1–F13</strong><small>Продолжить работу можно, но напоминание останется до сохранения полного обхода.</small></div><b>Проверить →</b></button>`;
-  }
-  return "";
+  return reminders.join("");
 }
 
 function connectionBadge() {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { CycloneRepository } from "../src/repositories/cyclone-repository.js";
-import { CycloneService, cycloneStatistics } from "../src/services/cyclone-service.js";
+import { CycloneService, cycloneStatistics, pendingCycloneCleaningDates } from "../src/services/cyclone-service.js";
 import { CycloneGatewayProvider } from "../src/providers/cyclone-gateway-provider.js";
 
 class MemoryStore {
@@ -84,6 +84,14 @@ test("очистки: статистика учитывает год и толь
   ], 2026);
   assert.equal(stats.total, 2); assert.equal(stats.months[0], 1); assert.equal(stats.months[11], 1);
   assert.deepEqual(stats.people, [["Employee", 2]]);
+});
+
+test("очистки: напоминание 1-го и 15-го остаётся до записи за каждую дату", () => {
+  assert.deepEqual(pendingCycloneCleaningDates([], "2026-09-01"), ["2026-09-01"]);
+  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }], "2026-09-14"), []);
+  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }], "2026-09-15"), ["2026-09-15"]);
+  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-15" }], "2026-09-23"), ["2026-09-01"]);
+  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }, { date: "2026-09-15" }], "2026-09-23"), []);
 });
 
 test("очистки: отказ Google сохраняет ошибку и очередь, без ложного подтверждения", async () => {
