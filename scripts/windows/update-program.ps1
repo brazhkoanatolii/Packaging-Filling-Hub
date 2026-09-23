@@ -46,7 +46,7 @@ $workstation = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_RO
 $workstationId = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ID"
 $workstationLabel = Get-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_LABEL"
 $deploymentMode = Get-EnvironmentValue -Path $environmentPath -Name "DEPLOYMENT_MODE"
-$host = Get-EnvironmentValue -Path $environmentPath -Name "HOST"
+$serverHost = Get-EnvironmentValue -Path $environmentPath -Name "HOST"
 $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT"
 if ($workstation -notin @("manager", "senior")) { throw "Не определена роль рабочего компьютера." }
 
@@ -67,7 +67,7 @@ try {
   if ($deploymentMode -eq "central") {
     & $installer -Workstation $workstation -WorkstationId $workstationId -WorkstationLabel $workstationLabel -InstallRoot $targetRoot -NoStart
     Set-EnvironmentValue -Path $environmentPath -Name "DEPLOYMENT_MODE" -Value "central"
-    Set-EnvironmentValue -Path $environmentPath -Name "HOST" -Value $(if ($host) { $host } else { "0.0.0.0" })
+    Set-EnvironmentValue -Path $environmentPath -Name "HOST" -Value $(if ($serverHost) { $serverHost } else { "0.0.0.0" })
     if ($port) { Set-EnvironmentValue -Path $environmentPath -Name "PORT" -Value $port }
     & (Join-Path $targetRoot "scripts\windows\start-program.ps1") -InstallRoot $targetRoot
   } else {
