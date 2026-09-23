@@ -661,6 +661,7 @@ async function persistProductionShift(record, inputShift) {
   if (!second || !first) throw new Error("Не удалось найти новую запись в обоих листах продукции");
   const leaders = await productionShiftLeaders(record.date, shift);
   const accessToken = await getAccessToken();
+  await preserveProductionRowFormatting(accessToken, first.rowNumber, second.rowNumber);
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: "'Учет продукции 1'!M2", values: [["Смена"]] },
     { range: "'Учет продукции 1'!N2:O2", values: [["Старший механик", "Механик"]] },
@@ -672,6 +673,29 @@ async function persistProductionShift(record, inputShift) {
     , { range: `'Учет продукции 2'!N${second.rowNumber}:O${second.rowNumber}`, values: [[leaders.seniorMechanic, leaders.mechanic]] }
   ]);
   return { ...record, shift, ...leaders };
+}
+
+async function preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber) {
+  const [firstSheetId, secondSheetId] = await Promise.all([
+    getSheetId(productionSpreadsheetId, "Учет продукции 1", accessToken),
+    getSheetId(productionSpreadsheetId, "Учет продукции 2", accessToken)
+  ]);
+  const requests = [];
+  if (firstRowNumber > 4) {
+    requests.push({ copyPaste: {
+      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 15 },
+      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 15 },
+      pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
+    } });
+  }
+  if (secondRowNumber > 2) {
+    requests.push({ copyPaste: {
+      source: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 2, endRowIndex: secondRowNumber - 1, startColumnIndex: 0, endColumnIndex: 15 },
+      destination: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 1, endRowIndex: secondRowNumber, startColumnIndex: 0, endColumnIndex: 15 },
+      pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
+    } });
+  }
+  if (requests.length) await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, requests, "Не удалось оформить новую строку продукции");
 }
 
 async function productionShiftLeaders(date, shift) {
@@ -851,9 +875,13 @@ async function getDailyTargetRow(spreadsheetId, range, date, startRow, label) {
 
 async function updateSheetCells(spreadsheetId, accessToken, start, values) {
   const request = { updateCells: { start, rows: [{ values: values.map(value => ({ userEnteredValue: { numberValue: Number(value || 0) } })) }], fields: "userEnteredValue" } };
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [request] }), signal: AbortSignal.timeout(20_000) });
+  await batchGoogleSheetRequests(spreadsheetId, accessToken, [request], "Не удалось передать суточные итоги");
+}
+
+async function batchGoogleSheetRequests(spreadsheetId, accessToken, requests, fallbackMessage) {
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests }), signal: AbortSignal.timeout(20_000) });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось передать суточные итоги");
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || fallbackMessage);
 }
 
 function validatePackagingRecord(input) {
