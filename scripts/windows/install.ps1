@@ -98,6 +98,7 @@ if (-not $NoShortcuts) {
   $shell = New-Object -ComObject WScript.Shell
 
   $desktopShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "Packaging-Filling-Hub.lnk"))
+  $applicationIcon = Join-Path $targetRoot "assets\garant-shortcut-icon.ico"
   $chromeCandidates = @(
     (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
     (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
@@ -110,11 +111,11 @@ if (-not $NoShortcuts) {
     $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT" -Fallback "4173"
     $desktopShortcut.TargetPath = $chromePath
     $desktopShortcut.Arguments = "--app=http://127.0.0.1:$port/"
-    $desktopShortcut.IconLocation = "$chromePath,0"
+    $desktopShortcut.IconLocation = "$applicationIcon,0"
   } else {
     $desktopShortcut.TargetPath = $powerShellPath
     $desktopShortcut.Arguments = $shortcutArguments
-    $desktopShortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,13"
+    $desktopShortcut.IconLocation = "$applicationIcon,0"
   }
   $desktopShortcut.WorkingDirectory = $targetRoot
   $desktopShortcut.Description = "Открыть Packaging-Filling-Hub"
