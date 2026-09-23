@@ -26,6 +26,9 @@ import { PackagingService, PACKAGING_FIELDS } from "./services/packaging-service
 import { NonconformityGatewayProvider } from "./providers/nonconformity-gateway-provider.js";
 import { NonconformityRepository } from "./repositories/nonconformity-repository.js";
 import { NonconformityService } from "./services/nonconformity-service.js";
+import { PackagingWarehouseGatewayProvider } from "./providers/packaging-warehouse-gateway-provider.js";
+import { PackagingWarehouseRepository } from "./repositories/packaging-warehouse-repository.js";
+import { PackagingWarehouseService } from "./services/packaging-warehouse-service.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -62,7 +65,7 @@ const state = {
   productionLoading: false,
   packaging: { records: [], operations: [], lastReadAt: null, error: null },
   packagingEntryItem: "",
-  packagingWarehouse: [],
+  packagingWarehouse: { records: [], summary: [], error: null },
   nonconformities: { records: [], dictionary: { types: [] }, source: "loading", cachedAt: null, error: null },
   nonconformityLoading: false,
   incidents: [],
@@ -89,6 +92,7 @@ let productSpecificationService;
 let cycloneService;
 let productionService;
 let packagingService;
+let packagingWarehouseService;
 let nonconformityService;
 let nonconformityRefreshPromise = null;
 let workforceActor = {};
@@ -109,7 +113,9 @@ async function bootstrap() {
   packagingService = new PackagingService(new PackagingRepository(packagingStore,
     new PackagingGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.packaging = await packagingService.snapshot();
-  state.packagingWarehouse = await store.preference("packagingWarehouseRecords", []);
+  packagingWarehouseService = new PackagingWarehouseService(new PackagingWarehouseRepository(
+    new PackagingWarehouseGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })
+  ));
   state.incidents = await store.preference("incidentLogRecords", []);
   nonconformityService = new NonconformityService(store, new NonconformityRepository(new NonconformityGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
@@ -137,6 +143,7 @@ async function bootstrap() {
 
   await repository.init();
   state.account = await authService.current();
+  state.packagingWarehouse = await packagingWarehouseService.refresh();
   state.shift = await shiftService.current();
   // Do not hold the whole interface on a slow Google request.  A fresh
   // attendance snapshot is still required immediately before each save below.
@@ -409,13 +416,14 @@ async function handleClick(event) {
     }
     if (action === "edit-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record) openPackagingEditDialog(record); return; }
     if (action === "add-packaging-stock") { openPackagingWarehouseDialog(); return; }
+    if (action === "refresh-packaging-warehouse") { await refreshPackagingWarehouse(); render(); toast(state.packagingWarehouse.error || "Склад упаковки обновлён", state.packagingWarehouse.error ? "warning" : "success"); return; }
+    if (action === "edit-packaging-stock") { const record = state.packagingWarehouse.records.find(item => item.id === id); if (record) openPackagingWarehouseDialog(record); return; }
     if (action === "delete-packaging-stock") {
       if (state.account?.role !== "manager") throw new Error("Удалять движения склада может только начальник участка.");
-      const record = state.packagingWarehouse.find(item => item.id === id);
-      if (!record || !window.confirm(`Удалить движение «${record.itemLabel}» от ${formatDate(record.date)}?`)) return;
-      state.packagingWarehouse = state.packagingWarehouse.filter(item => item.id !== id);
-      await store.setPreference("packagingWarehouseRecords", state.packagingWarehouse);
-      render(); toast("Движение удалено из локального склада.", "success"); return;
+      const record = state.packagingWarehouse.records.find(item => item.id === id);
+      if (!record || !window.confirm(`Удалить движение «${record.item}» от ${formatDate(record.date)}?`)) return;
+      state.packagingWarehouse = await packagingWarehouseService.remove(id);
+      render(); toast("Движение удалено из журнала склада.", "success"); return;
     }
     if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } return; }
     if (action === "sync-packaging") {
@@ -456,6 +464,10 @@ async function handleClick(event) {
       }
       if (page === "packaging") {
         await refreshPackaging();
+        render();
+      }
+      if (page === "packaging-warehouse") {
+        await refreshPackagingWarehouse();
         render();
       }
       if (page === "nonconformities") {
@@ -707,6 +719,11 @@ async function refreshPackaging(sync = false) {
   return state.packaging;
 }
 
+async function refreshPackagingWarehouse() {
+  state.packagingWarehouse = await packagingWarehouseService.refresh();
+  return state.packagingWarehouse;
+}
+
 async function refreshNonconformities() {
   if (!nonconformityRefreshPromise) {
     nonconformityRefreshPromise = nonconformityService.refresh()
@@ -825,6 +842,7 @@ async function refreshCurrentPage() {
   }
   if (state.page === "cyclones") { await refreshCyclones(); return; }
   if (state.page === "packaging") { await refreshPackaging(); return; }
+  if (state.page === "packaging-warehouse") { await refreshPackagingWarehouse(); return; }
   if (state.page === "maintenance") { await refreshMaintenance(); return; }
   if (state.page === "production") { await refreshProduction(); return; }
   if (state.page === "specifications") { await refreshSpecifications(); return; }
@@ -1515,13 +1533,14 @@ function shortPackagingLabel(label) {
 }
 
 function renderPackagingWarehousePage() {
-  const records = [...state.packagingWarehouse].sort((left, right) => `${right.date}-${right.createdAt}`.localeCompare(`${left.date}-${left.createdAt}`));
-  const balances = new Map(PACKAGING_FIELDS.map(field => [field.key, 0]));
-  records.forEach(record => balances.set(record.item, (balances.get(record.item) || 0) + Number(record.quantity || 0) * (record.type === "Приход" ? 1 : -1)));
-  const canDelete = state.account?.role === "manager";
-  return `<section class="section-heading"><div><p class="eyebrow">Локальный учёт · упаковочные материалы</p><h2>Склад упаковки</h2><p>Приход и выдача учитываются отдельно. Остатки ниже рассчитаны по движениям, внесённым в этой программе.</p></div><button class="primary-button" data-action="add-packaging-stock">+ Новое движение</button></section>
-    <section class="card table-card"><div class="table-toolbar"><strong>Текущие остатки</strong><span>Локальная сводка</span></div><div class="table-scroll"><table><thead><tr><th>Вид упаковки</th><th>Остаток</th><th>Единица</th></tr></thead><tbody>${PACKAGING_FIELDS.map(field => `<tr><td>${escapeHtml(shortPackagingLabel(field.label))}</td><td><strong>${formatNumber(balances.get(field.key) || 0)}</strong></td><td>${packagingUnit(field)}</td></tr>`).join("")}</tbody></table></div></section>
-    <section class="card table-card"><div class="table-toolbar"><strong>Журнал движений</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")}</span></div><div class="table-scroll"><table><thead><tr><th>Дата</th><th>Операция</th><th>Вид упаковки</th><th>Количество</th><th>Примечание</th><th>Внёс</th>${canDelete ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${formatDate(record.date)}</td><td><span class="status-pill ${record.type === "Приход" ? "success" : "warning"}">${escapeHtml(record.type)}</span></td><td>${escapeHtml(record.itemLabel)}</td><td><strong>${record.type === "Приход" ? "+" : "−"}${formatNumber(record.quantity)}</strong></td><td>${escapeHtml(record.note || "—")}</td><td>${escapeHtml(record.author)}</td>${canDelete ? `<td><button class="more-button" data-action="delete-packaging-stock" data-id="${attribute(record.id)}" title="Удалить">×</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canDelete ? 7 : 6}">Движений склада пока нет. Внесите первый приход или выдачу.</td></tr>`}</tbody></table></div></section>`;
+  const { records, summary, error } = state.packagingWarehouse;
+  const orderedRecords = [...records].sort((left, right) => `${right.date}-${right.id}`.localeCompare(`${left.date}-${left.id}`));
+  const canWrite = ["manager", "senior"].includes(state.account?.role);
+  const canEdit = state.account?.role === "manager";
+  const actions = canWrite ? `<div class="header-actions"><button class="secondary-button" data-action="refresh-packaging-warehouse">Обновить</button>${journalLink("packagingWarehouse") }<button class="primary-button" data-action="add-packaging-stock">+ Новое движение</button></div>` : journalLink("packagingWarehouse");
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · упаковочные материалы</p><h2>Склад упаковки</h2><p>Приход и расход сохраняются в общем журнале. Расчётный остаток считается автоматически, фактический заполняется при инвентаризации.</p>${error ? `<p class="form-error">${escapeHtml(error)}</p>` : ""}</div>${actions}</section>
+    <section class="card table-card"><div class="table-toolbar"><strong>Остатки: расчёт и факт</strong><span>Общий склад</span></div><div class="table-scroll"><table><thead><tr><th>Наименование</th><th>Ед.</th><th>Начальный</th><th>Приход</th><th>Расход</th><th>Расчётный</th><th>Фактический</th><th>Разница</th><th>Комментарий</th></tr></thead><tbody>${summary.length ? summary.map(row => `<tr><td><strong>${escapeHtml(row.item)}</strong></td><td>${escapeHtml(row.unit || "—")}</td><td>${formatNumber(row.opening)}</td><td>${formatNumber(row.received)}</td><td>${formatNumber(row.issued)}</td><td><strong>${formatNumber(row.calculated)}</strong></td><td>${row.actual === null ? "—" : formatNumber(row.actual)}</td><td>${row.difference === null ? "—" : formatNumber(row.difference)}</td><td>${escapeHtml(row.note || "—")}</td></tr>`).join("") : '<tr><td colspan="9">Сводка склада ещё загружается.</td></tr>'}</tbody></table></div></section>
+    <section class="card table-card"><div class="table-toolbar"><strong>Журнал движений</strong><span>${orderedRecords.length} ${plural(orderedRecords.length, "запись", "записи", "записей")}</span></div><div class="table-scroll"><table><thead><tr><th>Дата</th><th>Операция</th><th>Наименование</th><th>Количество</th><th>Примечание</th><th>Внёс</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${orderedRecords.length ? orderedRecords.map(record => `<tr><td>${formatDate(record.date)}</td><td><span class="status-pill ${record.type === "Приход" ? "success" : "warning"}">${escapeHtml(record.type)}</span></td><td>${escapeHtml(record.item)}</td><td><strong>${record.type === "Приход" ? "+" : "−"}${formatNumber(record.quantity)}</strong></td><td>${escapeHtml(record.note || "—")}</td><td>${escapeHtml(record.author || "—")}</td>${canEdit ? `<td><div class="row-actions"><button class="small-button" data-action="edit-packaging-stock" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-packaging-stock" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canEdit ? 7 : 6}">Движений склада пока нет. Внесите первый приход или расход.</td></tr>`}</tbody></table></div></section>`;
 }
 
 function renderIncidentsPage() {
@@ -2881,28 +2900,20 @@ function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
 }
 
-function openPackagingWarehouseDialog() {
-  const optionList = PACKAGING_FIELDS.map(field => `<option value="${attribute(field.key)}">${escapeHtml(shortPackagingLabel(field.label))}</option>`).join("");
-  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><div><p class="eyebrow">Склад упаковки</p><h2>Новое движение</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-    <p>Это отдельный складской учёт. Он не изменяет дневной расход упаковки и не отправляет данные в Google без отдельного подключения.</p>
-    <div class="form-grid">${formField("warehouse-date", "Дата", `<input id="warehouse-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("warehouse-type", "Операция", `<select id="warehouse-type" name="type" required><option>Приход</option><option>Выдача</option></select>`)}</div>
-    ${formField("warehouse-item", "Вид упаковки", `<select id="warehouse-item" name="item" required>${optionList}</select>`)}
-    ${formField("warehouse-quantity", "Количество", `<input id="warehouse-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" required>`)}
-    ${formField("warehouse-note", "Примечание", `<textarea id="warehouse-note" name="note" rows="3" maxlength="500" placeholder="Накладная, место хранения или причина выдачи"></textarea>`)}
-    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить движение</button></div></form>`);
+function openPackagingWarehouseDialog(record = null) {
+  const items = state.packagingWarehouse.summary.map(row => row.item).filter(Boolean);
+  const optionList = [`<option value="">Выберите наименование</option>`, ...items.map(item => `<option value="${attribute(item)}" ${record?.item === item ? "selected" : ""}>${escapeHtml(item)}</option>`)].join("");
+  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><div><p class="eyebrow">Склад упаковки · Google Sheets</p><h2>${record ? "Исправить движение" : "Новое движение"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Запись сразу попадёт в общий журнал. Расчётный остаток обновится автоматически.</p>
+    <div class="form-grid">${formField("warehouse-date", "Дата", `<input id="warehouse-date" name="date" type="date" value="${attribute(record?.date || today())}" max="${today()}" required>`)}${formField("warehouse-type", "Операция", `<select id="warehouse-type" name="type" required><option value="Приход" ${record?.type === "Приход" ? "selected" : ""}>Приход</option><option value="Расход" ${record?.type === "Расход" ? "selected" : ""}>Расход</option></select>`)}</div>
+    ${formField("warehouse-item", "Наименование", `<select id="warehouse-item" name="item" required>${optionList}</select>`)}
+    ${formField("warehouse-quantity", "Количество", `<input id="warehouse-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" value="${attribute(record?.quantity || "")}" required>`)}
+    ${formField("warehouse-note", "Примечание", `<textarea id="warehouse-note" name="note" rows="3" maxlength="500" placeholder="Накладная, место хранения или причина расхода">${escapeHtml(record?.note || "")}</textarea>`)}
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить изменения" : "Внести в журнал"}</button></div></form>`);
   dialog.querySelector("form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    const field = PACKAGING_FIELDS.find(item => item.key === data.item);
-    const quantity = Number(data.quantity);
-    if (!field || !["Приход", "Выдача"].includes(data.type) || !/^\d+$/.test(String(data.quantity || "")) || quantity <= 0 || data.date > today()) {
-      showFormError(form, new Error("Проверьте дату, вид упаковки и целое положительное количество.")); return;
-    }
-    const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-    state.packagingWarehouse = [...state.packagingWarehouse, { id: `packaging-warehouse-${crypto.randomUUID?.() || Date.now()}`, date: data.date, type: data.type, item: field.key, itemLabel: shortPackagingLabel(field.label), quantity, note: String(data.note || "").trim(), author: state.account?.title || "Рабочая учётная запись", createdAt: new Date().toISOString() }];
-    await store.setPreference("packagingWarehouseRecords", state.packagingWarehouse);
-    dialog.close(); render(); toast("Движение склада сохранено на этом компьютере.", "success");
+    event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    try { state.packagingWarehouse = await packagingWarehouseService.save({ ...data, ...(record ? { id: record.id } : {}) }, state.account); dialog.close(); render(); toast(record ? "Движение склада исправлено." : "Движение склада внесено в Google журнал.", "success"); }
+    catch (error) { showFormError(form, error); submit.disabled = false; }
   });
   dialog.showModal();
 }

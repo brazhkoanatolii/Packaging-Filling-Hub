@@ -6,6 +6,7 @@ export const WORKSPACE_JOURNALS = Object.freeze({
   repairs: { title: "Журнал ремонта", id: "1pg2Y9Hnc-5BCU3QaF3k9VwOJjqNwdkXbE3qFAnY6Qw8" },
   maintenance: { title: "Журнал ТО", id: "1SRirurDOMqyGEXj2oo_V81CQ5jKnnvg9nN8G21QAFAY" },
   packaging: { title: "Журнал расхода упаковки", id: "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI" },
+  packagingWarehouse: { title: "Склад упаковки", id: "1mv7W6IcetxpSNMlTvQclPMIs15ZWZw7Q3ZE_g_NXVok" },
   cyclones: { title: "Очистка циклонов", id: "1jEpmScclwvmIhhiHnBi0EE5kRBGNLtfmP4zepkAMQDU" }
 });
 export const WORKFORCE_YEARS = Object.freeze([2025, 2026, 2027, 2028, 2029]);

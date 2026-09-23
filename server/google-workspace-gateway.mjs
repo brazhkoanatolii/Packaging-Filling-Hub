@@ -24,6 +24,10 @@ const packagingSheetName = "Лист";
 const packagingRange = "'Лист'!B2:M";
 const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
 const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
+const packagingWarehouseSpreadsheetId = "1mv7W6IcetxpSNMlTvQclPMIs15ZWZw7Q3ZE_g_NXVok";
+const packagingWarehouseSheetName = "Операции";
+const packagingWarehouseRange = "'Операции'!A6:F";
+const packagingWarehouseSummaryRange = "'Склад упаковки'!A6:I";
 const rawMaterialsSpreadsheetId = "1jXf8oZLrFLGEJo15VoFQBe_FjC0_dz_3p0cVxgV4xGo";
 const rawMaterialsSheetName = "Расход сырья";
 const rawMaterialsRange = "'Расход сырья'!A3:D500";
@@ -241,6 +245,24 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/packaging-records" && request.method === "DELETE") {
       requireActor(request, ["manager", "senior"]);
       return sendJson(response, 200, await deletePackagingRecord(await readJsonBody(request)));
+    }
+    if (url.pathname === "/api/packaging-warehouse-records" && request.method === "GET") {
+      requireActor(request, ["manager", "senior"]);
+      return sendJson(response, 200, await getPackagingWarehouseSnapshot());
+    }
+    if (url.pathname === "/api/packaging-warehouse-records" && request.method === "POST") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      const actor = requireActor(request, ["manager", "senior"]);
+      return sendJson(response, 200, await savePackagingWarehouseRecord({ ...(await readJsonBody(request)), author: actor.title || actor.id }));
+    }
+    if (url.pathname === "/api/packaging-warehouse-records" && request.method === "PUT") {
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      const actor = requireActor(request, ["manager"]);
+      return sendJson(response, 200, await savePackagingWarehouseRecord({ ...(await readJsonBody(request)), author: actor.title || actor.id }));
+    }
+    if (url.pathname === "/api/packaging-warehouse-records" && request.method === "DELETE") {
+      requireActor(request, ["manager"]);
+      return sendJson(response, 200, await deletePackagingWarehouseRecord(await readJsonBody(request)));
     }
     if (url.pathname === "/api/nonconformities" && request.method === "GET") {
       requireActor(request, ["manager", "senior"]);
@@ -529,6 +551,53 @@ async function deletePackagingRecord(input) {
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
   const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
 }
+
+async function getPackagingWarehouseSnapshot() {
+  const [rows = [], summaryRows = []] = await getGoogleSheetRanges(packagingWarehouseSpreadsheetId, [packagingWarehouseRange, packagingWarehouseSummaryRange]);
+  return {
+    ok: true,
+    records: rows.map((row, index) => packagingWarehouseRecordFromRow(row, index + 6)).filter(Boolean),
+    summary: summaryRows.map(packagingWarehouseSummaryFromRow).filter(Boolean)
+  };
+}
+
+async function savePackagingWarehouseRecord(input) {
+  const record = validatePackagingWarehouseRecord(input);
+  const accessToken = await getAccessToken();
+  const sheetId = await getSheetId(packagingWarehouseSpreadsheetId, packagingWarehouseSheetName, accessToken);
+  const serial = Math.round((Date.parse(`${record.date}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000);
+  const cells = [
+    { userEnteredValue: { numberValue: serial }, userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } },
+    { userEnteredValue: { stringValue: record.type } }, { userEnteredValue: { stringValue: record.item } },
+    { userEnteredValue: { numberValue: record.quantity } }, { userEnteredValue: { stringValue: record.author } },
+    { userEnteredValue: { stringValue: record.note } }
+  ];
+  const request = record.rowNumber
+    ? { updateCells: { start: { sheetId, rowIndex: record.rowNumber - 1, columnIndex: 0 }, rows: [{ values: cells }], fields: "userEnteredValue,userEnteredFormat.numberFormat" } }
+    : { appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,userEnteredFormat.numberFormat" } };
+  await batchGoogleSheetRequests(packagingWarehouseSpreadsheetId, accessToken, [request], "Не удалось сохранить движение склада упаковки");
+  return { ok: true };
+}
+
+async function deletePackagingWarehouseRecord(input) {
+  const rowNumber = warehouseRowNumber(input?.id);
+  const accessToken = await getAccessToken();
+  const sheetId = await getSheetId(packagingWarehouseSpreadsheetId, packagingWarehouseSheetName, accessToken);
+  await batchGoogleSheetRequests(packagingWarehouseSpreadsheetId, accessToken, [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowNumber - 1, endIndex: rowNumber } } }], "Не удалось удалить движение склада упаковки");
+  return { ok: true };
+}
+
+function validatePackagingWarehouseRecord(input) {
+  const date = String(input?.date || ""); const type = String(input?.type || ""); const item = String(input?.item || "");
+  const quantity = Number(input?.quantity); const note = String(input?.note || "").trim(); const author = String(input?.author || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw new Error("Некорректная дата движения склада");
+  if (!["Приход", "Расход"].includes(type) || !item || !Number.isInteger(quantity) || quantity <= 0 || note.length > 500 || !author) throw new Error("Проверьте операцию, наименование и количество");
+  const id = String(input?.id || ""); return { date, type, item, quantity, note, author, rowNumber: id ? warehouseRowNumber(id) : null };
+}
+
+function warehouseRowNumber(id) { const match = String(id || "").match(/^warehouse-(\d{1,4})$/); if (!match || Number(match[1]) < 6) throw new Error("Некорректный идентификатор движения склада"); return Number(match[1]); }
+function packagingWarehouseRecordFromRow(row, rowNumber) { const date = googleSheetDate(row?.[0]); const type = String(row?.[1] || ""); const item = String(row?.[2] || ""); const quantity = Number(row?.[3] || 0); if (!date || !["Приход", "Расход"].includes(type) || !item || !Number.isFinite(quantity) || quantity <= 0) return null; return { id: `warehouse-${rowNumber}`, rowNumber, date, type, item, quantity, author: String(row?.[4] || ""), note: String(row?.[5] || "") }; }
+function packagingWarehouseSummaryFromRow(row) { const item = String(row?.[0] || "").trim(); if (!item) return null; const number = index => { const value = String(row?.[index] ?? "").trim().replace(",", "."); return value === "" ? null : (Number.isFinite(Number(value)) ? Number(value) : null); }; return { item, unit: String(row?.[1] || "").trim(), opening: number(2) ?? 0, received: number(3) ?? 0, issued: number(4) ?? 0, calculated: number(5) ?? 0, actual: number(6), difference: number(7), note: String(row?.[8] || "").trim() }; }
 
 async function getNonconformitySnapshot() {
   const [journalRows, dictionaryRows] = await getGoogleSheetRanges(nonconformitySpreadsheetId, [nonconformityRange, nonconformityDictionaryRange]);
