@@ -62,8 +62,10 @@ const state = {
   productionLoading: false,
   packaging: { records: [], operations: [], lastReadAt: null, error: null },
   packagingEntryItem: "",
+  packagingWarehouse: [],
   nonconformities: { records: [], dictionary: { types: [] }, source: "loading", cachedAt: null, error: null },
   nonconformityLoading: false,
+  incidents: [],
   update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
@@ -107,6 +109,8 @@ async function bootstrap() {
   packagingService = new PackagingService(new PackagingRepository(packagingStore,
     new PackagingGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.packaging = await packagingService.snapshot();
+  state.packagingWarehouse = await store.preference("packagingWarehouseRecords", []);
+  state.incidents = await store.preference("incidentLogRecords", []);
   nonconformityService = new NonconformityService(store, new NonconformityRepository(new NonconformityGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
@@ -374,6 +378,15 @@ async function handleClick(event) {
 
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
+    if (action === "add-incident") { openIncidentDialog(); return; }
+    if (action === "delete-incident") {
+      if (state.account?.role !== "manager") throw new Error("Удалять записи может только начальник участка.");
+      const record = state.incidents.find(item => item.id === id);
+      if (!record || !window.confirm(`Удалить инцидент от ${formatDate(record.date)}?`)) return;
+      state.incidents = state.incidents.filter(item => item.id !== id);
+      await store.setPreference("incidentLogRecords", state.incidents);
+      render(); toast("Инцидент удалён из локального журнала.", "success"); return;
+    }
     if (action === "add-nonconformity") { openNonconformityDialog(); return; }
     if (action === "edit-nonconformity") { const record = state.nonconformities.records.find(item => item.id === id); if (record) openNonconformityDialog(record); return; }
     if (action === "delete-nonconformity") {
@@ -395,6 +408,15 @@ async function handleClick(event) {
       return;
     }
     if (action === "edit-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record) openPackagingEditDialog(record); return; }
+    if (action === "add-packaging-stock") { openPackagingWarehouseDialog(); return; }
+    if (action === "delete-packaging-stock") {
+      if (state.account?.role !== "manager") throw new Error("Удалять движения склада может только начальник участка.");
+      const record = state.packagingWarehouse.find(item => item.id === id);
+      if (!record || !window.confirm(`Удалить движение «${record.itemLabel}» от ${formatDate(record.date)}?`)) return;
+      state.packagingWarehouse = state.packagingWarehouse.filter(item => item.id !== id);
+      await store.setPreference("packagingWarehouseRecords", state.packagingWarehouse);
+      render(); toast("Движение удалено из локального склада.", "success"); return;
+    }
     if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } return; }
     if (action === "sync-packaging") {
       state.packaging = await packagingService.sync(); render();
@@ -1016,7 +1038,9 @@ function renderPage() {
   if (state.page === "settings" && state.account.role === "manager") return renderSettingsPage();
   if (state.page === "cyclones") return renderCyclonesPage();
   if (state.page === "packaging") return renderPackagingPage();
+  if (state.page === "packaging-warehouse") return renderPackagingWarehousePage();
   if (state.page === "nonconformities") return renderNonconformitiesPage();
+  if (state.page === "incidents") return renderIncidentsPage();
   if (state.page === "maintenance") return renderMaintenancePage();
   if (state.page === "production") return renderProductionPage();
   if (state.page !== "dashboard" && MODULES.some(module => module.id === state.page)) return renderPlannedModulePage();
@@ -1488,6 +1512,25 @@ function renderNonconformitiesPage() {
 
 function shortPackagingLabel(label) {
   return label.replace(", шт", "").replace(", рул", "");
+}
+
+function renderPackagingWarehousePage() {
+  const records = [...state.packagingWarehouse].sort((left, right) => `${right.date}-${right.createdAt}`.localeCompare(`${left.date}-${left.createdAt}`));
+  const balances = new Map(PACKAGING_FIELDS.map(field => [field.key, 0]));
+  records.forEach(record => balances.set(record.item, (balances.get(record.item) || 0) + Number(record.quantity || 0) * (record.type === "Приход" ? 1 : -1)));
+  const canDelete = state.account?.role === "manager";
+  return `<section class="section-heading"><div><p class="eyebrow">Локальный учёт · упаковочные материалы</p><h2>Склад упаковки</h2><p>Приход и выдача учитываются отдельно. Остатки ниже рассчитаны по движениям, внесённым в этой программе.</p></div><button class="primary-button" data-action="add-packaging-stock">+ Новое движение</button></section>
+    <section class="card table-card"><div class="table-toolbar"><strong>Текущие остатки</strong><span>Локальная сводка</span></div><div class="table-scroll"><table><thead><tr><th>Вид упаковки</th><th>Остаток</th><th>Единица</th></tr></thead><tbody>${PACKAGING_FIELDS.map(field => `<tr><td>${escapeHtml(shortPackagingLabel(field.label))}</td><td><strong>${formatNumber(balances.get(field.key) || 0)}</strong></td><td>${packagingUnit(field)}</td></tr>`).join("")}</tbody></table></div></section>
+    <section class="card table-card"><div class="table-toolbar"><strong>Журнал движений</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")}</span></div><div class="table-scroll"><table><thead><tr><th>Дата</th><th>Операция</th><th>Вид упаковки</th><th>Количество</th><th>Примечание</th><th>Внёс</th>${canDelete ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${formatDate(record.date)}</td><td><span class="status-pill ${record.type === "Приход" ? "success" : "warning"}">${escapeHtml(record.type)}</span></td><td>${escapeHtml(record.itemLabel)}</td><td><strong>${record.type === "Приход" ? "+" : "−"}${formatNumber(record.quantity)}</strong></td><td>${escapeHtml(record.note || "—")}</td><td>${escapeHtml(record.author)}</td>${canDelete ? `<td><button class="more-button" data-action="delete-packaging-stock" data-id="${attribute(record.id)}" title="Удалить">×</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canDelete ? 7 : 6}">Движений склада пока нет. Внесите первый приход или выдачу.</td></tr>`}</tbody></table></div></section>`;
+}
+
+function renderIncidentsPage() {
+  const records = [...state.incidents].sort((left, right) => `${right.date}-${right.time}-${right.createdAt}`.localeCompare(`${left.date}-${left.time}-${left.createdAt}`));
+  const open = records.filter(record => record.status !== "Закрыт").length;
+  const canDelete = state.account?.role === "manager";
+  return `<section class="section-heading"><div><p class="eyebrow">Локальный журнал · безопасность и работа участка</p><h2>Журнал регистрации инцидентов</h2><p>Фиксируйте событие сразу: что произошло, какие меры приняты и кому требуется завершить действие.</p></div><button class="primary-button" data-action="add-incident">+ Зарегистрировать инцидент</button></section>
+    <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Всего записей</span><strong>${records.length}</strong><small>в этом компьютере</small></article><article class="metric-card"><span>Требуют завершения</span><strong>${open}</strong><small>статус не «Закрыт»</small></article></div>
+    <section class="card table-card"><div class="table-toolbar"><strong>Все инциденты</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")}</span></div><div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Смена</th><th>Категория</th><th>Описание события</th><th>Принятые меры</th><th>Сообщил</th><th>Статус</th>${canDelete ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td>${formatDate(record.date)}<br><small>${escapeHtml(record.time)}</small></td><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.category)}</td><td>${escapeHtml(record.description)}</td><td>${escapeHtml(record.action || "—")}</td><td>${escapeHtml(record.author)}</td><td><span class="status-pill ${record.status === "Закрыт" ? "success" : "warning"}">${escapeHtml(record.status)}</span></td>${canDelete ? `<td><button class="more-button" data-action="delete-incident" data-id="${attribute(record.id)}" title="Удалить">×</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canDelete ? 8 : 7}">Инцидентов пока не зарегистрировано.</td></tr>`}</tbody></table></div></section>`;
 }
 
 function packagingUnit(field) {
@@ -2836,6 +2879,55 @@ function monthDays(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
+}
+
+function openPackagingWarehouseDialog() {
+  const optionList = PACKAGING_FIELDS.map(field => `<option value="${attribute(field.key)}">${escapeHtml(shortPackagingLabel(field.label))}</option>`).join("");
+  const dialog = createDialog(`<form class="dialog-card small-dialog"><div class="dialog-heading"><div><p class="eyebrow">Склад упаковки</p><h2>Новое движение</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Это отдельный складской учёт. Он не изменяет дневной расход упаковки и не отправляет данные в Google без отдельного подключения.</p>
+    <div class="form-grid">${formField("warehouse-date", "Дата", `<input id="warehouse-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("warehouse-type", "Операция", `<select id="warehouse-type" name="type" required><option>Приход</option><option>Выдача</option></select>`)}</div>
+    ${formField("warehouse-item", "Вид упаковки", `<select id="warehouse-item" name="item" required>${optionList}</select>`)}
+    ${formField("warehouse-quantity", "Количество", `<input id="warehouse-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" required>`)}
+    ${formField("warehouse-note", "Примечание", `<textarea id="warehouse-note" name="note" rows="3" maxlength="500" placeholder="Накладная, место хранения или причина выдачи"></textarea>`)}
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить движение</button></div></form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    const field = PACKAGING_FIELDS.find(item => item.key === data.item);
+    const quantity = Number(data.quantity);
+    if (!field || !["Приход", "Выдача"].includes(data.type) || !/^\d+$/.test(String(data.quantity || "")) || quantity <= 0 || data.date > today()) {
+      showFormError(form, new Error("Проверьте дату, вид упаковки и целое положительное количество.")); return;
+    }
+    const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    state.packagingWarehouse = [...state.packagingWarehouse, { id: `packaging-warehouse-${crypto.randomUUID?.() || Date.now()}`, date: data.date, type: data.type, item: field.key, itemLabel: shortPackagingLabel(field.label), quantity, note: String(data.note || "").trim(), author: state.account?.title || "Рабочая учётная запись", createdAt: new Date().toISOString() }];
+    await store.setPreference("packagingWarehouseRecords", state.packagingWarehouse);
+    dialog.close(); render(); toast("Движение склада сохранено на этом компьютере.", "success");
+  });
+  dialog.showModal();
+}
+
+function openIncidentDialog() {
+  const currentTime = new Intl.DateTimeFormat("en-GB", { timeZone: APP_CONFIG.timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date());
+  const shift = state.shift?.active ? productionShiftCode() : "";
+  const dialog = createDialog(`<form class="dialog-card"><div class="dialog-heading"><div><p class="eyebrow">Журнал регистрации инцидентов</p><h2>Новый инцидент</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
+    <p>Запись сохраняется на этом компьютере. Её можно вести независимо от сменного журнала.</p>
+    <div class="form-grid">${formField("incident-date", "Дата", `<input id="incident-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("incident-time", "Время", `<input id="incident-time" name="time" type="time" value="${currentTime}" required>`)}${formField("incident-shift", "Смена", `<select id="incident-shift" name="shift"><option value="">Не указана</option><option value="A" ${shift === "A" ? "selected" : ""}>A</option><option value="B" ${shift === "B" ? "selected" : ""}>B</option></select>`)}${formField("incident-category", "Категория", `<select id="incident-category" name="category" required><option value="">Выберите категорию</option><option>Безопасность</option><option>Оборудование</option><option>Качество</option><option>Персонал</option><option>Другое</option></select>`)}</div>
+    ${formField("incident-description", "Что произошло", `<textarea id="incident-description" name="description" rows="4" maxlength="2000" required placeholder="Кратко и по существу опишите событие"></textarea>`)}
+    ${formField("incident-action", "Принятые меры", `<textarea id="incident-action" name="action" rows="3" maxlength="2000" placeholder="Что сделано сразу после инцидента"></textarea>`)}
+    ${formField("incident-status", "Статус", `<select id="incident-status" name="status" required><option>Открыт</option><option>В работе</option><option>Закрыт</option></select>`)}
+    <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Зарегистрировать</button></div></form>`);
+  dialog.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    if (data.date > today() || !data.category || !String(data.description || "").trim()) { showFormError(form, new Error("Заполните дату, категорию и описание инцидента.")); return; }
+    const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+    state.incidents = [...state.incidents, { id: `incident-${crypto.randomUUID?.() || Date.now()}`, date: data.date, time: data.time, shift: data.shift, category: data.category, description: String(data.description).trim(), action: String(data.action || "").trim(), status: data.status, author: state.account?.title || "Рабочая учётная запись", createdAt: new Date().toISOString() }];
+    await store.setPreference("incidentLogRecords", state.incidents);
+    dialog.close(); render(); toast("Инцидент зарегистрирован в локальном журнале.", "success");
+  });
+  dialog.showModal();
 }
 
 function openPackagingDialog() {
