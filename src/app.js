@@ -1048,11 +1048,36 @@ function renderProductionPage() {
   const totalScrap = records.reduce((sum, item) => sum + Number(item.scrapKg || 0), 0);
   const totalCanScrap = records.reduce((sum, item) => sum + Number(item.canScrapKg || 0), 0);
   const canAdd = state.account?.role === "manager" || state.account?.role === "senior";
-  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Запись завершённого продукта переносится одновременно в оба рабочих листа. Показан текущий день; линии идут по алфавиту.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production" ${state.productionLoading ? "disabled" : ""}>${state.productionLoading ? "Обновляем…" : "Обновить"}</button>${canAdd ? `<button class="primary-button" data-action="add-production" ${state.productionLoading ? "disabled" : ""}>+ Завершить продукт</button>` : ""}</div></section>
+  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Каждый упаковщик вносит свой выпуск отдельно. Итоги линии и машины программа складывает без двойного учёта.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production" ${state.productionLoading ? "disabled" : ""}>${state.productionLoading ? "Обновляем…" : "Обновить"}</button>${canAdd ? `<button class="primary-button" data-action="add-production" ${state.productionLoading ? "disabled" : ""}>+ Внести мой выпуск</button>` : ""}</div></section>
     ${state.productionLoading ? '<p class="module-note" role="status">Получаем данные из Google Sheets. Это может занять до 30 секунд.</p>' : ""}
     ${state.production.error ? `<p class="form-error">${escapeHtml(state.production.error)}</p>` : ""}
     <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)}</strong><small>шт. за сегодня</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
-    <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · A → M</span></div><div class="table-scroll"><table><thead><tr><th>Смена</th><th>Начало</th><th>Окончание</th><th>Линия</th><th>Продукт</th><th>mg/g</th><th>Готово, шт</th><th>Брак продукции, кг</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${escapeHtml(record.product)}</td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatNumber(record.scrapKg)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 13 : 12}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>`;
+    <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · A → M</span></div><div class="table-scroll"><table><thead><tr><th>Смена</th><th>Начало</th><th>Окончание</th><th>Линия</th><th>Продукт</th><th>mg/g</th><th>Готово, шт</th><th>Брак продукции, кг</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор(ы)</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${escapeHtml(record.product)}</td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatNumber(record.scrapKg)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 13 : 12}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>
+    ${renderProductionPeopleSummary(records)}`;
+}
+
+function renderProductionPeopleSummary(records) {
+  const packers = new Map();
+  const operators = new Map();
+  const add = (bucket, name, record, fraction = 1) => {
+    if (!name) return;
+    const value = bucket.get(name) ?? { quantity: 0, scrapKg: 0, canScrapKg: 0 };
+    value.quantity += Number(record.quantity || 0) * fraction;
+    value.scrapKg += Number(record.scrapKg || 0) * fraction;
+    value.canScrapKg += Number(record.canScrapKg || 0) * fraction;
+    bucket.set(name, value);
+  };
+  records.forEach(record => {
+    add(packers, record.packer, record);
+    const assigned = splitProductionParticipants(record.operator);
+    assigned.forEach(name => add(operators, name, record, 1 / assigned.length));
+  });
+  const shiftLeaders = presentShiftPersonnel().filter(person => ["senior-mechanic", "mechanic"].includes(person.role));
+  const total = records.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const rows = (title, entries, suffix = "") => entries.length ? `<article><h3>${title}</h3><table><thead><tr><th>Сотрудник</th><th>Выпуск, шт</th><th>Коробки</th><th>Брак, кг</th></tr></thead><tbody>${entries.map(([name, values]) => `<tr><td>${escapeHtml(name)}${suffix}</td><td>${formatNumber(values.quantity)}</td><td>${formatNumber(values.quantity / 240)}</td><td>${formatNumber(values.scrapKg + values.canScrapKg)}</td></tr>`).join("")}</tbody></table></article>` : "";
+  const leaderEntries = shiftLeaders.map(person => [person.fullName, { quantity: total, scrapKg: 0, canScrapKg: 0 }]);
+  if (!packers.size && !operators.size && !leaderEntries.length) return "";
+  return `<section class="card table-card production-people-summary"><div class="section-heading"><div><p class="eyebrow">Смена · персональные показатели</p><h2>Кому засчитывается выпуск</h2></div><span class="status-pill neutral">Итог линии не удваивается</span></div><div class="production-people-grid">${rows("Упаковщики", [...packers.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Механики-операторы", [...operators.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Старший механик и Механик", leaderEntries, " · сменный итог")}</div></section>`;
 }
 
 function renderMaintenanceTable(title, records, type, compact, canAdd = false) {
@@ -1164,6 +1189,10 @@ function productionRecordMassKg(record) {
   const pouchesPerCan = Number(specification.pouchCount);
   if (!Number.isFinite(gramsPerPouch) || !Number.isFinite(pouchesPerCan) || gramsPerPouch <= 0 || pouchesPerCan <= 0) return 0;
   return Number(record.quantity || 0) * gramsPerPouch * pouchesPerCan / 1000;
+}
+
+function splitProductionParticipants(value) {
+  return [...new Set(String(value || "").split(/\s+\+\s+/).map(item => item.trim()).filter(Boolean))].slice(0, 2);
 }
 
 function renderMaintenanceDueList(snapshot) {
@@ -1535,17 +1564,18 @@ function openProductionDialog(record = null) {
   const present = presentShiftPersonnel();
   const packers = present.filter(person => person.role === "packer");
   const operators = present.filter(person => person.role === "mechanic-operator");
+  const existingOperators = splitProductionParticipants(record?.operator);
   const packerNames = [...new Set([...packers.map(person => person.fullName), ...(record?.packer ? [record.packer] : [])])];
-  const operatorNames = [...new Set([...operators.map(person => person.fullName), ...(record?.operator ? [record.operator] : [])])];
+  const operatorNames = [...new Set([...operators.map(person => person.fullName), ...existingOperators])];
   if (!record && (!packers.length || !operators.length)) { toast("В табеле должны быть отмечены присутствующий упаковщик и механик-оператор.", "warning"); return; }
   const specifications = state.specifications.specifications ?? [];
   const strengths = [...new Set(specifications.map(item => Number(item.variant)).filter(Number.isFinite))].sort((a, b) => b - a);
   const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
   const dialog = createDialog(`<form class="dialog-card production-dialog"><div class="dialog-heading"><div><p class="eyebrow">Учёт продукции и брака</p><h2>${record ? "Исправить запись" : "Завершить продукт"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-    <p>Дата и смена подставляются из начатой смены в табеле. Сначала выберите крепость, затем продукт и линейку — неподходящие варианты не появятся.</p>
+    <p>Дата и смена подставляются из начатой смены в табеле. Упаковщик вносит только свой выпуск; общий итог линии программа сложит автоматически.</p>
     <div class="form-grid">${formField("production-date", "Дата", `<input id="production-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("production-shift", "Смена", `<input id="production-shift" name="shift" value="${attribute(record?.shift || productionShiftCode())}" readonly>`)}${formField("production-start-time", "Время начала", `<input id="production-start-time" name="startTime" type="time" value="${attribute(record?.startTime || "")}" required>`)}${formField("production-time", "Время окончания", `<input id="production-time" name="time" type="time" value="${attribute(record?.time || "")}" required>`)}${formField("production-strength", "Крепость, mg/g", `<select id="production-strength" name="strength" required>${optionList(strengths, "Выберите крепость")}</select>`)}${formField("production-product-search", "Поиск продукта", `<input id="production-product-search" type="search" placeholder="Введите часть названия" disabled>`)}${formField("production-product", "Продукт", `<select id="production-product" name="product" required disabled><option value="">Сначала выберите крепость</option></select>`)}${formField("production-catalog-line", "Линейка", `<select id="production-catalog-line" name="catalogLine" required disabled><option value="">Сначала выберите продукт</option></select>`)}</div>
     <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
-    <div class="form-grid">${formField("production-packer", "Упаковщик", `<select id="production-packer" name="packer" required>${optionList(packerNames, "Выберите упаковщика")}</select>`)}${formField("production-operator", "Механик-оператор", `<select id="production-operator" name="operator" required>${optionList(operatorNames, "Выберите механика-оператора")}</select>`)}</div>
+    <div class="form-grid">${formField("production-packer", "Упаковщик (мой выпуск)", `<select id="production-packer" name="packer" required>${optionList(packerNames, "Выберите себя")}</select>`)}${formField("production-operator", "Механик-оператор", `<select id="production-operator" name="operator" required>${optionList(operatorNames, "Выберите механика-оператора")}</select>`)}${formField("production-operator-second", "Второй механик-оператор", `<select id="production-operator-second" name="operatorSecond"><option value="">Нет второго механика</option>${operatorNames.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}</select>`)}</div>
     ${formField("production-note", "Примечание", `<textarea id="production-note" name="note" rows="3" maxlength="5000" placeholder="При необходимости добавьте комментарий">${escapeHtml(record?.note || "")}</textarea>`) }
     <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить исправления" : "Сохранить в оба листа"}</button></div></form>`);
   const form = dialog.querySelector("form");
@@ -1574,7 +1604,8 @@ function openProductionDialog(record = null) {
     form.elements.canScrapKg.value = record.canScrapKg;
     form.elements.machineLine.value = record.line;
     form.elements.packer.value = record.packer;
-    form.elements.operator.value = record.operator;
+    form.elements.operator.value = existingOperators[0] || "";
+    form.elements.operatorSecond.value = existingOperators[1] || "";
   }
   form.addEventListener("submit", async event => {
     event.preventDefault();

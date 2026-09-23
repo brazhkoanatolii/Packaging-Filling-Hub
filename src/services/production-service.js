@@ -2,6 +2,7 @@ import { getVilniusDate, makeId } from "../domain/scale-check.js";
 
 const LINES = Object.freeze(["A", "B", "D", "F", "H", "K", "L", "M"]);
 const CACHE_KEY = "productionJournalCache";
+const PARTICIPANT_SEPARATOR = " + ";
 
 export class ProductionService {
   constructor(store, repository) { this.store = store; this.repository = repository; }
@@ -68,8 +69,12 @@ function validateProductionRecord(input, { packers, operators }) {
   };
   const packer = text("packer", "Упаковщик");
   const operator = text("operator", "Механик-оператор");
+  const operatorSecond = String(input.operatorSecond || "").trim();
+  if (operatorSecond.length > 180) throw new Error("Поле «Второй механик-оператор» слишком длинное");
   if (!packers.includes(packer)) throw new Error("Выберите присутствующего упаковщика");
   if (!operators.includes(operator)) throw new Error("Выберите присутствующего механика-оператора");
+  if (operatorSecond && !operators.includes(operatorSecond)) throw new Error("Выберите присутствующего второго механика-оператора");
+  if (operatorSecond && operatorSecond === operator) throw new Error("Второй механик-оператор должен отличаться от первого");
   const line = text("machineLine", "Линия (машина)", 4).toUpperCase();
   if (!LINES.includes(line)) throw new Error("Выберите линию из рабочего списка");
   const shift = text("shift", "Смена", 2).toUpperCase();
@@ -80,7 +85,8 @@ function validateProductionRecord(input, { packers, operators }) {
     requestId: String(input.requestId || makeId("production-request")), date, startTime, time,
     product: text("product", "Продукт"), strength: numeric("strength", "Крепость", true),
     quantity: numeric("quantity", "Количество готовой продукции", true), scrapKg: numeric("scrapKg", "Брак продукции"),
-    canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer, operator, machineLine: line, shift, note
+    canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer,
+    operator: [operator, operatorSecond].filter(Boolean).join(PARTICIPANT_SEPARATOR), machineLine: line, shift, note
   };
 }
 
@@ -93,5 +99,10 @@ function validTime(value, label) {
 function normalizeRecords(records) { return records.map(normalizeRecord).filter(Boolean); }
 function normalizeRecord(value) {
   if (!value?.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(value.date || ""))) return null;
-  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), shift: String(value.shift || "").toUpperCase(), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator: String(value.operator || ""), note: String(value.note || "") };
+  const operator = String(value.operator || "");
+  return { ...value, id: String(value.id), date: String(value.date), startTime: String(value.startTime || ""), time: String(value.time || ""), product: String(value.product || ""), line: String(value.line || value.machineLine || ""), shift: String(value.shift || "").toUpperCase(), strength: Number(value.strength), quantity: Number(value.quantity), scrapKg: Number(value.scrapKg), canScrapKg: Number(value.canScrapKg), packer: String(value.packer || ""), operator, operators: splitParticipants(operator), note: String(value.note || "") };
+}
+
+function splitParticipants(value) {
+  return [...new Set(String(value || "").split(/\s+\+\s+/).map(item => item.trim()).filter(Boolean))].slice(0, 2);
 }
