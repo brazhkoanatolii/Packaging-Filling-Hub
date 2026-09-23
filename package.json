@@ -1,6 +1,6 @@
 {
   "name": "packaging-filling-hub",
-  "version": "0.8.54",
+  "version": "0.8.55",
   "private": true,
   "type": "module",
   "description": "Русскоязычная PWA для журналов фасовочного участка",

@@ -111,7 +111,11 @@ server.listen(0, "127.0.0.1", () => {
   console.log("Откройте эту ссылку в браузере и подтвердите два разрешения Google:");
   console.log(authorizationUrl.toString());
   if (process.platform === "win32") {
-    spawn("cmd.exe", ["/c", "start", "", authorizationUrl.toString()], { detached: true, stdio: "ignore" }).unref();
+    // cmd.exe treats & in an OAuth query as a command separator unless the
+    // complete URL is quoted. Without the quotes Google receives a truncated
+    // request and reports that response_type is missing.
+    const urlForCmd = authorizationUrl.toString().replaceAll('"', "%22");
+    spawn("cmd.exe", ["/d", "/s", "/c", `start \"\" \"${urlForCmd}\"`], { detached: true, stdio: "ignore" }).unref();
   }
 });
 

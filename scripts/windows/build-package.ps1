@@ -48,8 +48,17 @@ try {
   if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
   if (Test-Path -LiteralPath $hashPath) { Remove-Item -LiteralPath $hashPath -Force }
   Compress-Archive -Path (Join-Path $stagePath "*") -DestinationPath $archivePath -CompressionLevel Optimal
-  $hash = Get-FileHash -LiteralPath $archivePath -Algorithm SHA256
-  Set-Content -LiteralPath $hashPath -Value "$($hash.Hash)  $archiveName" -Encoding ascii
+  # Use .NET rather than Get-FileHash: some locked-down Windows PowerShell
+  # installations don't expose that cmdlet, while SHA256 is always available.
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($archivePath)
+  try {
+    $hashValue = ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "")
+  } finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+  }
+  Set-Content -LiteralPath $hashPath -Value "$hashValue  $archiveName" -Encoding ascii
 } finally {
   $resolvedStage = [System.IO.Path]::GetFullPath($stagePath)
   if ($resolvedStage.StartsWith($temporaryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedStage)) {
@@ -59,4 +68,4 @@ try {
 
 Write-Host "Создан установочный пакет:" -ForegroundColor Green
 Write-Host $archivePath
-Write-Host "SHA256: $($hash.Hash)"
+Write-Host "SHA256: $hashValue"
