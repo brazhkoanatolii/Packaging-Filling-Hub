@@ -86,12 +86,12 @@ test("очистки: статистика учитывает год и толь
   assert.deepEqual(stats.people, [["Employee", 2]]);
 });
 
-test("очистки: напоминание 1-го и 15-го остаётся до записи за каждую дату", () => {
+test("очистки: напоминание закрывается очисткой, выполненной в соответствующей половине месяца", () => {
   assert.deepEqual(pendingCycloneCleaningDates([], "2026-09-01"), ["2026-09-01"]);
   assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }], "2026-09-14"), []);
   assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }], "2026-09-15"), ["2026-09-15"]);
   assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-15" }], "2026-09-23"), ["2026-09-01"]);
-  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }, { date: "2026-09-15" }], "2026-09-23"), []);
+  assert.deepEqual(pendingCycloneCleaningDates([{ date: "2026-09-01" }, { date: "2026-09-18" }], "2026-09-23"), []);
 });
 
 test("очистки: отказ Google сохраняет ошибку и очередь, без ложного подтверждения", async () => {

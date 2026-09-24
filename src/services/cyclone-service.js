@@ -53,8 +53,19 @@ export function pendingCycloneCleaningDates(records, currentDate = getVilniusDat
   const date = String(currentDate || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
   const [year, month, day] = date.split("-").map(Number);
-  const dueDates = [1, 15].filter(dueDay => day >= dueDay)
-    .map(dueDay => `${year}-${String(month).padStart(2, "0")}-${String(dueDay).padStart(2, "0")}`);
-  const completed = new Set((records ?? []).map(record => String(record?.date || "")));
-  return dueDates.filter(dueDate => !completed.has(dueDate));
+  const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
+  const completedDays = (records ?? [])
+    .map(record => String(record?.date || ""))
+    .filter(recordDate => recordDate.startsWith(monthPrefix))
+    .map(recordDate => Number(recordDate.slice(-2)))
+    .filter(recordDay => Number.isInteger(recordDay) && recordDay >= 1 && recordDay <= 31);
+
+  // A cleaning entered later in its half-month closes that scheduled task:
+  // 1–14 closes the first task; 15–end of month closes the second.
+  const firstHalfCompleted = completedDays.some(recordDay => recordDay >= 1 && recordDay < 15);
+  const secondHalfCompleted = completedDays.some(recordDay => recordDay >= 15);
+  const dueDates = [];
+  if (day >= 1 && !firstHalfCompleted) dueDates.push(`${monthPrefix}01`);
+  if (day >= 15 && !secondHalfCompleted) dueDates.push(`${monthPrefix}15`);
+  return dueDates;
 }
