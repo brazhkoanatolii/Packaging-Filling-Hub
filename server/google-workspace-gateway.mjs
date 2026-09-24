@@ -17,6 +17,7 @@ const workstationRole = normalizeWorkstationRole(process.env.WORKSTATION_ROLE);
 const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
 const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub-Updates/main/update-manifest.json";
+const updateManifestFallbackUrl = "https://api.github.com/repos/brazhkoanatolii/Packaging-Filling-Hub-Updates/contents/update-manifest.json?ref=main";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
 const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
@@ -86,6 +87,8 @@ let automaticDailyProductionExportCompletedDate = null;
 let automaticDailyProductionExportAttemptAt = 0;
 let automaticUpdateAttemptAt = 0;
 let automaticUpdateRunning = false;
+let cachedFallbackManifest = null;
+let fallbackManifestCheckedAt = 0;
 
 createServer(async (request, response) => {
   try {
@@ -373,19 +376,53 @@ function startVerifiedUpdate(update, source) {
 async function getUpdateStatus() {
   const base = { ok: true, currentVersion: appVersion, available: false, message: "Новая версия не найдена" };
   try {
-    const response = await fetch(updateManifestUrl, {
-      headers: { Accept: "application/json", "Cache-Control": "no-cache" },
-      signal: AbortSignal.timeout(7_000)
-    });
-    if (!response.ok) return { ...base, message: "Не удалось получить сведения об обновлении" };
-    const manifest = await response.json();
-    if (!isSafeUpdateManifest(manifest)) return { ...base, message: "Сведения об обновлении не прошли проверку" };
-    return compareVersions(manifest.version, appVersion) > 0
-      ? { ...base, available: true, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256, message: `Доступна версия ${manifest.version}` }
-      : base;
+    const primary = await readUpdateManifest(updateManifestUrl);
+    const primaryStatus = updateStatusFromManifest(base, primary);
+    if (primaryStatus?.available || process.env.UPDATE_MANIFEST_URL) return primaryStatus || { ...base, message: "Сведения об обновлении не прошли проверку" };
+
+    // Some corporate proxies retain the raw GitHub file after a release. The
+    // fallback reads the same manifest through GitHub's API at most once per
+    // five minutes and still applies the identical URL and SHA validation.
+    const fallback = await readFreshUpdateManifest();
+    return updateStatusFromManifest(base, fallback) || primaryStatus || { ...base, message: "Не удалось проверить обновление" };
   } catch {
     return { ...base, message: "Не удалось проверить обновление" };
   }
+}
+
+async function readUpdateManifest(url) {
+  const response = await fetch(url, {
+    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+    signal: AbortSignal.timeout(7_000)
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+async function readFreshUpdateManifest() {
+  if (Date.now() - fallbackManifestCheckedAt < 5 * 60_000) return cachedFallbackManifest;
+  fallbackManifestCheckedAt = Date.now();
+  try {
+    const response = await fetch(updateManifestFallbackUrl, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "Packaging-Filling-Hub" },
+      signal: AbortSignal.timeout(7_000)
+    });
+    if (!response.ok) return cachedFallbackManifest;
+    const payload = await response.json();
+    const content = Buffer.from(String(payload.content || "").replace(/\s/g, ""), "base64").toString("utf8");
+    const manifest = JSON.parse(content);
+    cachedFallbackManifest = isSafeUpdateManifest(manifest) ? manifest : null;
+  } catch {
+    // The ordinary raw manifest remains the primary update path.
+  }
+  return cachedFallbackManifest;
+}
+
+function updateStatusFromManifest(base, manifest) {
+  if (!isSafeUpdateManifest(manifest)) return null;
+  return compareVersions(manifest.version, appVersion) > 0
+    ? { ...base, available: true, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256, message: `Доступна версия ${manifest.version}` }
+    : base;
 }
 
 function isSafeUpdateManifest(manifest) {
