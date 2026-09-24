@@ -857,7 +857,7 @@ async function checkForUpdate({ announce = false } = {}) {
     state.update.available = response.ok && result.available === true;
     state.update.version = state.update.available ? result.version : null;
     state.update.message = state.update.available ? `Доступна версия ${result.version}` : "Новая версия не найдена";
-    if (state.update.available && announce) toast(`Доступна версия ${result.version}. Откройте «Настройки» → «Обновление программы».`, "warning");
+    if (state.update.available && announce) toast(`Доступна версия ${result.version}. Нажмите «Обновить программу» в верхней панели.`, "warning");
     if (!state.update.available && announce) toast(state.update.message, "success");
     render();
   } catch {
@@ -1016,6 +1016,7 @@ function renderApplication() {
             <button class="utility-button language-button" data-action="cycle-language" title="${ui("language")}" aria-label="${ui("language")}"><b>${language.label}</b><span>${language.name}</span></button>
             <button class="icon-button theme-button" data-action="toggle-theme" title="${ui("theme")}" aria-label="${ui("theme")}">${state.theme === "dark" ? sunIcon() : moonIcon()}</button>
             ${connectionBadge()}
+            <button class="utility-button ${state.update.available ? "update-available" : ""}" data-action="${state.update.available ? "install-update" : "check-update"}" title="${escapeHtml(state.update.message || "Проверить обновление программы")}" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Обновляем…" : state.update.available ? `Обновить ${escapeHtml(state.update.version)}` : "Обновить программу"}</button>
             <button class="icon-button" data-action="refresh" title="${state.refreshing ? "Обновляем текущий раздел" : ui("refresh")}" aria-label="${ui("refresh")}" ${state.refreshing ? "disabled" : ""}>${state.refreshing ? "…" : refreshIcon()}</button>
           </div>
         </header>

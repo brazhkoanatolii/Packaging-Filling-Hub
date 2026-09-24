@@ -1,4 +1,4 @@
-const CACHE_NAME = "packaging-filling-hub-v0.8.66-1";
+const CACHE_NAME = "packaging-filling-hub-v0.8.67-1";
 const APP_SHELL = [
   "./",
   "./index.html",
