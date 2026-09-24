@@ -18,6 +18,7 @@ const workstationId = normalizeWorkstationId(process.env.WORKSTATION_ID);
 const workstationLabel = normalizeWorkstationLabel(process.env.WORKSTATION_LABEL);
 const updateManifestUrl = process.env.UPDATE_MANIFEST_URL || "https://raw.githubusercontent.com/brazhkoanatolii/Packaging-Filling-Hub-Updates/main/update-manifest.json";
 const updateManifestFallbackUrl = "https://api.github.com/repos/brazhkoanatolii/Packaging-Filling-Hub-Updates/contents/update-manifest.json?ref=main";
+const updateRepositoryCommitUrl = "https://api.github.com/repos/brazhkoanatolii/Packaging-Filling-Hub-Updates/commits/main";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
 const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
@@ -411,7 +412,14 @@ async function readFreshUpdateManifest() {
     const payload = await response.json();
     const content = Buffer.from(String(payload.content || "").replace(/\s/g, ""), "base64").toString("utf8");
     const manifest = JSON.parse(content);
-    cachedFallbackManifest = isSafeUpdateManifest(manifest) ? manifest : null;
+    const commitResponse = await fetch(updateRepositoryCommitUrl, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "Packaging-Filling-Hub" },
+      signal: AbortSignal.timeout(7_000)
+    });
+    const commit = commitResponse.ok ? await commitResponse.json() : null;
+    cachedFallbackManifest = isSafeUpdateManifest(manifest)
+      ? pinUpdatePackageToCommit(manifest, commit?.sha)
+      : null;
   } catch {
     // The ordinary raw manifest remains the primary update path.
   }
@@ -423,6 +431,19 @@ function updateStatusFromManifest(base, manifest) {
   return compareVersions(manifest.version, appVersion) > 0
     ? { ...base, available: true, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256, message: `Доступна версия ${manifest.version}` }
     : base;
+}
+
+function pinUpdatePackageToCommit(manifest, commit) {
+  if (!/^[a-f0-9]{40}$/i.test(String(commit || ""))) return manifest;
+  try {
+    const packageUrl = new URL(manifest.packageUrl);
+    const prefix = "/brazhkoanatolii/Packaging-Filling-Hub-Updates/main/";
+    if (packageUrl.hostname !== "raw.githubusercontent.com" || !packageUrl.pathname.startsWith(prefix)) return manifest;
+    packageUrl.pathname = packageUrl.pathname.replace(prefix, `/brazhkoanatolii/Packaging-Filling-Hub-Updates/${commit}/`);
+    return { ...manifest, packageUrl: packageUrl.toString() };
+  } catch {
+    return manifest;
+  }
 }
 
 function isSafeUpdateManifest(manifest) {
