@@ -266,9 +266,11 @@ h3 { margin-bottom: 5px; }
 .maintenance-due-list strong { font-size: .8rem; }
 .maintenance-due-list span { font-size: .8rem; font-weight: 850; white-space: nowrap; }
 .maintenance-due-list small { grid-column: 1 / -1; color: var(--ink-500); font-size: .65rem; }
-.maintenance-work-options { display: grid; gap: 7px; min-height: 42px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.maintenance-work-options label { display: flex; gap: 8px; align-items: flex-start; font-size: .8rem; cursor: pointer; }
-.maintenance-work-options input { width: auto; margin: 2px 0 0; }
+.maintenance-work-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 196px; min-height: 42px; overflow-y: auto; padding: 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.maintenance-work-options label { display: flex; min-width: 0; min-height: 32px; gap: 7px; align-items: center; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; font-size: .77rem; line-height: 1.2; cursor: pointer; }
+.maintenance-work-options label:hover { border-color: var(--line); background: var(--surface-raised); }
+.maintenance-work-options input { width: auto; margin: 0; flex: 0 0 auto; }
+.maintenance-work-options small { grid-column: 1 / -1; padding: 3px 4px; }
 
 .compact-list { display: grid; }
 .compact-record { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #edf0ee; }
@@ -940,6 +942,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .sync-summary { display: flex; }
   .sync-illustration { width: 54px; height: 54px; }
   .form-grid { grid-template-columns: 1fr; }
+  .maintenance-work-options { grid-template-columns: 1fr; max-height: 220px; }
   .packaging-workspace { grid-template-columns: 1fr; }
   .packaging-entry-panel { position: static; }
   .packaging-toolbar { align-items: flex-start; flex-direction: column; }
