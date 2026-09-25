@@ -47,7 +47,16 @@ try {
 
   if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
   if (Test-Path -LiteralPath $hashPath) { Remove-Item -LiteralPath $hashPath -Force }
-  Compress-Archive -Path (Join-Path $stagePath "*") -DestinationPath $archivePath -CompressionLevel Optimal
+  # Compress-Archive ignores dot-prefixed files on some PowerShell hosts.
+  # ZipFile preserves .env.example, which the installer requires to create a
+  # new non-secret local .env on a fresh workstation.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $stagePath,
+    $archivePath,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false
+  )
   # Use .NET rather than Get-FileHash: some locked-down Windows PowerShell
   # installations don't expose that cmdlet, while SHA256 is always available.
   $sha256 = [System.Security.Cryptography.SHA256]::Create()

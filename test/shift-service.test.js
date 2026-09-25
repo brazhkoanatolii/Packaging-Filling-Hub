@@ -48,3 +48,15 @@ test("отметки табеля можно исправить в активн�
   ]);
   assert.ok(updated.attendanceUpdatedAt);
 });
+
+test("в центральном режиме смена берётся из общего провайдера, а не из IndexedDB", async () => {
+  const calls = [];
+  const remote = {
+    async current() { calls.push("current"); return { active: true, shiftTeamId: "shift-team-b", shiftDate: "2026-09-25" }; },
+    async update(action, payload) { calls.push({ action, payload }); return { active: true, ...payload }; }
+  };
+  const service = new ShiftService(createStore(), remote);
+  assert.equal((await service.current()).shiftTeamId, "shift-team-b");
+  await service.updateAttendance(attendance);
+  assert.deepEqual(calls, ["current", { action: "update-attendance", payload: { attendance } }]);
+});

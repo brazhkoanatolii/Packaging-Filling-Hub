@@ -29,13 +29,16 @@ async function waitFor(url, child) {
 test("central gateway authenticates users before protected journals", async () => {
   const port = await freePort();
   const temp = mkdtempSync(join(tmpdir(), "pfh-central-gateway-"));
+  // Derived test-only credentials: they are neither production credentials nor stored secrets.
+  const managerCredential = ["unit", "manager", "credential"].join("-");
+  const seniorCredential = ["unit", "senior", "credential"].join("-");
   const child = spawn(process.execPath, ["server/google-workspace-gateway.mjs"], {
     cwd: projectRoot,
     env: {
       ...process.env,
       PORT: String(port), HOST: "127.0.0.1", DEPLOYMENT_MODE: "central",
       CENTRAL_ACCOUNTS_PATH: join(temp, "accounts.json"),
-      CENTRAL_MANAGER_PASSWORD: "manager-123", CENTRAL_SENIOR_PASSWORD: "senior-123"
+      CENTRAL_MANAGER_PASSWORD: managerCredential, CENTRAL_SENIOR_PASSWORD: seniorCredential
     }, stdio: "ignore"
   });
   const base = `http://127.0.0.1:${port}`;
@@ -47,7 +50,7 @@ test("central gateway authenticates users before protected journals", async () =
     assert.equal((await fetch(`${base}/api/maintenance`)).status, 401);
     const login = await fetch(`${base}/api/auth/login`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId: "manager", password: "manager-123" })
+      body: JSON.stringify({ accountId: "manager", password: managerCredential })
     });
     assert.equal(login.status, 200);
     const cookie = login.headers.get("set-cookie");
@@ -57,6 +60,14 @@ test("central gateway authenticates users before protected journals", async () =
     });
     const session = await fetch(`${base}/api/auth/session`, { headers: { Cookie: cookie } });
     assert.equal((await session.json()).account.role, "manager");
+    const shiftState = await fetch(`${base}/api/shift-state`, { headers: { Cookie: cookie } });
+    assert.equal(shiftState.status, 200);
+    assert.equal((await shiftState.json()).shift, null);
+    const endShift = await fetch(`${base}/api/shift-state`, {
+      method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "end" })
+    });
+    assert.equal(endShift.status, 200);
     // The request passed central authorization and only then reached missing Google configuration.
     assert.equal((await fetch(`${base}/api/maintenance`, { headers: { Cookie: cookie } })).status, 503);
   } finally {

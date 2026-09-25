@@ -1,7 +1,7 @@
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CentralAuthService, readCookie } from "./central-auth.mjs";
 
@@ -70,6 +70,9 @@ const publicDirectories = ["assets/", "src/"];
 const centralAccountsPath = process.env.CENTRAL_ACCOUNTS_PATH
   ? resolve(process.env.CENTRAL_ACCOUNTS_PATH)
   : join(projectRoot, ".runtime", "central-accounts.json");
+const centralShiftStatePath = process.env.CENTRAL_SHIFT_STATE_PATH
+  ? resolve(process.env.CENTRAL_SHIFT_STATE_PATH)
+  : join(projectRoot, ".runtime", "central-shift-state.json");
 const centralAuth = centralMode
   ? new CentralAuthService({ accountsPath: centralAccountsPath })
   : null;
@@ -90,6 +93,20 @@ let automaticUpdateAttemptAt = 0;
 let automaticUpdateRunning = false;
 let cachedFallbackManifest = null;
 let fallbackManifestCheckedAt = 0;
+
+// Background work must never terminate the central server.  In particular,
+// Google can reject an automatic daily export when a target range has been
+// protected after the server was configured.  Log the failure and leave the
+// API available so that the responsible person can correct the spreadsheet.
+function runBackgroundTask(label, task) {
+  void Promise.resolve()
+    .then(task)
+    .catch(error => console.error(`[gateway] Фоновая задача «${label}» завершилась с ошибкой: ${error?.message || error}`));
+}
+
+process.on("unhandledRejection", error => {
+  console.error(`[gateway] Необработанная фоновая ошибка: ${error?.message || error}`);
+});
 
 createServer(async (request, response) => {
   try {
@@ -143,6 +160,18 @@ createServer(async (request, response) => {
       const input = await readJsonBody(request);
       centralAuth.changePassword(actor, input.accountId, input.currentPassword, input.nextPassword);
       return sendJson(response, 200, { ok: true });
+    }
+
+    // The active shift is operational state, not a Google Sheets row and not
+    // browser data. Every central-mode client therefore reads the same record.
+    if (url.pathname === "/api/shift-state" && request.method === "GET") {
+      requireActor(request, ["manager", "senior"]);
+      return sendJson(response, 200, { ok: true, shift: readCentralShiftState() });
+    }
+    if (url.pathname === "/api/shift-state" && request.method === "POST") {
+      const actor = requireActor(request, ["manager", "senior"]);
+      const input = await readJsonBody(request);
+      return sendJson(response, 200, { ok: true, shift: await updateCentralShiftState(input, actor) });
     }
 
     if (url.pathname === "/api/update-status" && request.method === "GET") {
@@ -334,16 +363,16 @@ createServer(async (request, response) => {
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
   if (centralMode || workstationRole === "manager") {
     console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
-    void runAutomaticDailyPackagingExport();
-    setInterval(() => void runAutomaticDailyPackagingExport(), 5 * 60_000).unref();
+    runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport);
+    setInterval(() => runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport), 5 * 60_000).unref();
     console.log(`Суточная сводка продукции: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
-    void runAutomaticDailyProductionExport();
-    setInterval(() => void runAutomaticDailyProductionExport(), 5 * 60_000).unref();
+    runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport);
+    setInterval(() => runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport), 5 * 60_000).unref();
   }
   if (process.platform === "win32") {
     console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
-    void runAutomaticUpdate();
-    setInterval(() => void runAutomaticUpdate(), 60_000).unref();
+    runBackgroundTask("автообновление", runAutomaticUpdate);
+    setInterval(() => runBackgroundTask("автообновление", runAutomaticUpdate), 60_000).unref();
   }
 });
 
@@ -727,13 +756,11 @@ async function exportPackagingDaily(input) {
     getSheetId(rawMaterialsSpreadsheetId, rawMaterialsSheetName, accessToken),
     getSheetId(cansSpreadsheetId, cansSheetName, accessToken)
   ]);
-  await Promise.all([
-    updateSheetCells(rawMaterialsSpreadsheetId, accessToken, { sheetId: rawSheetId, rowIndex: rawRow.rowNumber - 1, columnIndex: 1 }, [source.values.garantBox430, source.values.garantBox570, source.values.dochemsPaper]),
-    Promise.all([
-      updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 1 }, [source.values.killaCanClear, source.values.killaCanGreen]),
-      updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 5 }, [source.values.killaLidGreen, source.values.dzCanClear, source.values.dzCanGreen, source.values.dzLidBlack, source.values.dzLidWhite])
-    ])
-  ]);
+  // Perform writes in order.  If one target is protected, no subsequent
+  // background request is left racing after the error has been handled.
+  await updateSheetCells(rawMaterialsSpreadsheetId, accessToken, { sheetId: rawSheetId, rowIndex: rawRow.rowNumber - 1, columnIndex: 1 }, [source.values.garantBox430, source.values.garantBox570, source.values.dochemsPaper]);
+  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 1 }, [source.values.killaCanClear, source.values.killaCanGreen]);
+  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 5 }, [source.values.killaLidGreen, source.values.dzCanClear, source.values.dzCanGreen, source.values.dzLidBlack, source.values.dzLidWhite]);
   return { ok: true, date, rawMaterials: { rowNumber: rawRow.rowNumber }, cans: { rowNumber: cansRow.rowNumber } };
 }
 
@@ -1331,6 +1358,110 @@ function requireActor(request, roles = null) {
     throw error;
   }
   return actor;
+}
+
+function readCentralShiftState() {
+  if (!centralMode || !existsSync(centralShiftStatePath)) return null;
+  try {
+    const value = JSON.parse(readFileSync(centralShiftStatePath, "utf8"));
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    // A damaged non-secret status file must not stop the gateway.
+    return null;
+  }
+}
+
+function writeCentralShiftState(value) {
+  const directory = dirname(centralShiftStatePath);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${centralShiftStatePath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  renameSync(temporary, centralShiftStatePath);
+  return value;
+}
+
+async function updateCentralShiftState(input, actor) {
+  if (!centralMode) {
+    const error = new Error("Общее состояние смены доступно только на центральном сервере");
+    error.statusCode = 409;
+    throw error;
+  }
+  const action = String(input?.action || "");
+  const current = readCentralShiftState();
+  if (action === "end") {
+    if (!current?.active) return current;
+    return writeCentralShiftState({ ...current, active: false, endedAt: new Date().toISOString(), endedBy: actor.id });
+  }
+  if (action === "complete-scale-control") {
+    if (!current?.active) throw new Error("Общая смена не начата");
+    const recordCount = Number(input.recordCount);
+    if (!current.requiresScaleControl || current.weightsCompletedAt || recordCount < 13) return current;
+    return writeCentralShiftState({ ...current, weightsCompletedAt: new Date().toISOString(), scaleControlRecordCount: recordCount, updatedBy: actor.id });
+  }
+  if (action === "update-attendance") {
+    if (!current?.active) throw new Error("Общая смена не начата");
+    if (current.shiftDate !== todayInVilnius()) throw new Error("Активная смена относится к другой дате. Сначала завершите её явно.");
+    const attendance = normalizeCentralAttendance(input.attendance);
+    return writeCentralShiftState({ ...current, attendance, attendanceUpdatedAt: new Date().toISOString(), updatedBy: actor.id });
+  }
+  if (action !== "start") throw new Error("Неизвестное действие со сменой");
+  if (current?.active) throw new Error("На центральном сервере уже есть активная смена. Сначала завершите или исправьте её.");
+  const teamId = String(input.shiftTeamId || "");
+  const scheduledTeam = await scheduledCentralTeam(todayInVilnius());
+  if (!scheduledTeam || scheduledTeam.id !== teamId) {
+    const error = new Error("Можно начать только бригаду, назначенную общим графиком на сегодня");
+    error.statusCode = 409;
+    throw error;
+  }
+  const shiftNumber = Number(input.shiftNumber);
+  if (![1, 2].includes(shiftNumber)) throw new Error("Выберите первую или вторую смену");
+  const supervisor = String(input.supervisor || "").trim();
+  if (!supervisor) throw new Error("Выберите старшего смены");
+  const startedAt = new Date().toISOString();
+  return writeCentralShiftState({
+    schemaVersion: 1, active: true, shiftDate: todayInVilnius(), shiftTeamId: teamId,
+    employee: supervisor, supervisor, shiftNumber, attendance: normalizeCentralAttendance(input.attendance),
+    startedAt, endedAt: null, startedBy: actor.id,
+    requiresScaleControl: shiftNumber === 1,
+    weightsCompletedAt: shiftNumber === 1 ? null : startedAt
+  });
+}
+
+async function scheduledCentralTeam(date) {
+  const workforce = await getWorkforceSnapshot();
+  const [year, month] = String(date).split("-").map(Number);
+  return (workforce.shiftTeams || []).find(team => {
+    const schedule = workforceScheduleMonth(team, year, month - 1);
+    return schedule.some(day => day.date === date && day.scheduled);
+  }) || null;
+}
+
+function workforceScheduleMonth(team, year, monthIndex) {
+  const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return Array.from({ length: days }, (_, index) => {
+    const day = index + 1;
+    const date = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const anchor = String(team.anchorDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!anchor) return { date, scheduled: false };
+    const difference = Math.round((Date.UTC(year, monthIndex, day) - Date.UTC(Number(anchor[1]), Number(anchor[2]) - 1, Number(anchor[3]))) / 86_400_000);
+    const length = Math.max(1, Number(team.cycleLengthDays) || 4);
+    const offset = ((difference % length) + length) % length;
+    return { date, scheduled: (team.workDayOffsets || [0, 1]).map(Number).includes(offset) };
+  });
+}
+
+function normalizeCentralAttendance(value) {
+  if (!Array.isArray(value) || !value.length) throw new Error("Отметьте присутствие сотрудников");
+  const attendance = value.map(item => ({
+    employeeId: String(item?.employeeId || ""), status: String(item?.status || ""),
+    ...(item?.isSubstitute ? { isSubstitute: true, substitutionReason: String(item.substitutionReason || ""), homeShiftTeamId: String(item.homeShiftTeamId || "") } : {})
+  })).filter(item => item.employeeId && item.status);
+  if (!attendance.length) throw new Error("Отметьте присутствие сотрудников");
+  return attendance;
+}
+
+function todayInVilnius() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Vilnius" }).format(new Date());
 }
 
 function sessionCookie(token, expiresAt) {

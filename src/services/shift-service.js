@@ -1,13 +1,16 @@
 export class ShiftService {
-  constructor(store) {
+  constructor(store, remote = null) {
     this.store = store;
+    this.remote = remote;
   }
 
   async current() {
+    if (this.remote) return this.remote.current();
     return this.store.preference("activeShift");
   }
 
   async start(employee) {
+    if (this.remote) return this.remote.update("start", typeof employee === "string" ? { supervisor: employee } : employee);
     const current = await this.current();
     if (current?.active) return current;
     const input = typeof employee === "string"
@@ -35,6 +38,7 @@ export class ShiftService {
   }
 
   async updateAttendance(attendance) {
+    if (this.remote) return this.remote.update("update-attendance", { attendance });
     const current = await this.current();
     if (!current?.active) throw new Error("Смена не начата");
     if (!Array.isArray(attendance) || !attendance.length) throw new Error("Отметьте присутствие сотрудников");
@@ -48,6 +52,7 @@ export class ShiftService {
   }
 
   async completeScaleControl(recordCount) {
+    if (this.remote) return this.remote.update("complete-scale-control", { recordCount });
     const current = await this.current();
     if (!current?.active) return current;
     if (!current.requiresScaleControl || current.weightsCompletedAt) return current;
@@ -62,6 +67,7 @@ export class ShiftService {
   }
 
   async end() {
+    if (this.remote) return this.remote.update("end");
     const current = await this.current();
     if (!current?.active) return current;
     const shift = { ...current, active: false, endedAt: new Date().toISOString() };

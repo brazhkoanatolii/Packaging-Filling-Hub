@@ -7,6 +7,7 @@ import { JournalRepository } from "./repositories/journal-repository.js";
 import { AuthService } from "./services/auth-service.js";
 import { JournalService } from "./services/journal-service.js";
 import { ShiftService } from "./services/shift-service.js";
+import { CentralShiftGatewayProvider } from "./providers/central-shift-gateway-provider.js";
 import { WorkforceService, getScheduleMonth } from "./services/workforce-service.js";
 import { WorkforceGatewayProvider } from "./providers/workforce-gateway-provider.js";
 import { WorkforceRepository } from "./repositories/workforce-repository.js";
@@ -40,6 +41,7 @@ const SHELL_TEXT = Object.freeze({
 const state = {
   account: null,
   shift: null,
+  legacyShift: null,
   records: [],
   journalError: null,
   operations: [],
@@ -81,6 +83,7 @@ const state = {
 let store;
 let authService;
 let shiftService;
+let legacyShiftService;
 let repository;
 let journalService;
 let productionRefreshPromise = null;
@@ -126,7 +129,10 @@ async function bootstrap() {
     apiBaseUrl: APP_CONFIG.integration.gatewayBaseUrl,
     remote: APP_CONFIG.centralAuth
   });
-  shiftService = new ShiftService(store);
+  legacyShiftService = new ShiftService(store);
+  shiftService = APP_CONFIG.centralAuth
+    ? new ShiftService(store, new CentralShiftGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl }))
+    : legacyShiftService;
   workforceRepository = APP_CONFIG.integration.mode === "gateway" ? new WorkforceRepository(store,
     new WorkforceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl, writesEnabled: APP_CONFIG.integration.googleWritesEnabled }),
     () => ({ ...workforceActor, workstationId: APP_CONFIG.workstationId, account: state.account?.id })) : null;
@@ -144,7 +150,8 @@ async function bootstrap() {
   await repository.init();
   state.account = await authService.current();
   state.packagingWarehouse = await packagingWarehouseService.refresh();
-  state.shift = await shiftService.current();
+  state.legacyShift = APP_CONFIG.centralAuth ? await legacyShiftService.current() : null;
+  state.shift = state.account ? await shiftService.current() : null;
   // Do not hold the whole interface on a slow Google request.  A fresh
   // attendance snapshot is still required immediately before each save below.
   state.workforce = await workforceService.snapshot();
@@ -293,6 +300,7 @@ async function handleSubmit(event) {
       state.account = await authService.login(accountId, String(data.get("password") || ""));
       state.shiftResponsible = responsibility;
       if (responsibility) await store.setPreference("sessionShiftResponsible", responsibility);
+      state.shift = await shiftService.current();
       state.page = "dashboard";
       render();
       if (navigator.onLine) void startStartupJournalSync().finally(() => syncInBackground());
@@ -348,9 +356,11 @@ async function handleSubmit(event) {
     return;
   }
   try {
-    await saveShiftAttendanceToTimesheet(teamId, attendance);
-    if (state.shift?.active) {
+    const changes = attendanceChanges(teamId, attendance);
+    if (changes.length && !window.confirm(attendanceChangeMessage(changes))) return;
+    if (isCurrentSharedShift()) {
       state.shift = await shiftService.updateAttendance(attendance);
+      await saveShiftAttendanceToTimesheet(teamId, attendance, changes);
       state.shiftGuests = [];
       state.workforce = await workforceService.snapshot();
       render();
@@ -363,6 +373,7 @@ async function handleSubmit(event) {
       shiftTeamId: teamId,
       attendance
     });
+    await saveShiftAttendanceToTimesheet(teamId, attendance, changes);
     state.shiftGuests = [];
     state.workforce = await workforceService.snapshot();
     state.page = state.shift.requiresScaleControl ? "journals" : "dashboard";
@@ -447,6 +458,7 @@ async function handleClick(event) {
       await authService.logout();
       await store.setPreference("sessionShiftResponsible", null);
       state.account = null;
+      state.shift = null;
       state.shiftResponsible = null;
       render();
       return;
@@ -477,7 +489,7 @@ async function handleClick(event) {
       return;
     }
     if (action === "new-record") {
-      if (state.account.role === "senior" && !state.shift?.active) {
+      if (state.account.role === "senior" && !isCurrentSharedShift()) {
         toast("Сначала нажмите «Начать смену».", "warning");
         return;
       }
@@ -485,7 +497,7 @@ async function handleClick(event) {
       return;
     }
     if (action === "start-scale-walk") {
-      if (state.account.role === "senior" && !state.shift?.active) {
+      if (state.account.role === "senior" && !isCurrentSharedShift()) {
         toast("Сначала нажмите «Начать смену».", "warning");
         return;
       }
@@ -510,6 +522,12 @@ async function handleClick(event) {
       state.shift = await shiftService.current();
       render();
       toast("Смена завершена.", "success");
+      return;
+    }
+    if (action === "archive-legacy-shift") {
+      await archiveLegacyShift();
+      render();
+      toast("Локальная незавершённая смена сохранена в архиве. Отметки табеля не менялись.", "success");
       return;
     }
     if (action === "refresh") {
@@ -1253,7 +1271,7 @@ function renderJournalReadiness() {
 }
 
 function renderShiftPanel() {
-  if (state.shift?.active) {
+  if (isCurrentSharedShift()) {
     return `
       <section class="shift-strip active">
         <div class="shift-state"><span class="pulse"></span><div><strong>${state.shift.shiftNumber === 2 ? "Вторая" : "Первая"} смена идёт</strong><small>Старший: ${escapeHtml(state.shift.supervisor ?? state.shift.employee)}, ${formatDateTime(state.shift.startedAt)}</small></div></div>
@@ -1268,7 +1286,7 @@ function renderShiftPanel() {
 }
 
 function renderWorkflowPanel() {
-  const attendanceReady = Boolean(state.shift?.active);
+  const attendanceReady = isCurrentSharedShift();
   const weightsRequired = state.shift?.requiresScaleControl !== false;
   const weightsReady = attendanceReady && (!weightsRequired || Boolean(state.shift?.weightsCompletedAt));
   return `<section class="workflow-card card">
@@ -1344,14 +1362,17 @@ function renderAttendanceTabs() {
 }
 
 function renderShiftStartView() {
-  const team = teamById(state.shift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
+  const activeShift = isCurrentSharedShift() ? state.shift : null;
+  const team = teamById(activeShift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
   const members = shiftStartMembers(team?.id);
-  const responsibleName = state.shift?.supervisor ?? (state.shiftResponsible?.teamId === team?.id ? state.shiftResponsible.fullName : "");
+  const responsibleName = activeShift?.supervisor ?? (state.shiftResponsible?.teamId === team?.id ? state.shiftResponsible.fullName : "");
   const responsibleInPrimaryList = members.some(employee => employee.fullName === responsibleName && ["senior-mechanic", "mechanic"].includes(employee.role));
-  const savedAttendance = new Map((state.shift?.shiftTeamId === team?.id ? state.shift.attendance : []).map(item => [item.employeeId, item.status]));
+  const savedAttendance = new Map((activeShift?.shiftTeamId === team?.id ? activeShift.attendance : []).map(item => [item.employeeId, item.status]));
   const presentCount = members.filter(employee => attendanceCode(savedAttendance.get(employee.id)) === "11").length;
   const scheduled = team ? getScheduleMonth(team, ...monthParts(today())).some(day => day.date === today() && day.scheduled) : false;
   return `
+    ${renderCentralShiftWarning()}
+    ${renderLegacyShiftWarning()}
     <section class="shift-day-banner ${scheduled ? "scheduled" : "substitution"}">
       <span>${scheduled ? "Сегодня" : "Вне графика"}</span>
       <div><strong>${escapeHtml(team?.name ?? "Смена")}${scheduled ? " работает по графику" : " может выйти на подмену"}</strong><small>Цикл 2 рабочих / 2 выходных · ${team?.shiftDurationHours ?? 12} ч на производстве · ${team?.accountingHours ?? 11} учётных часов</small></div>
@@ -1359,13 +1380,13 @@ function renderShiftStartView() {
     </section>
     <form class="card shift-attendance-card" data-form="shift-attendance">
       <div class="shift-form-head">
-        <div><p class="eyebrow">Шаг 1 · состав смены</p><h2>${state.shift?.active ? "Исправить присутствие" : "Начать рабочую смену"}</h2><p>Выберите бригаду и отметьте только тех, кто отсутствует.</p></div>
+        <div><p class="eyebrow">Шаг 1 · состав смены</p><h2>${activeShift ? "Исправить присутствие" : "Начать рабочую смену"}</h2><p>Выберите бригаду и отметьте только тех, кто отсутствует.</p></div>
         <div class="attendance-counter"><strong data-attendance-present>${presentCount}</strong><span>из ${members.length}<small>на работе</small></span></div>
       </div>
       <div class="shift-start-controls">
-        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${state.shift?.active ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Смена по времени</span><select name="shiftNumber" ${state.shift?.active ? "disabled" : ""}><option value="1" ${state.shift?.shiftNumber !== 2 ? "selected" : ""}>Первая — нужен контроль весов</option><option value="2" ${state.shift?.shiftNumber === 2 ? "selected" : ""}>Вторая — контроль уже выполнен</option></select></label>
-        <label class="field"><span>Ответственный за смену</span><select name="supervisor" required ${state.shift?.active ? "disabled" : ""}><option value="">Выберите сотрудника</option>${members.filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role)).map(employee => `<option ${employee.fullName === responsibleName ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}${responsibleName && !responsibleInPrimaryList ? `<option value="${attribute(responsibleName)}" selected>Другой — ${escapeHtml(responsibleName)}</option>` : ""}</select></label>
+        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${activeShift ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>Смена по времени</span><select name="shiftNumber" ${activeShift ? "disabled" : ""}><option value="1" ${activeShift?.shiftNumber !== 2 ? "selected" : ""}>Первая — нужен контроль весов</option><option value="2" ${activeShift?.shiftNumber === 2 ? "selected" : ""}>Вторая — контроль уже выполнен</option></select></label>
+        <label class="field"><span>Ответственный за смену</span><select name="supervisor" required ${activeShift ? "disabled" : ""}><option value="">Выберите сотрудника</option>${members.filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role)).map(employee => `<option ${employee.fullName === responsibleName ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}${responsibleName && !responsibleInPrimaryList ? `<option value="${attribute(responsibleName)}" selected>Другой — ${escapeHtml(responsibleName)}</option>` : ""}</select></label>
       </div>
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
@@ -1377,8 +1398,23 @@ function renderShiftStartView() {
         }).join("")}
       </div>
       <div class="shift-guest-actions"><button type="button" class="secondary-button" data-action="add-shift-guest">+ Добавить сотрудника другой смены</button><small>Выберите причину: подработка или производственная необходимость.</small></div>
-      <div class="shift-form-footer"><p>${state.shift?.active ? "Исправления сохраняются в активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${state.shift?.active ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
+      <div class="shift-form-footer"><p>${activeShift ? "Исправления сохраняются в общей активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${activeShift ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
     </form>`;
+}
+
+function renderLegacyShiftWarning() {
+  const legacy = state.legacyShift;
+  if (!APP_CONFIG.centralAuth || !legacy?.active) return "";
+  const legacyDate = String(legacy.startedAt || "").slice(0, 10);
+  const currentTeam = scheduledTeam()?.id;
+  if (legacyDate === today() && legacy.shiftTeamId === currentTeam) return "";
+  return `<section class="workforce-connection warning"><span>!</span><p><strong>Найдена локальная незавершённая смена ${escapeHtml(teamLabel(legacy.shiftTeamId))}</strong><br><small>Она не управляет общей сменой и не блокирует бригаду по графику. Завершите её явно только после проверки; сохранённые отметки табеля не будут изменены.</small></p><button class="small-button" data-action="archive-legacy-shift">Завершить и сохранить ${escapeHtml(teamLabel(legacy.shiftTeamId))}</button></section>`;
+}
+
+function renderCentralShiftWarning() {
+  const shift = state.shift;
+  if (!APP_CONFIG.centralAuth || !shift?.active || isCurrentSharedShift()) return "";
+  return `<section class="workforce-connection warning"><span>!</span><p><strong>Общая смена ${escapeHtml(teamLabel(shift.shiftTeamId))} относится к ${escapeHtml(shift.shiftDate || "другой дате")}</strong><br><small>Её нужно проверить и явно завершить. Она не скрывается и не будет заменена автоматически.</small></p><button class="small-button" data-action="end-shift">Завершить общую смену</button></section>`;
 }
 
 function renderScheduleView() {
@@ -2627,7 +2663,7 @@ function activePersonnel() {
 function presentShiftPersonnel() {
   const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
   if (!teamId) return [];
-  const attendance = new Map((state.shift?.active && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
+  const attendance = new Map((isCurrentSharedShift() && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
     .map(item => [item.employeeId, attendanceCode(item.status)]));
   const unsavedGuests = new Set(state.shiftGuests.map(item => item.employeeId));
   return shiftStartMembers(teamId).filter(employee => attendance.get(employee.id) === "11" || unsavedGuests.has(employee.id));
@@ -2671,6 +2707,11 @@ function scheduledTeam(date = today()) {
   return state.workforce?.shiftTeams?.find(team => getScheduleMonth(team, year, monthIndex).some(day => day.date === date && day.scheduled)) ?? null;
 }
 
+function isCurrentSharedShift(shift = state.shift) {
+  if (!shift?.active) return false;
+  return !APP_CONFIG.centralAuth || shift.shiftDate === today();
+}
+
 function responsibilityCandidates(teamId, roles) {
   return activePersonnel()
     .filter(employee => employee.shiftTeamId === teamId && roles.includes(employee.role))
@@ -2678,7 +2719,7 @@ function responsibilityCandidates(teamId, roles) {
 }
 
 function shiftGuestEntries(teamId) {
-  const saved = state.shift?.active && state.shift.shiftTeamId === teamId
+  const saved = isCurrentSharedShift() && state.shift.shiftTeamId === teamId
     ? (state.shift.attendance || []).filter(item => item.isSubstitute)
     : [];
   return [...saved, ...state.shiftGuests]
@@ -2714,7 +2755,7 @@ function loginShiftResponsibility(data) {
 }
 
 function teamsWithCurrentShiftFirst() {
-  const currentTeamId = state.shift?.active ? state.shift.shiftTeamId : scheduledTeam()?.id;
+  const currentTeamId = isCurrentSharedShift() ? state.shift.shiftTeamId : scheduledTeam()?.id;
   return [...(state.workforce?.shiftTeams || [])].sort((left, right) => {
     if (left.id === currentTeamId) return -1;
     if (right.id === currentTeamId) return 1;
@@ -2818,13 +2859,13 @@ function attendanceCode(value) {
   return ({ present: "11", vacation: "A", sick: "L", absent: "PB", "day-off": "ND" })[String(value || "")] ?? String(value || "11");
 }
 
-async function saveShiftAttendanceToTimesheet(teamId, attendance) {
+async function saveShiftAttendanceToTimesheet(teamId, attendance, changes = attendance) {
   const date = today();
   // Starting a shift must stay responsive.  The attendance is first written
   // to the local queue, so that a slow Google Sheets request never blocks the
   // responsible-person dialog or the transition to scale control.
   await withWorkforceActor(async () => {
-    for (const item of attendance) {
+    for (const item of changes) {
       await workforceService.saveAttendance({
         date,
         shiftTeamId: teamId,
@@ -2836,6 +2877,39 @@ async function saveShiftAttendanceToTimesheet(teamId, attendance) {
     }
   }, attendanceAuthorNames(teamId));
   sendWorkforceInBackground();
+}
+
+function attendanceChanges(teamId, attendance) {
+  const existing = new Map((state.workforce.attendance || [])
+    .filter(item => item.date === today() && item.shiftTeamId === teamId)
+    .map(item => [item.employeeId, item]));
+  return attendance.filter(item => {
+    const prior = existing.get(item.employeeId);
+    return !prior
+      || attendanceCode(prior.value) !== attendanceCode(item.status)
+      || String(prior.substitutionReason || "") !== String(item.substitutionReason || "")
+      || String(prior.homeShiftTeamId || "") !== String(item.homeShiftTeamId || "");
+  });
+}
+
+function attendanceChangeMessage(changes) {
+  const existingIds = new Set((state.workforce.attendance || [])
+    .filter(item => item.date === today())
+    .map(item => item.employeeId));
+  const changed = changes.filter(item => existingIds.has(item.employeeId));
+  if (!changed.length) return "Подтвердить состав смены и сохранить новые отметки табеля?";
+  const names = changed.map(item => activePersonnel().find(person => person.id === item.employeeId)?.fullName || item.employeeId).join(", ");
+  return `Будут изменены уже сохранённые отметки: ${names}. Продолжить?`;
+}
+
+async function archiveLegacyShift() {
+  const legacy = state.legacyShift;
+  if (!legacy?.active) return;
+  if (!window.confirm("Завершить только старую локальную смену? Табель и общая смена на сервере не изменятся.")) return;
+  const history = await store.preference("legacyShiftArchive", []);
+  await store.setPreference("legacyShiftArchive", [...history, { ...legacy, archivedAt: new Date().toISOString(), archiveReason: "central-shift-migration" }]);
+  await store.setPreference("activeShift", { ...legacy, active: false, endedAt: new Date().toISOString(), endedReason: "migrated-to-central-shift" });
+  state.legacyShift = await legacyShiftService.current();
 }
 
 function sendWorkforceInBackground() {
@@ -2922,7 +2996,7 @@ function openPackagingWarehouseDialog(record = null) {
 
 function openIncidentDialog() {
   const currentTime = new Intl.DateTimeFormat("en-GB", { timeZone: APP_CONFIG.timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date());
-  const shift = state.shift?.active ? productionShiftCode() : "";
+  const shift = isCurrentSharedShift() ? productionShiftCode() : "";
   const dialog = createDialog(`<form class="dialog-card"><div class="dialog-heading"><div><p class="eyebrow">Журнал регистрации инцидентов</p><h2>Новый инцидент</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
     <p>Запись сохраняется на этом компьютере. Её можно вести независимо от сменного журнала.</p>
     <div class="form-grid">${formField("incident-date", "Дата", `<input id="incident-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("incident-time", "Время", `<input id="incident-time" name="time" type="time" value="${currentTime}" required>`)}${formField("incident-shift", "Смена", `<select id="incident-shift" name="shift"><option value="">Не указана</option><option value="A" ${shift === "A" ? "selected" : ""}>A</option><option value="B" ${shift === "B" ? "selected" : ""}>B</option></select>`)}${formField("incident-category", "Категория", `<select id="incident-category" name="category" required><option value="">Выберите категорию</option><option>Безопасность</option><option>Оборудование</option><option>Качество</option><option>Персонал</option><option>Другое</option></select>`)}</div>
