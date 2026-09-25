@@ -51,6 +51,22 @@ export class ProductionService {
 
 export { LINES };
 
+export function productionFinishedMassKg(record, specifications = []) {
+  const normalize = value => String(value || "").trim().toLocaleLowerCase();
+  const product = normalize(record?.product);
+  const catalogLine = normalize(record?.catalogLine);
+  const strength = Number(record?.strength);
+  const matchesProduct = item => normalize(item?.product) === product && Number(item?.variant) === strength;
+  const specification = catalogLine
+    ? specifications.find(item => matchesProduct(item) && normalize(item?.line) === catalogLine)
+    : specifications.find(matchesProduct);
+  if (!specification) return 0;
+  const gramsPerCan = Number(specification.wetMass) > 0 ? Number(specification.wetMass) : Number(specification.dryMass);
+  const canCount = Number(record?.quantity || 0);
+  if (!Number.isFinite(gramsPerCan) || !Number.isFinite(canCount) || gramsPerCan <= 0 || canCount <= 0) return 0;
+  return canCount * gramsPerCan / 1000;
+}
+
 function validateProductionRecord(input, { packers, operators }) {
   const date = String(input.date || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > getVilniusDate()) throw new Error("Дата должна быть сегодняшней или более ранней");

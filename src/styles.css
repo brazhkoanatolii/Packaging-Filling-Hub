@@ -261,9 +261,14 @@ h3 { margin-bottom: 5px; }
 .maintenance-due-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .maintenance-due-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 9px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .maintenance-due-list article.warning { border-color: color-mix(in srgb, var(--amber-500) 65%, var(--line)); background: color-mix(in srgb, var(--amber-100) 70%, var(--surface)); }
+.maintenance-due-list article.danger { border-color: color-mix(in srgb, var(--red-600) 70%, var(--line)); background: color-mix(in srgb, var(--red-100) 75%, var(--surface)); }
+.maintenance-due-alert { margin: 0 0 10px; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--red-600) 70%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--red-100) 75%, var(--surface)); color: var(--red-600); font-size: .78rem; }
 .maintenance-due-list strong { font-size: .8rem; }
 .maintenance-due-list span { font-size: .8rem; font-weight: 850; white-space: nowrap; }
 .maintenance-due-list small { grid-column: 1 / -1; color: var(--ink-500); font-size: .65rem; }
+.maintenance-work-options { display: grid; gap: 7px; min-height: 42px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.maintenance-work-options label { display: flex; gap: 8px; align-items: flex-start; font-size: .8rem; cursor: pointer; }
+.maintenance-work-options input { width: auto; margin: 2px 0 0; }
 
 .compact-list { display: grid; }
 .compact-record { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #edf0ee; }

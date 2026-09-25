@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getVilniusDate } from "../src/domain/scale-check.js";
-import { ProductionService } from "../src/services/production-service.js";
+import { ProductionService, productionFinishedMassKg } from "../src/services/production-service.js";
 
 class MemoryStore {
   values = new Map();
@@ -38,4 +38,15 @@ test("личная запись упаковщика может содержат
 test("одного механика-оператора нельзя выбрать дважды", async () => {
   const service = new ProductionService(new MemoryStore(), new MemoryRepository());
   await assert.rejects(service.create(record({ operatorSecond: "Оператор 1" }), people), /должен отличаться/);
+});
+
+test("масса готовой продукции использует вес одной банки без повторного умножения на подушки", () => {
+  const specifications = [
+    { line: "Стандарт", product: "Сухой", variant: 40, dryMass: 11.8, wetMass: null, pouchCount: 27 },
+    { line: "Стандарт", product: "Мокрый", variant: 40, dryMass: 11.8, wetMass: 13.5, pouchCount: 27 },
+    { line: "MINI", product: "Mini", variant: 50, dryMass: 11.8, wetMass: 13.5, pouchCount: 35 }
+  ];
+  assert.equal(productionFinishedMassKg({ catalogLine: "Стандарт", product: "Сухой", strength: 40, quantity: 240 }, specifications), 2.832);
+  assert.equal(productionFinishedMassKg({ catalogLine: "Стандарт", product: "Мокрый", strength: 40, quantity: 240 }, specifications), 3.24);
+  assert.equal(productionFinishedMassKg({ catalogLine: "MINI", product: "Mini", strength: 50, quantity: 240 }, specifications), 3.24);
 });

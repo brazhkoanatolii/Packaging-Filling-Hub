@@ -602,11 +602,13 @@ async function validateRepairRecord(input) {
   const machine = Number(input?.machine);
   if (!Number.isInteger(machine) || machine < 1 || machine > 16) throw requestError("Выберите станок от 1 до 16");
   const category = text("category", "Категория работ", 180);
-  const work = text("work", "Вид работ", 500);
+  const selectedWorks = [...new Set(text("work", "Вид работ", 500).split(";").map(value => value.trim()).filter(Boolean))];
+  if (!selectedWorks.length) throw requestError("Выберите хотя бы один вид работ");
+  const work = selectedWorks.join("; ");
   const performer = text("performer", "Исполнитель", 180);
   const note = String(input?.note || "").trim();
   if (note.length > 5000) throw requestError("Поле «Примечание» слишком длинное");
-  if (/(описать|какого).*примечани|примечани.*(описать|какого)/i.test(work) && !note) throw requestError("Для выбранного вида работ заполните примечание");
+  if (selectedWorks.some(value => /(описать|какого).*примечани|примечани.*(описать|какого)/i.test(value)) && !note) throw requestError("Для выбранного вида работ заполните примечание");
 
   const rows = (await getGoogleSheetRanges(repairsSpreadsheetId, [repairsDictionaryRange]))[0] ?? [];
   const dictionary = rows.slice(1);
@@ -615,7 +617,7 @@ async function validateRepairRecord(input) {
   const workColumn = category === "Настройка" ? 1 : category === "Ремонт" ? 2 : -1;
   if (!categories.has(category) || workColumn < 0) throw requestError("Категория работ отсутствует в справочнике журнала ремонта");
   const works = new Set(dictionary.map(row => String(row[workColumn] || "").trim()).filter(Boolean));
-  if (!works.has(work)) throw requestError("Выбранный вид работ отсутствует в справочнике журнала ремонта");
+  if (selectedWorks.some(workItem => !works.has(workItem))) throw requestError("Один из выбранных видов работ отсутствует в справочнике журнала ремонта");
   if (!performers.has(performer)) throw requestError("Исполнитель отсутствует в справочнике журнала ремонта");
   return { date, machine, category, work, performer, note };
 }
@@ -636,9 +638,11 @@ function repairWriteError(statusCode, googleMessage) {
 }
 
 function googleNumber(value) {
-  const normalized = String(value ?? "").replace(/\s/g, "").replace(",", ".");
+  const source = String(value ?? "").trim();
+  const negative = /^\(.+\)$/.test(source);
+  const normalized = source.replace(/[()\s]/g, "").replace(",", ".");
   const number = Number(normalized);
-  return Number.isFinite(number) ? number : NaN;
+  return Number.isFinite(number) ? (negative ? -number : number) : NaN;
 }
 
 async function getWorkforceSnapshot() {

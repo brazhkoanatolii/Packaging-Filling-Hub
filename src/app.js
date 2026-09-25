@@ -20,7 +20,7 @@ import { CycloneRepository } from "./repositories/cyclone-repository.js";
 import { CycloneService, cycloneStatistics, pendingCycloneCleaningDates } from "./services/cyclone-service.js";
 import { ProductionGatewayProvider } from "./providers/production-gateway-provider.js";
 import { ProductionRepository } from "./repositories/production-repository.js";
-import { ProductionService, LINES as PRODUCTION_LINES } from "./services/production-service.js";
+import { ProductionService, LINES as PRODUCTION_LINES, productionFinishedMassKg } from "./services/production-service.js";
 import { PackagingGatewayProvider } from "./providers/packaging-gateway-provider.js";
 import { PackagingRepository } from "./repositories/packaging-repository.js";
 import { PackagingService, PACKAGING_FIELDS } from "./services/packaging-service.js";
@@ -1115,7 +1115,7 @@ function renderProductionPage() {
   return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два листа одной записи</p><h2>Учёт продукции и брака</h2><p>Каждый упаковщик вносит свой выпуск отдельно. Итоги линии и машины программа складывает без двойного учёта.</p></div><div class="header-actions"><button class="secondary-button" data-action="refresh-production" ${state.productionLoading ? "disabled" : ""}>${state.productionLoading ? "Обновляем…" : "Обновить"}</button>${canAdd ? `<button class="primary-button" data-action="add-production" ${state.productionLoading ? "disabled" : ""}>+ Внести мой выпуск</button>` : ""}</div></section>
     ${state.productionLoading ? '<p class="module-note" role="status">Получаем данные из Google Sheets. Это может занять до 30 секунд.</p>' : ""}
     ${state.production.error ? `<p class="form-error">${escapeHtml(state.production.error)}</p>` : ""}
-    <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)}</strong><small>шт. за сегодня</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
+    <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)} <small>шт.</small></strong><small>${formatNumber(totalQuantity / 240)} кор. за сегодня · 240 шт. в коробке</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
     <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · A → P</span></div><div class="table-scroll"><table><thead><tr><th>Смена</th><th>Начало</th><th>Окончание</th><th>Линейка продукта</th><th>Продукт</th><th>Линия</th><th>mg/g</th><th>Готово, шт</th><th>Брак продукции, кг</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор(ы)</th><th>Старший механик</th><th>Механик</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td>${escapeHtml(record.catalogLine || "—")}</td><td>${escapeHtml(record.product)}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatNumber(record.scrapKg)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.seniorMechanic || "—")}</td><td>${escapeHtml(record.mechanic || "—")}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 16 : 15}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>
     ${renderProductionPeopleSummary(records)}`;
 }
@@ -1246,13 +1246,7 @@ function renderDashboardMaintenanceList(records, kind, limit) {
 }
 
 function productionRecordMassKg(record) {
-  const specification = state.specifications.specifications.find(item =>
-    item.product === record.product && Number(item.variant) === Number(record.strength));
-  if (!specification) return 0;
-  const gramsPerPouch = Number(specification.wetMass) > 0 ? Number(specification.wetMass) : Number(specification.dryMass);
-  const pouchesPerCan = Number(specification.pouchCount);
-  if (!Number.isFinite(gramsPerPouch) || !Number.isFinite(pouchesPerCan) || gramsPerPouch <= 0 || pouchesPerCan <= 0) return 0;
-  return Number(record.quantity || 0) * gramsPerPouch * pouchesPerCan / 1000;
+  return productionFinishedMassKg(record, state.specifications.specifications);
 }
 
 function splitProductionParticipants(value) {
@@ -1262,7 +1256,9 @@ function splitProductionParticipants(value) {
 function renderMaintenanceDueList(snapshot) {
   const records = snapshot?.records ?? [];
   if (!records.length) return `<p class="dashboard-empty">${snapshot?.error ? "Сводка ТО пока недоступна. Показаны данные журнала после следующей проверки." : "Сводка ТО загружается."}</p>`;
-  return `<div class="maintenance-due-list">${records.map(record => `<article class="${record.status === "Скоро ТО" ? "warning" : ""}"><strong>${escapeHtml(record.line)}</strong><span>${formatNumber(record.remainingBoxes)} кор.</span><small>${escapeHtml(record.status || "В пределах интервала")}</small></article>`).join("")}</div>`;
+  const needsService = records.filter(record => /^(Просрочено|Требуется ТО)$/i.test(record.status));
+  const className = record => /^(Просрочено|Требуется ТО)$/i.test(record.status) ? "danger" : record.status === "Скоро ТО" ? "warning" : "";
+  return `${needsService.length ? `<p class="maintenance-due-alert"><strong>Требуется ТО:</strong> ${needsService.map(record => `${escapeHtml(record.line)} (${formatNumber(Math.abs(record.remainingBoxes))} кор. ${record.remainingBoxes < 0 ? "сверх интервала" : "осталось"})`).join(", ")}</p>` : ""}<div class="maintenance-due-list">${records.map(record => `<article class="${className(record)}"><strong>${escapeHtml(record.line)}</strong><span>${formatNumber(record.remainingBoxes)} кор.</span><small>${escapeHtml(record.status || "В пределах интервала")}</small></article>`).join("")}</div>`;
 }
 
 function renderJournalReadiness() {
@@ -1549,7 +1545,7 @@ function renderPackagingPage() {
   const current = records.find(record => record.date === today());
   const selected = PACKAGING_FIELDS.find(field => field.key === state.packagingEntryItem) ?? null;
   const canSubmit = Boolean(selected);
-  return `<section class="packaging-toolbar"><p>${escapeHtml(status)} · В очереди: <strong>${operations.length}</strong>${!APP_CONFIG.integration.googleWritesEnabled ? " · Отправка в Google выключена" : ""}</p><div class="packaging-toolbar-actions"><button class="secondary-button" data-action="sync-packaging">Обновить</button></div></section>
+  return `<section class="packaging-toolbar"><p>${escapeHtml(status)} · В очереди: <strong>${operations.length}</strong>${!APP_CONFIG.integration.googleWritesEnabled ? " · Отправка в Google выключена" : ""}</p><div class="packaging-toolbar-actions"><button class="secondary-button" data-action="sync-packaging">Обновить</button>${current ? `<button class="secondary-button" data-action="edit-packaging" data-id="${attribute(current.id)}">Исправить итог за сегодня</button>` : ""}</div></section>
     <section class="packaging-workspace"><article class="card packaging-catalog"><div class="section-heading"><div><p class="eyebrow">Сегодня</p><h2>Вид упаковки</h2><p>Нажмите на нужную позицию. Рядом показан уже взятый итог за день.</p></div></div><div class="packaging-item-list">${PACKAGING_FIELDS.map(field => { const total = Number(current?.values?.[field.key] || 0); const active = selected?.key === field.key; return `<button type="button" class="packaging-item ${active ? "selected" : ""}" data-action="select-packaging-item" data-item="${attribute(field.key)}"><span><strong>${escapeHtml(shortPackagingLabel(field.label))}</strong><small>Уже взято сегодня</small></span><b>${formatNumber(total)} <small>${escapeHtml(packagingUnit(field))}</small></b></button>`; }).join("")}</div></article>
     <form class="card packaging-entry-panel" data-form="packaging-quick"><p class="eyebrow">Быстрый ввод</p><h2>${selected ? escapeHtml(shortPackagingLabel(selected.label)) : "Выберите упаковку"}</h2><p class="packaging-current-total">${selected ? `Уже взято: <strong>${formatNumber(Number(current?.values?.[selected.key] || 0))} ${escapeHtml(packagingUnit(selected))}</strong>` : "Сначала выберите позицию слева."}</p><input type="hidden" name="item" value="${attribute(selected?.key || "")}">${formField("packaging-quantity", "Количество", `<input id="packaging-quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="0" required ${selected ? "" : "disabled"}>`, "Новое количество будет прибавлено к итогу за сегодня. Только целое положительное число.", "full")}<p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="submit" class="primary-button packaging-submit" ${canSubmit ? "" : "disabled"}>Прибавить к итогу</button></div></form></section>
     `;
@@ -1624,7 +1620,7 @@ function openMaintenanceDialog(journalType) {
   const categories = journal.categories ?? [];
   const workByCategory = journal.workByCategory ?? {};
   const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
-  const repairFields = isRepair ? `<div class="form-grid">${formField("maintenance-category", "Категория работ", `<select id="maintenance-category" name="category" required>${optionList(categories, "Выберите категорию")}</select>`)}${formField("maintenance-work", "Вид работ", `<select id="maintenance-work" name="work" required disabled><option value="">Сначала выберите категорию</option></select>`)}</div>` : "";
+  const repairFields = isRepair ? `<div class="form-grid">${formField("maintenance-category", "Категория работ", `<select id="maintenance-category" name="category" required>${optionList(categories, "Выберите категорию")}</select>`)}${formField("maintenance-work", "Виды работ", `<div id="maintenance-work-options" class="maintenance-work-options" aria-live="polite"><small>Сначала выберите категорию.</small></div>`, "Можно отметить несколько работ. В Google это будет одна запись.")}</div>` : "";
   const dialog = createDialog(`<form class="dialog-card"><div class="dialog-heading"><div><p class="eyebrow">${isRepair ? "Журнал ремонта" : "Журнал ТО"}</p><h2>${title}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
     <p>Запись будет сразу внесена в соответствующий лист рабочего журнала Google.</p>
     <div class="form-grid">${formField("maintenance-date", "Дата", `<input id="maintenance-date" name="date" type="date" value="${today()}" max="${today()}" required>`)}${formField("maintenance-machine", "Станок", `<select id="maintenance-machine" name="machine" required>${optionList(machines.map(machine => String(machine).padStart(2, "0")), "Выберите станок")}</select>`)}</div>
@@ -1634,15 +1630,20 @@ function openMaintenanceDialog(journalType) {
     <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Внести в журнал</button></div></form>`);
   const form = dialog.querySelector("form");
   const categorySelect = form.elements.category;
-  const workSelect = form.elements.work;
+  const workOptions = form.querySelector("#maintenance-work-options");
+  const renderWorkOptions = works => {
+    workOptions.innerHTML = works.length ? works.map(work => `<label><input type="checkbox" name="work" value="${attribute(work)}"> <span>${escapeHtml(work)}</span></label>`).join("") : "<small>Нет вариантов в справочнике.</small>";
+  };
   if (isRepair) categorySelect.addEventListener("change", () => {
     const works = workByCategory[categorySelect.value] ?? [];
-    workSelect.innerHTML = optionList(works, works.length ? "Выберите вид работ" : "Нет вариантов в справочнике");
-    workSelect.disabled = !works.length;
+    renderWorkOptions(works);
   });
   form.addEventListener("submit", async event => {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(form));
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData);
+    if (isRepair) data.work = [...new Set(formData.getAll("work").map(value => String(value).trim()).filter(Boolean))].join("; ");
+    if (isRepair && !data.work) { showFormError(form, new Error("Выберите хотя бы один вид работ.")); return; }
     if (isRepair && /описать в примечании/i.test(data.work || "") && !String(data.note || "").trim()) {
       showFormError(form, new Error("Для выбранного вида работ заполните примечание.")); return;
     }
