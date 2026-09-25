@@ -39,8 +39,8 @@ const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
 const cansSheetName = "Банки";
 const cansRange = "'Банки'!A4:J500";
 const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
-const productionSecondRange = "'Учет продукции 2'!A2:O";
-const productionFirstRange = "'Учет продукции 1'!B4:O";
+const productionSecondRange = "'Учет продукции 2'!A2:P";
+const productionFirstRange = "'Учет продукции 1'!B4:P";
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -250,23 +250,19 @@ createServer(async (request, response) => {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
       const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
-      const result = await runAppsScript("createProductionRecord", [{ ...input, role: actor.role, workstationId: workstationId || actor.id }]);
-      if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
-      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+      return sendJson(response, 200, { ok: true, record: await createProductionRecord(input, actor) });
     }
     if (url.pathname === "/api/production-records" && request.method === "PUT") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
       const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
-      const result = await runAppsScript("updateProductionRecord", [{ ...input, role: actor.role, workstationId: workstationId || actor.id }]);
-      if (result?.ok) result.record = await persistProductionShift(result.record, input.shift);
-      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+      return sendJson(response, 200, { ok: true, record: await updateProductionRecord(input, actor) });
     }
     if (url.pathname === "/api/production-records" && request.method === "DELETE") {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
-      const actor = requireActor(request, ["manager", "senior"]);
-      const result = await runAppsScript("deleteProductionRecord", [{ ...(await readJsonBody(request)), role: actor.role, workstationId: workstationId || actor.id }]);
-      return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
+      requireActor(request, ["manager", "senior"]);
+      await deleteProductionRecord(await readJsonBody(request));
+      return sendJson(response, 200, { ok: true });
     }
 
     if (url.pathname === "/api/packaging-records" && request.method === "GET") {
@@ -847,52 +843,87 @@ async function runAutomaticDailyPackagingExport() {
 }
 
 async function getProductionSnapshot() {
-  const result = await runAppsScript("getProductionSnapshot");
-  if (!result?.ok || !Array.isArray(result.records)) return result;
-  const shifts = await getProductionShiftRows();
-  const bySignature = new Map();
-  for (const row of shifts.second) {
+  const rows = await getProductionShiftRows();
+  const firstBySignature = new Map();
+  for (const row of rows.first) {
     const key = productionSignature(row);
-    const queue = bySignature.get(key) ?? [];
+    const queue = firstBySignature.get(key) ?? [];
     queue.push(row);
-    bySignature.set(key, queue);
+    firstBySignature.set(key, queue);
   }
   return {
-    ...result,
-    records: result.records.map(record => {
-      const source = (bySignature.get(productionSignature(record)) ?? []).shift() ?? {};
-      return {
-        ...record,
-        shift: source.shift ?? "",
-        seniorMechanic: source.seniorMechanic ?? "",
-        mechanic: source.mechanic ?? ""
-      };
+    ok: true,
+    records: rows.second.map(second => {
+      const first = (firstBySignature.get(productionSignature(second)) ?? []).shift() ?? {};
+      return { ...second, id: productionRecordId(first.rowNumber, second.rowNumber) };
     })
   };
 }
 
-async function persistProductionShift(record, inputShift) {
-  const shift = String(inputShift || "").trim().toUpperCase();
-  if (!record || !["A", "B"].includes(shift)) throw new Error("Не удалось определить смену из табеля");
+async function createProductionRecord(input) {
+  await assertProductionCatalogSchema();
+  const record = validateGatewayProductionRecord(input);
+  const leaders = await productionShiftLeaders(record.date, record.shift);
   const rows = await getProductionShiftRows();
-  const signature = productionSignature(record);
-  const second = [...rows.second].reverse().find(row => productionSignature(row) === signature);
-  const first = [...rows.first].reverse().find(row => productionSignature(row) === signature);
-  if (!second || !first) throw new Error("Не удалось найти новую запись в обоих листах продукции");
-  const leaders = await productionShiftLeaders(record.date, shift);
+  const firstRowNumber = nextProductionRowNumber(rows.first, 4);
+  const secondRowNumber = nextProductionRowNumber(rows.second, 2);
   const accessToken = await getAccessToken();
-  await preserveProductionRowFormatting(accessToken, first.rowNumber, second.rowNumber);
+  await preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber);
+  await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
+  return { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders };
+}
+
+async function updateProductionRecord(input) {
+  await assertProductionCatalogSchema();
+  const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
+  const record = validateGatewayProductionRecord(input);
+  const leaders = await productionShiftLeaders(record.date, record.shift);
+  const accessToken = await getAccessToken();
+  await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
+  return { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders };
+}
+
+async function deleteProductionRecord(input) {
+  await assertProductionCatalogSchema();
+  const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
+  const accessToken = await getAccessToken();
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
-    { range: "'Учет продукции 1'!M2", values: [["Смена"]] },
-    { range: "'Учет продукции 1'!N2:O2", values: [["Старший механик", "Механик"]] },
-    { range: "'Учет продукции 2'!M1", values: [["Смена"]] },
-    { range: "'Учет продукции 2'!N1:O1", values: [["Старший механик", "Механик"]] },
-    { range: `'Учет продукции 1'!M${first.rowNumber}`, values: [[shift]] },
-    { range: `'Учет продукции 1'!N${first.rowNumber}:O${first.rowNumber}`, values: [[leaders.seniorMechanic, leaders.mechanic]] },
-    { range: `'Учет продукции 2'!M${second.rowNumber}`, values: [[shift]] }
-    , { range: `'Учет продукции 2'!N${second.rowNumber}:O${second.rowNumber}`, values: [[leaders.seniorMechanic, leaders.mechanic]] }
+    { range: `'Учет продукции 1'!B${firstRowNumber}:P${firstRowNumber}`, values: [Array(15).fill("")] },
+    { range: `'Учет продукции 2'!A${secondRowNumber}:P${secondRowNumber}`, values: [Array(16).fill("")] }
   ]);
-  return { ...record, shift, ...leaders };
+}
+
+async function writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber) {
+  await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
+    { range: `'Учет продукции 1'!B${firstRowNumber}:P${firstRowNumber}`, values: [productionFirstValues(record, leaders)] },
+    { range: `'Учет продукции 2'!A${secondRowNumber}:P${secondRowNumber}`, values: [productionSecondValues(record, leaders)] }
+  ]);
+}
+
+function productionFirstValues(record, leaders) {
+  return [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, "", record.packer, record.operator, record.machineLine, record.shift, leaders.seniorMechanic, leaders.mechanic];
+}
+
+function productionSecondValues(record, leaders) {
+  return [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, record.packer, record.operator, record.machineLine, record.canScrapKg, record.note, record.shift, leaders.seniorMechanic, leaders.mechanic];
+}
+
+function nextProductionRowNumber(rows, firstDataRow) {
+  return Math.max(firstDataRow, ...rows.map(row => row.rowNumber + 1));
+}
+
+async function assertProductionCatalogSchema() {
+  const [secondHeader, firstHeader] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:P1", "'Учет продукции 1'!B2:P2"]);
+  const ready = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
+  if (!ready) throw new Error("Журнал продукции ещё не подготовлен для графы «Линейка продукта». Обновите таблицу через центральный сервер.");
+}
+
+function productionRecordId(firstRowNumber, secondRowNumber) { return `production:${firstRowNumber}:${secondRowNumber}`; }
+
+function parseProductionRecordId(value) {
+  const match = String(value || "").match(/^production:(\d+):(\d+)$/);
+  if (!match) throw new Error("Эта запись создана старой версией программы. Обновите страницу журнала и повторите действие.");
+  return { firstRowNumber: Number(match[1]), secondRowNumber: Number(match[2]) };
 }
 
 async function preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber) {
@@ -903,15 +934,15 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
   const requests = [];
   if (firstRowNumber > 4) {
     requests.push({ copyPaste: {
-      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 15 },
-      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 15 },
+      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 16 },
+      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 16 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
   if (secondRowNumber > 2) {
     requests.push({ copyPaste: {
-      source: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 2, endRowIndex: secondRowNumber - 1, startColumnIndex: 0, endColumnIndex: 15 },
-      destination: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 1, endRowIndex: secondRowNumber, startColumnIndex: 0, endColumnIndex: 15 },
+      source: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 2, endRowIndex: secondRowNumber - 1, startColumnIndex: 0, endColumnIndex: 16 },
+      destination: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 1, endRowIndex: secondRowNumber, startColumnIndex: 0, endColumnIndex: 16 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
@@ -933,29 +964,62 @@ async function productionShiftLeaders(date, shift) {
 }
 
 async function getProductionShiftRows() {
-  const [secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, [productionSecondRange, productionFirstRange]);
+  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:P1", "'Учет продукции 1'!B2:P2", productionSecondRange, productionFirstRange]);
+  const hasCatalogLine = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
   return {
-    second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2)).filter(Boolean),
-    first: (firstRows ?? []).map((row, index) => productionRowFromFirst(row, index + 4)).filter(Boolean)
+    second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2, hasCatalogLine)).filter(Boolean),
+    first: (firstRows ?? []).map((row, index) => productionRowFromFirst(row, index + 4, hasCatalogLine)).filter(Boolean)
   };
 }
 
-function productionRowFromSecond(row, rowNumber) {
+function productionRowFromSecond(row, rowNumber, hasCatalogLine) {
   const date = googleSheetDate(row?.[0]);
-  if (!date || !String(row?.[3] || "").trim()) return null;
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
+  if (!date || !String(row?.[hasCatalogLine ? 4 : 3] || "").trim()) return null;
+  if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: Number(row[4] || 0), quantity: Number(row[5] || 0), scrapKg: Number(String(row[6] || "0").replace(",", ".")) || 0, packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), canScrapKg: Number(String(row[10] || "0").replace(",", ".")) || 0, note: String(row[11] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[7] || "0").replace(",", ".")) || 0, packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), canScrapKg: Number(String(row[11] || "0").replace(",", ".")) || 0, note: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
 }
 
-function productionRowFromFirst(row, rowNumber) {
+function productionRowFromFirst(row, rowNumber, hasCatalogLine) {
   const date = googleSheetDate(row?.[0]);
-  if (!date || !String(row?.[3] || "").trim()) return null;
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), product: String(row[3] || "").trim(), packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase(), seniorMechanic: String(row[12] || "").trim(), mechanic: String(row[13] || "").trim() };
+  if (!date || !String(row?.[hasCatalogLine ? 4 : 3] || "").trim()) return null;
+  if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: Number(row[4] || 0), quantity: Number(row[5] || 0), scrapKg: Number(String(row[6] || "0").replace(",", ".")) || 0, packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase(), seniorMechanic: String(row[12] || "").trim(), mechanic: String(row[13] || "").trim() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[7] || "0").replace(",", ".")) || 0, packer: String(row[9] || "").trim(), operator: String(row[10] || "").trim(), line: String(row[11] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
 }
 
 function productionSignature(record) {
   return [record.date, record.startTime, record.time, record.product, record.packer, record.operator, record.line || record.machineLine]
     .map(value => String(value || "").trim().toLocaleLowerCase("ru"))
     .join("\u001f");
+}
+
+function validateGatewayProductionRecord(input) {
+  const text = (key, label, limit = 5000) => {
+    const value = String(input?.[key] || "").trim();
+    if (!value) throw new Error(`Заполните поле «${label}»`);
+    if (value.length > limit) throw new Error(`Поле «${label}» слишком длинное`);
+    return value;
+  };
+  const decimal = (key, label, positive = false) => {
+    const value = Number(String(input?.[key] ?? "").replace(",", "."));
+    if (!Number.isFinite(value) || value < 0 || (positive && value <= 0)) throw new Error(`Поле «${label}» заполнено некорректно`);
+    return value;
+  };
+  const date = text("date", "Дата", 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw new Error("Дата должна быть сегодняшней или более ранней");
+  const startTime = text("startTime", "Время начала", 5);
+  const time = text("time", "Время окончания", 5);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("Укажите время в формате ЧЧ:ММ");
+  const machineLine = text("machineLine", "Линия (машина)", 4).toUpperCase();
+  if (!Object.hasOwn(productionMachineColumns, machineLine)) throw new Error("Выберите линию из рабочего списка");
+  const shift = text("shift", "Смена", 2).toUpperCase();
+  if (!['A', 'B'].includes(shift)) throw new Error("Смена должна быть определена из табеля");
+  return {
+    date, startTime, time, catalogLine: text("catalogLine", "Линейка продукта", 180), product: text("product", "Продукт", 180),
+    strength: decimal("strength", "Крепость", true), quantity: decimal("quantity", "Количество готовой продукции", true),
+    scrapKg: decimal("scrapKg", "Брак продукции"), canScrapKg: decimal("canScrapKg", "Вес бракованных банок"),
+    packer: text("packer", "Упаковщик", 180), operator: text("operator", "Механик-оператор", 360), machineLine, shift,
+    note: String(input?.note || "").trim().slice(0, 5000)
+  };
 }
 
 async function exportProductionDaily(input) {

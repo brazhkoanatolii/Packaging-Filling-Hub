@@ -21,7 +21,7 @@ const people = {
 function record(overrides = {}) {
   return {
     requestId: "request-1", date: getVilniusDate(), startTime: "07:30", time: "10:00",
-    product: "Test", strength: "40", quantity: "2400", scrapKg: "0", canScrapKg: "0",
+    product: "Test", catalogLine: "Линейка тест", strength: "40", quantity: "2400", scrapKg: "0", canScrapKg: "0",
     packer: "Упаковщик 1", operator: "Оператор 1", machineLine: "A", shift: "A", note: "",
     ...overrides
   };
