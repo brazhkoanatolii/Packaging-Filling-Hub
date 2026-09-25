@@ -21,6 +21,8 @@ const updateManifestFallbackUrl = "https://api.github.com/repos/brazhkoanatolii/
 const updateRepositoryCommitUrl = "https://api.github.com/repos/brazhkoanatolii/Packaging-Filling-Hub-Updates/commits/main";
 const maintenanceDueSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const maintenanceDueRange = "'ТО'!A6:H";
+const repairsSpreadsheetId = "1pg2Y9Hnc-5BCU3QaF3k9VwOJjqNwdkXbE3qFAnY6Qw8";
+const repairsDictionaryRange = "'Справочники'!A1:D1000";
 const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
 const packagingSheetName = "Лист";
 const packagingRange = "'Лист'!B2:M";
@@ -232,7 +234,8 @@ createServer(async (request, response) => {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
       const actor = requireActor(request, ["manager", "senior"]);
       const payload = await readJsonBody(request);
-      const functionName = payload.journal === "repair" ? "createRepairRecord" : payload.journal === "service" ? "createMaintenanceRecord" : null;
+      if (payload.journal === "repair") return sendJson(response, 200, await createRepairRecord(payload, actor));
+      const functionName = payload.journal === "service" ? "createMaintenanceRecord" : null;
       if (!functionName) return sendJson(response, 400, { ok: false, message: "Укажите журнал: ТО или ремонт" });
       const result = await runAppsScript(functionName, [{ ...payload, role: actor.role, workstationId: workstationId || actor.id }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
@@ -354,7 +357,7 @@ createServer(async (request, response) => {
     console.error(`[gateway] ${error.name}: ${error.message}`);
     return sendJson(response, status, {
       ok: false,
-      message: status >= 500 ? "Не удалось выполнить запрос к Google" : error.message
+      message: status >= 500 ? (error.publicMessage || "Не удалось выполнить запрос к Google") : error.message
     });
   }
 }).listen(port, host, () => {
@@ -571,6 +574,69 @@ async function getMaintenanceDueSnapshot() {
       status: String(row[6] || "").trim()
     })).filter(record => record.line && record.intervalBoxes > 0 && Number.isFinite(record.remainingBoxes))
   };
+}
+
+async function createRepairRecord(input) {
+  const record = await validateRepairRecord(input);
+  const accessToken = await getAccessToken();
+  const sheetName = `Ремонт ${String(record.machine).padStart(2, "0")}`;
+  const range = `'${sheetName}'!A5:E`;
+  const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(repairsSpreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values: [[displayDate(record.date), record.category, record.work, record.performer, record.note]] }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw repairWriteError(response.status, payload?.error?.message);
+  const rowNumber = Number(String(payload.updates?.updatedRange || "").match(/!(?:[A-Z]+)(\d+):/)?.[1]);
+  return { ok: true, record: { ...record, id: `repair-${record.machine}-${rowNumber || Date.now()}`, rowNumber } };
+}
+
+async function validateRepairRecord(input) {
+  const text = (key, label, limit = 5000) => {
+    const value = String(input?.[key] || "").trim();
+    if (!value) throw requestError(`Заполните поле «${label}»`);
+    if (value.length > limit) throw requestError(`Поле «${label}» слишком длинное`);
+    return value;
+  };
+  const date = String(input?.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > vilniusDate()) throw requestError("Выберите корректную дату ремонта");
+  const machine = Number(input?.machine);
+  if (!Number.isInteger(machine) || machine < 1 || machine > 16) throw requestError("Выберите станок от 1 до 16");
+  const category = text("category", "Категория работ", 180);
+  const work = text("work", "Вид работ", 500);
+  const performer = text("performer", "Исполнитель", 180);
+  const note = String(input?.note || "").trim();
+  if (note.length > 5000) throw requestError("Поле «Примечание» слишком длинное");
+  if (/(описать|какого).*примечани|примечани.*(описать|какого)/i.test(work) && !note) throw requestError("Для выбранного вида работ заполните примечание");
+
+  const rows = (await getGoogleSheetRanges(repairsSpreadsheetId, [repairsDictionaryRange]))[0] ?? [];
+  const dictionary = rows.slice(1);
+  const performers = new Set(dictionary.map(row => String(row[0] || "").trim()).filter(Boolean));
+  const categories = new Set(dictionary.map(row => String(row[3] || "").trim()).filter(Boolean));
+  const workColumn = category === "Настройка" ? 1 : category === "Ремонт" ? 2 : -1;
+  if (!categories.has(category) || workColumn < 0) throw requestError("Категория работ отсутствует в справочнике журнала ремонта");
+  const works = new Set(dictionary.map(row => String(row[workColumn] || "").trim()).filter(Boolean));
+  if (!works.has(work)) throw requestError("Выбранный вид работ отсутствует в справочнике журнала ремонта");
+  if (!performers.has(performer)) throw requestError("Исполнитель отсутствует в справочнике журнала ремонта");
+  return { date, machine, category, work, performer, note };
+}
+
+function requestError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function repairWriteError(statusCode, googleMessage) {
+  const message = String(googleMessage || "");
+  const error = googleError(statusCode, message || "Не удалось внести запись о ремонте");
+  if (/protected|защищён/i.test(message)) error.publicMessage = "Google не разрешил запись в защищённый диапазон журнала ремонта. Проверьте права корпоративной учётной записи на нужный лист.";
+  else if (/permission|permission denied|недостаточно прав|нет разреш/i.test(message)) error.publicMessage = "У корпоративной учётной записи нет права записи в журнал ремонта.";
+  else error.publicMessage = "Google не принял запись о ремонте. Повторите позже или проверьте подключение Google.";
+  return error;
 }
 
 function googleNumber(value) {

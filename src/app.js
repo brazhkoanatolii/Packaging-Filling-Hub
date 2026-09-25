@@ -518,6 +518,9 @@ async function handleClick(event) {
       return;
     }
     if (action === "end-shift") {
+      const shift = state.shift;
+      const team = teamLabel(shift?.shiftTeamId);
+      if (!window.confirm(`Завершить общую смену ${team}?\n\nЭто закроет только общий статус смены на центральном сервере. Уже сохранённые отметки табеля и записи Google не будут удалены или изменены.`)) return;
       await shiftService.end();
       state.shift = await shiftService.current();
       render();
@@ -1198,9 +1201,9 @@ function renderDashboard() {
   const latestService = newest(service.records).slice(0, 5);
   return `
     ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
+    ${renderJournalReadiness()}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
     ${state.account.role === "senior" ? renderWorkflowPanel() : ""}
-    ${renderJournalReadiness()}
     <div class="dashboard-summary-grid">
       <article class="card dashboard-summary-card production-summary">
         <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
@@ -1274,7 +1277,7 @@ function renderShiftPanel() {
   if (isCurrentSharedShift()) {
     return `
       <section class="shift-strip active">
-        <div class="shift-state"><span class="pulse"></span><div><strong>${state.shift.shiftNumber === 2 ? "Вторая" : "Первая"} смена идёт</strong><small>Старший: ${escapeHtml(state.shift.supervisor ?? state.shift.employee)}, ${formatDateTime(state.shift.startedAt)}</small></div></div>
+        <div class="shift-state"><span class="pulse"></span><div><strong>${state.shift.shiftNumber === 2 ? "Вторая" : "Первая"} смена идёт</strong><small>Старший: ${escapeHtml(state.shift.supervisor ?? state.shift.employee)}, ${formatDateTime(state.shift.startedAt)}. Завершение не меняет табель и Google-записи.</small></div></div>
         <button class="danger-outline-button" data-action="end-shift">Завершить смену</button>
       </section>`;
   }
