@@ -1664,7 +1664,7 @@ function openMaintenanceDialog(journalType) {
   const categorySelect = form.elements.category;
   const workOptions = form.querySelector("#maintenance-work-options");
   const renderWorkOptions = works => {
-    workOptions.innerHTML = works.length ? works.map(work => `<label><input type="checkbox" name="work" value="${attribute(work)}"> <span>${escapeHtml(work)}</span></label>`).join("") : "<small>Нет вариантов в справочнике.</small>";
+    workOptions.innerHTML = works.length ? works.map(work => `<label><input type="checkbox" name="work" value="${attribute(work)}"><span>${escapeHtml(work)}</span></label>`).join("") : "<small>Нет вариантов в справочнике.</small>";
   };
   if (isRepair) categorySelect.addEventListener("change", () => {
     const works = workByCategory[categorySelect.value] ?? [];
