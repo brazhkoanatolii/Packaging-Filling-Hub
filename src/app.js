@@ -31,6 +31,7 @@ import { NonconformityService } from "./services/nonconformity-service.js";
 import { PackagingWarehouseGatewayProvider } from "./providers/packaging-warehouse-gateway-provider.js";
 import { PackagingWarehouseRepository } from "./repositories/packaging-warehouse-repository.js";
 import { PackagingWarehouseService } from "./services/packaging-warehouse-service.js";
+import { localizeElement, translateUiText } from "./i18n.js";
 
 const root = document.querySelector("#app");
 const journal = JOURNALS[0];
@@ -1031,6 +1032,7 @@ function render() {
     ? `${pageTitle()} — ${APP_CONFIG.name}`
     : APP_CONFIG.name;
   root.innerHTML = state.account ? renderApplication() : renderLogin();
+  localizeElement(root, state.language);
 }
 
 function renderLogin() {
@@ -2625,6 +2627,7 @@ function createDialog(content) {
   const dialog = document.createElement("dialog");
   dialog.className = "modal";
   dialog.innerHTML = content;
+  localizeElement(dialog, state.language);
   dialog.addEventListener("close", () => dialog.remove());
   dialog.addEventListener("click", event => {
     if (event.target.closest('[data-action="close-dialog"]')) {
@@ -2643,7 +2646,7 @@ function showFormError(form, error) {
   const panel = form.querySelector("#form-error");
   if (panel) {
     panel.hidden = false;
-    panel.textContent = error.message || "Проверьте заполнение формы";
+  panel.textContent = translateUiText(error.message || "Проверьте заполнение формы", state.language);
   }
   for (const name of Object.keys(error.fields ?? {})) {
     const field = form.elements[name];
@@ -3133,7 +3136,7 @@ function shiftMonth(value, offset) {
 
 function monthTitle(value) {
   const [year, month] = value.split("-").map(Number);
-  return new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1, 12)));
+  return new Intl.DateTimeFormat(localeCode(), { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1, 12)));
 }
 
 function monthDays(value) {
@@ -3145,14 +3148,14 @@ function monthDays(value) {
     return {
       day,
       date,
-      weekday: new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day, 12))).replace(".", ""),
+      weekday: new Intl.DateTimeFormat(localeCode(), { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day, 12))).replace(".", ""),
       isToday: date === today()
     };
   });
 }
 
 function formatNumber(value) {
-  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
+  return new Intl.NumberFormat(localeCode(), { maximumFractionDigits: 3, minimumFractionDigits: 0 }).format(Number(value));
 }
 
 function openPackagingWarehouseDialog(record = null) {
@@ -3213,7 +3216,7 @@ function openPackagingEditDialog(record) {
 }
 
 function formatPercent(value) {
-  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(Number(value));
+  return new Intl.NumberFormat(localeCode(), { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(Number(value));
 }
 
 function signedNumber(value) {
@@ -3246,7 +3249,7 @@ function toast(message, tone = "neutral") {
   if (!region) return;
   const element = document.createElement("div");
   element.className = `toast ${tone}`;
-  element.innerHTML = `<span>${tone === "success" ? "✓" : tone === "error" ? "!" : "i"}</span><p>${escapeHtml(message)}</p>`;
+  element.innerHTML = `<span>${tone === "success" ? "✓" : tone === "error" ? "!" : "i"}</span><p>${escapeHtml(translateUiText(message, state.language))}</p>`;
   region.append(element);
   setTimeout(() => element.classList.add("visible"), 10);
   setTimeout(() => {
