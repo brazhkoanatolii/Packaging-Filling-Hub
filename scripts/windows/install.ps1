@@ -94,7 +94,13 @@ New-Item -ItemType Directory -Path (Join-Path $targetRoot ".runtime") -Force | O
 
 $startScript = Join-Path $targetRoot "scripts\windows\start-program.ps1"
 $autoUpdateScript = Join-Path $targetRoot "scripts\windows\auto-update.ps1"
-$powerShellPath = Join-Path $PSHOME "powershell.exe"
+# Always use Windows PowerShell for the background launcher.  When this
+# installer is invoked from a Microsoft Store PowerShell 7 shell, $PSHOME can
+# point to a virtual WindowsApps location that cannot be started by the task.
+$powerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)) {
+  $powerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+}
 if (-not $NoShortcuts) {
   $shortcutArguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`""
   $shell = New-Object -ComObject WScript.Shell
