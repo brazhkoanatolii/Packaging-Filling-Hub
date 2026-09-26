@@ -75,10 +75,10 @@ export function getVilniusDate(now = new Date()) {
   return `${map.year}-${map.month}-${map.day}`;
 }
 
-export function formatDate(value) {
+export function formatDate(value, locale = "ru-RU") {
   if (!value) return "—";
   const [year, month, day] = value.split("-").map(Number);
-  return new Intl.DateTimeFormat("ru-RU", {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: "Europe/Vilnius",
     day: "2-digit",
     month: "2-digit",
@@ -86,9 +86,9 @@ export function formatDate(value) {
   }).format(new Date(Date.UTC(year, month - 1, day, 12)));
 }
 
-export function formatDateTime(value) {
+export function formatDateTime(value, locale = "ru-RU") {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("ru-RU", {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: "Europe/Vilnius",
     day: "2-digit",
     month: "2-digit",

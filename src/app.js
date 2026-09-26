@@ -1,6 +1,6 @@
 import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
 import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYEE_IDS } from "./config/workforce-config.js";
-import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
+import { calculateResult, formatDate as formatJournalDate, formatDateTime as formatJournalDateTime } from "./domain/scale-check.js";
 import { formatPersonnelAge, formatPersonnelExperience } from "./domain/personnel-dates.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
@@ -2994,6 +2994,14 @@ function normalizeLanguage(value) {
 
 function localeCode() {
   return LANGUAGES.find(language => language.code === state.language)?.locale ?? APP_CONFIG.locale;
+}
+
+function formatDate(value) {
+  return formatJournalDate(value, localeCode());
+}
+
+function formatDateTime(value) {
+  return formatJournalDateTime(value, localeCode());
 }
 
 function startClock() {
