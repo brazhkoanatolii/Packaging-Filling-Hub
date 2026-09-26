@@ -1059,7 +1059,7 @@ function renderLogin() {
           ${accounts.map(account => `
             <form class="account-card" data-form="login">
               <input type="hidden" name="accountId" value="${account.id}">
-              <span class="account-icon">${account.role === "manager" ? "НУ" : "СМ"}</span>
+              <span class="account-icon">${account.role === "manager" ? "А" : "СМ"}</span>
               <span class="account-copy">
                 <strong>${account.title}</strong>
                 <small>${account.description}</small>
@@ -1089,7 +1089,7 @@ function renderApplication() {
         </nav>
         <div class="sidebar-footer">
           <div class="signed-user">
-            <span class="avatar">${state.account.role === "manager" ? "НУ" : "СМ"}</span>
+            <span class="avatar">${state.account.role === "manager" ? "А" : "СМ"}</span>
             <span><strong>${state.account.title}</strong><small>${escapeHtml(displayWorkstationLabel(ui("account")))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
           </div>
           <button class="text-button" data-action="logout">${ui("logout")}</button>
