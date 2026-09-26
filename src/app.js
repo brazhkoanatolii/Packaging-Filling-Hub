@@ -1203,8 +1203,12 @@ function renderProductionPeopleSummary(records) {
   });
   const shiftLeaders = presentShiftPersonnel().filter(person => ["senior-mechanic", "mechanic"].includes(person.role));
   const total = records.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const totalScrap = records.reduce((sum, record) => sum + Number(record.scrapKg || 0), 0);
+  const totalCanScrap = records.reduce((sum, record) => sum + Number(record.canScrapKg || 0), 0);
   const rows = (title, entries, suffix = "") => entries.length ? `<article><h3>${title}</h3><table><thead><tr><th>Сотрудник</th><th>Выпуск, шт</th><th>Коробки</th><th>Брак, кг</th></tr></thead><tbody>${entries.map(([name, values]) => `<tr><td>${escapeHtml(name)}${suffix}</td><td>${formatNumber(values.quantity)}</td><td>${formatNumber(values.quantity / 240)}</td><td>${formatNumber(values.scrapKg + values.canScrapKg)}</td></tr>`).join("")}</tbody></table></article>` : "";
-  const leaderEntries = shiftLeaders.map(person => [person.fullName, { quantity: total, scrapKg: 0, canScrapKg: 0 }]);
+  // Выпуск и весь брак смены засчитываются обоим руководителям смены полностью.
+  // Это показатель ответственности за смену, а не распределение объёма между людьми.
+  const leaderEntries = shiftLeaders.map(person => [person.fullName, { quantity: total, scrapKg: totalScrap, canScrapKg: totalCanScrap }]);
   if (!packers.size && !operators.size && !leaderEntries.length) return "";
   return `<section class="card table-card production-people-summary"><div class="section-heading"><div><p class="eyebrow">Смена · персональные показатели</p><h2>Кому засчитывается выпуск</h2></div><span class="status-pill neutral">Итог линии не удваивается</span></div><div class="production-people-grid">${rows("Упаковщики", [...packers.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Механики-операторы", [...operators.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Старший механик и Механик", leaderEntries, " · сменный итог")}</div></section>`;
 }
