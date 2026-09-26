@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 
 export const CENTRAL_ACCOUNTS = Object.freeze([
-  Object.freeze({ id: "manager", role: "manager", title: "Начальник участка", description: "Все журналы, настройки, сотрудники и права доступа" }),
+  Object.freeze({ id: "manager", role: "manager", title: "Администрация", description: "Все журналы, настройки, сотрудники и права доступа" }),
   Object.freeze({ id: "senior-mechanic", role: "senior", title: "Старший механик", description: "Работа со сменой и разрешёнными журналами" })
 ]);
 

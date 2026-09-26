@@ -16,15 +16,18 @@ export class ShiftService {
     const input = typeof employee === "string"
       ? { supervisor: employee, shiftNumber: 1, attendance: [{ employeeId: "legacy-supervisor", status: "present" }] }
       : employee;
-    if (!input?.supervisor) throw new Error("Выберите старшего смены");
-    if (![1, 2].includes(Number(input.shiftNumber))) throw new Error("Выберите первую или вторую смену");
+    const seniorMechanic = String(input?.seniorMechanic || input?.supervisor || "").trim();
+    const mechanic = String(input?.mechanic || "").trim();
+    if (!seniorMechanic) throw new Error("Выберите старшего механика");
     if (!Array.isArray(input.attendance) || !input.attendance.length) throw new Error("Отметьте присутствие сотрудников");
     const startedAt = new Date().toISOString();
-    const shiftNumber = Number(input.shiftNumber);
+    const shiftNumber = [1, 2].includes(Number(input.shiftNumber)) ? Number(input.shiftNumber) : 1;
     const shift = {
       active: true,
       employee: input.supervisor,
-      supervisor: input.supervisor,
+      supervisor: seniorMechanic,
+      seniorMechanic,
+      mechanic,
       shiftNumber,
       shiftTeamId: String(input.shiftTeamId || ""),
       attendance: input.attendance.map(normalizeAttendance),

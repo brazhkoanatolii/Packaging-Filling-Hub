@@ -56,7 +56,7 @@ test("central gateway authenticates users before protected journals", async () =
     const cookie = login.headers.get("set-cookie");
     assert.match(cookie, /HttpOnly/);
     assert.deepEqual((await login.json()).account, {
-      id: "manager", role: "manager", title: "Начальник участка", description: "Все журналы, настройки, сотрудники и права доступа"
+      id: "manager", role: "manager", title: "Администрация", description: "Все журналы, настройки, сотрудники и права доступа"
     });
     const session = await fetch(`${base}/api/auth/session`, { headers: { Cookie: cookie } });
     assert.equal((await session.json()).account.role, "manager");

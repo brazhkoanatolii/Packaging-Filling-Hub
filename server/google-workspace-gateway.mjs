@@ -234,7 +234,7 @@ createServer(async (request, response) => {
       return sendJson(response, 200, await getMaintenanceDueSnapshot());
     }
     if (url.pathname === "/api/maintenance" && request.method === "POST") {
-      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена Администрацией" });
       const actor = requireActor(request, ["manager", "senior"]);
       const payload = await readJsonBody(request);
       if (payload.journal === "repair") return sendJson(response, 200, await createRepairRecord(payload, actor));
@@ -250,13 +250,13 @@ createServer(async (request, response) => {
       return sendJson(response, result?.ok === false ? 400 : 200, result);
     }
     if (url.pathname === "/api/production-records" && request.method === "POST") {
-      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена Администрацией" });
       const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
       return sendJson(response, 200, { ok: true, record: await createProductionRecord(input, actor) });
     }
     if (url.pathname === "/api/production-records" && request.method === "PUT") {
-      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена начальником участка" });
+      if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена Администрацией" });
       const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
       return sendJson(response, 200, { ok: true, record: await updateProductionRecord(input, actor) });
@@ -914,7 +914,7 @@ async function getProductionSnapshot() {
 async function createProductionRecord(input) {
   await assertProductionCatalogSchema();
   const record = validateGatewayProductionRecord(input);
-  const leaders = await productionShiftLeaders(record.date, record.shift);
+  const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const rows = await getProductionShiftRows();
   const firstRowNumber = nextProductionRowNumber(rows.first, 4);
   const secondRowNumber = nextProductionRowNumber(rows.second, 2);
@@ -928,7 +928,7 @@ async function updateProductionRecord(input) {
   await assertProductionCatalogSchema();
   const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
   const record = validateGatewayProductionRecord(input);
-  const leaders = await productionShiftLeaders(record.date, record.shift);
+  const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const accessToken = await getAccessToken();
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   return { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders };
@@ -1000,9 +1000,24 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
   if (requests.length) await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, requests, "Не удалось оформить новую строку продукции");
 }
 
-async function productionShiftLeaders(date, shift) {
+async function productionShiftLeaders(date, shift, selected = null) {
   const workforce = await getWorkforceSnapshot();
-  return productionShiftLeadersFromWorkforce(workforce, date, shift);
+  const fallback = productionShiftLeadersFromWorkforce(workforce, date, shift);
+  const seniorMechanic = String(selected?.seniorMechanic || "").trim();
+  const mechanic = String(selected?.mechanic || "").trim();
+  if (!seniorMechanic || !mechanic) return fallback;
+  const teamId = shift === "A" ? "shift-team-a" : "shift-team-b";
+  const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
+  const present = (workforce.attendance ?? []).filter(item => item.date === date && item.shiftTeamId === teamId && isWorkedAttendance(item))
+    .map(item => peopleById.get(item.employeeId)).filter(Boolean);
+  const seniorPool = present.some(person => person.role === "senior-mechanic")
+    ? present.filter(person => person.role === "senior-mechanic")
+    : present.filter(person => person.role === "mechanic");
+  const mechanicPool = present.filter(person => person.role === "mechanic-operator");
+  if (!seniorPool.some(person => person.fullName === seniorMechanic) || !mechanicPool.some(person => person.fullName === mechanic)) {
+    throw new Error("Выбранные старший механик и механик должны быть отмечены в табеле этой смены.");
+  }
+  return { seniorMechanic, mechanic };
 }
 
 function productionShiftLeadersFromWorkforce(workforce, date, shift) {
@@ -1515,7 +1530,7 @@ function workforceVacations(rows, year) {
 }
 
 function workforceRole(value) {
-  return ({ "Начальник участка": "head-of-area", "Начальник производства": "production-manager", "Администратор": "administrator", "Начальник склада": "warehouse-manager", "Старший механик": "senior-mechanic", "Механик": "mechanic", "Механик-оператор": "mechanic-operator", "Упаковщик": "packer" })[String(value || "")] || "";
+  return ({ "Администрация": "head-of-area", "Начальник участка": "head-of-area", "Начальник производства": "production-manager", "Администратор": "administrator", "Начальник склада": "warehouse-manager", "Старший механик": "senior-mechanic", "Механик": "mechanic", "Механик-оператор": "mechanic-operator", "Упаковщик": "packer" })[String(value || "")] || "";
 }
 
 function workforceSubstitute(note, day) {
@@ -1668,7 +1683,7 @@ function actorFromRequest(request) {
   return {
     id: workstationRole === "manager" ? "manager" : "senior-mechanic",
     role: workstationRole,
-    title: workstationRole === "manager" ? "Начальник участка" : "Старший механик",
+    title: workstationRole === "manager" ? "Администрация" : "Старший механик",
     description: workstationLabel || "Рабочее место"
   };
 }
@@ -1741,18 +1756,36 @@ async function updateCentralShiftState(input, actor) {
     error.statusCode = 409;
     throw error;
   }
-  const shiftNumber = Number(input.shiftNumber);
-  if (![1, 2].includes(shiftNumber)) throw new Error("Выберите первую или вторую смену");
-  const supervisor = String(input.supervisor || "").trim();
-  if (!supervisor) throw new Error("Выберите старшего смены");
+  // The time-based shift selector was removed from the interface. The first
+  // shift remains the safe default because it keeps the daily scale check.
+  const shiftNumber = [1, 2].includes(Number(input.shiftNumber)) ? Number(input.shiftNumber) : 1;
+  const attendance = normalizeCentralAttendance(input.attendance);
+  const leaders = await resolveCentralShiftLeaders(input, attendance);
   const startedAt = new Date().toISOString();
   return writeCentralShiftState({
     schemaVersion: 1, active: true, shiftDate: todayInVilnius(), shiftTeamId: teamId,
-    employee: supervisor, supervisor, shiftNumber, attendance: normalizeCentralAttendance(input.attendance),
+    employee: leaders.seniorMechanic, supervisor: leaders.seniorMechanic,
+    seniorMechanic: leaders.seniorMechanic, mechanic: leaders.mechanic,
+    shiftNumber, attendance,
     startedAt, endedAt: null, startedBy: actor.id,
     requiresScaleControl: shiftNumber === 1,
     weightsCompletedAt: shiftNumber === 1 ? null : startedAt
   });
+}
+
+async function resolveCentralShiftLeaders(input, attendance) {
+  const workforce = await getWorkforceSnapshot();
+  const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
+  const present = attendance.filter(item => ["11", "K"].includes(String(item.status || "").trim()))
+    .map(item => peopleById.get(item.employeeId)).filter(Boolean);
+  const seniorMechanics = present.filter(person => person.role === "senior-mechanic");
+  const seniorPool = seniorMechanics.length ? seniorMechanics : present.filter(person => person.role === "mechanic");
+  const mechanics = present.filter(person => person.role === "mechanic-operator");
+  const seniorMechanic = String(input.seniorMechanic || input.supervisor || seniorPool[0]?.fullName || "").trim();
+  const mechanic = String(input.mechanic || mechanics[0]?.fullName || "").trim();
+  if (!seniorPool.some(person => person.fullName === seniorMechanic)) throw new Error("Старший механик должен быть отмечен присутствующим в табеле.");
+  if (!mechanics.some(person => person.fullName === mechanic)) throw new Error("Механик должен быть выбран из присутствующих механиков-операторов.");
+  return { seniorMechanic, mechanic };
 }
 
 async function scheduledCentralTeam(date) {

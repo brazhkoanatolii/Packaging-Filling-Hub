@@ -212,10 +212,18 @@ function handleInput(event) {
     const search = root.querySelector("[data-specification-search]");
     if (search) { search.focus(); search.setSelectionRange(cursor, cursor); }
   }
-  if (event.target.matches("[data-attendance-status]")) updateAttendanceCounter(event.target.form);
+  if (event.target.matches("[data-attendance-status]")) {
+    updateAttendanceCounter(event.target.form);
+    updateShiftLeadershipOptions(event.target.form);
+  }
 }
 
 async function handleChange(event) {
+  if (event.target.matches("[data-attendance-status]")) {
+    updateAttendanceCounter(event.target.form);
+    updateShiftLeadershipOptions(event.target.form);
+    return;
+  }
   if (event.target.matches("[data-specification-select]")) {
     const field = event.target.dataset.specificationSelect;
     const nextSelection = { ...state.specificationSelection, [field]: event.target.value };
@@ -302,11 +310,8 @@ async function handleSubmit(event) {
     const data = new FormData(form);
     try {
       const accountId = String(data.get("accountId") || "");
-      const responsibility = accountId === "senior-mechanic" ? loginShiftResponsibility(data) : null;
-      if (accountId === "senior-mechanic" && !responsibility) throw new Error("Выберите ответственного за смену");
       state.account = await authService.login(accountId, String(data.get("password") || ""));
-      state.shiftResponsible = responsibility;
-      if (responsibility) await store.setPreference("sessionShiftResponsible", responsibility);
+      state.shiftResponsible = null;
       state.shift = await shiftService.current();
       state.page = "dashboard";
       render();
@@ -374,9 +379,12 @@ async function handleSubmit(event) {
       toast("Табель смены обновлён.", "success");
       return;
     }
+    const leadership = shiftLeadershipFromForm(form, teamId);
     state.shift = await shiftService.start({
-      supervisor: String(data.get("supervisor") || ""),
-      shiftNumber: Number(data.get("shiftNumber")),
+      supervisor: leadership.seniorMechanic,
+      seniorMechanic: leadership.seniorMechanic,
+      mechanic: leadership.mechanic,
+      shiftNumber: 1,
       shiftTeamId: teamId,
       attendance
     });
@@ -1017,7 +1025,6 @@ function renderLogin() {
               <span class="account-copy">
                 <strong>${account.title}</strong>
                 <small>${account.description}</small>
-                ${account.role === "senior" ? renderLoginShiftResponsibility() : ""}
                 <label class="login-password"><span>Пароль</span><input name="password" type="password" inputmode="numeric" minlength="4" required autocomplete="current-password" placeholder="Введите пароль"></label>
                 <small class="login-error" data-login-error hidden></small>
               </span>
@@ -1025,27 +1032,9 @@ function renderLogin() {
             </form>
           `).join("")}
         </div>
-        <p class="privacy-note">${APP_CONFIG.centralAuth ? "Пароли хранятся только на центральном сервере. Начальник участка меняет их в «Настройках»." : "Первый пароль для каждой учётной записи: <b>0000</b>. Начальник участка меняет пароли в «Настройках"} ${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
+        <p class="privacy-note">${APP_CONFIG.centralAuth ? "Пароли хранятся только на центральном сервере. Администрация меняет их в «Настройках»." : "Первый пароль для каждой учётной записи: <b>0000</b>. Администрация меняет пароли в «Настройках"} ${APP_CONFIG.integration.mode === "demo" ? "Рабочие данные этого прототипа хранятся только в браузере и не отправляются в Google." : "Данные синхронизируются через защищённый шлюз участка."}</p>
       </section>
     </main>`;
-}
-
-function renderLoginShiftResponsibility() {
-  const team = scheduledTeam() ?? state.workforce.shiftTeams[0];
-  const primary = responsibilityCandidates(team?.id, ["senior-mechanic", "mechanic"]);
-  const backup = responsibilityCandidates(team?.id, ["mechanic-operator"]);
-  return `
-    <div class="login-responsibility">
-      <span class="login-responsibility-title">Ответственный за смену</span>
-      <small>${escapeHtml(team?.name ?? "Рабочая смена")} · старший механик или механик</small>
-      <input type="hidden" name="responsibleTeamId" value="${attribute(team?.id ?? "")}">
-      <select name="shiftResponsible" data-login-responsible required>
-        <option value="">Выберите сотрудника</option>
-        ${primary.map(employee => `<option value="${attribute(employee.id)}">${escapeHtml(employee.fullName)} · ${escapeHtml(roleLabel(employee.role))}</option>`).join("")}
-        <option value="other">Другой — механик-оператор</option>
-      </select>
-      <label data-login-responsible-other hidden><span>Механик-оператор</span><select name="otherShiftResponsible"><option value="">Выберите сотрудника</option>${backup.map(employee => `<option value="${attribute(employee.id)}">${escapeHtml(employee.fullName)}</option>`).join("")}</select></label>
-    </div>`;
 }
 
 function renderApplication() {
@@ -1258,8 +1247,8 @@ function renderDashboard() {
       </article>
       <article class="card dashboard-summary-card shift-summary">
         <p class="eyebrow">Состав текущей смены</p>
-        <h2>Упаковщики / механики-операторы</h2>
-        <strong>У-${packers.length} <small>/</small> М-${operators.length}</strong>
+        <h2>Состав смены</h2>
+        <strong><small>Упаковщиков</small> ${packers.length} <small>/ Механиков</small> ${operators.length}</strong>
         <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
       </article>
     </div>
@@ -1312,7 +1301,7 @@ function renderShiftPanel() {
   if (isCurrentSharedShift()) {
     return `
       <section class="shift-strip active">
-        <div class="shift-state"><span class="pulse"></span><div><strong>${state.shift.shiftNumber === 2 ? "Вторая" : "Первая"} смена идёт</strong><small>Старший: ${escapeHtml(state.shift.supervisor ?? state.shift.employee)}, ${formatDateTime(state.shift.startedAt)}. Завершение не меняет табель и Google-записи.</small></div></div>
+        <div class="shift-state"><span class="pulse"></span><div><strong>Рабочая смена идёт</strong><small>Старший механик: ${escapeHtml(state.shift.seniorMechanic ?? state.shift.supervisor ?? state.shift.employee)}; механик: ${escapeHtml(state.shift.mechanic || "не выбран")}. ${formatDateTime(state.shift.startedAt)}. Завершение не меняет табель и Google-записи.</small></div></div>
         <button class="danger-outline-button" data-action="end-shift">Завершить смену</button>
       </section>`;
   }
@@ -1403,9 +1392,8 @@ function renderShiftStartView() {
   const activeShift = isCurrentSharedShift() ? state.shift : null;
   const team = teamById(activeShift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
   const members = shiftStartMembers(team?.id);
-  const responsibleName = activeShift?.supervisor ?? (state.shiftResponsible?.teamId === team?.id ? state.shiftResponsible.fullName : "");
-  const responsibleInPrimaryList = members.some(employee => employee.fullName === responsibleName && ["senior-mechanic", "mechanic"].includes(employee.role));
   const savedAttendance = new Map((activeShift?.shiftTeamId === team?.id ? activeShift.attendance : []).map(item => [item.employeeId, item.status]));
+  const leadership = shiftLeadershipOptions(members, savedAttendance, activeShift);
   const presentCount = members.filter(employee => attendanceCode(savedAttendance.get(employee.id)) === "11").length;
   const scheduled = team ? getScheduleMonth(team, ...monthParts(today())).some(day => day.date === today() && day.scheduled) : false;
   return `
@@ -1418,13 +1406,13 @@ function renderShiftStartView() {
     </section>
     <form class="card shift-attendance-card" data-form="shift-attendance">
       <div class="shift-form-head">
-        <div><p class="eyebrow">Шаг 1 · состав смены</p><h2>${activeShift ? "Исправить присутствие" : "Начать рабочую смену"}</h2><p>Выберите бригаду и отметьте только тех, кто отсутствует.</p></div>
+        <div><p class="eyebrow">Шаг 1 · состав смены</p><h2>${activeShift ? "Исправить присутствие" : "Начать рабочую смену"}</h2><p>Выберите смену, отметьте присутствующих, затем назначьте старшего механика и механика.</p></div>
         <div class="attendance-counter"><strong data-attendance-present>${presentCount}</strong><span>из ${members.length}<small>на работе</small></span></div>
       </div>
       <div class="shift-start-controls">
-        <label class="field"><span>Рабочая бригада</span><select name="shiftTeamId" data-start-team ${activeShift ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Смена по времени</span><select name="shiftNumber" ${activeShift ? "disabled" : ""}><option value="1" ${activeShift?.shiftNumber !== 2 ? "selected" : ""}>Первая — нужен контроль весов</option><option value="2" ${activeShift?.shiftNumber === 2 ? "selected" : ""}>Вторая — контроль уже выполнен</option></select></label>
-        <label class="field"><span>Ответственный за смену</span><select name="supervisor" required ${activeShift ? "disabled" : ""}><option value="">Выберите сотрудника</option>${members.filter(employee => ["senior-mechanic", "mechanic"].includes(employee.role)).map(employee => `<option ${employee.fullName === responsibleName ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}${responsibleName && !responsibleInPrimaryList ? `<option value="${attribute(responsibleName)}" selected>Другой — ${escapeHtml(responsibleName)}</option>` : ""}</select></label>
+        <label class="field"><span>Рабочая смена</span><select name="shiftTeamId" data-start-team ${activeShift ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>Старший механик</span><select name="seniorMechanic" required ${activeShift ? "disabled" : ""}>${leadership.senior}</select></label>
+        <label class="field"><span>Механик</span><select name="mechanic" required ${activeShift ? "disabled" : ""}>${leadership.mechanic}</select></label>
       </div>
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
@@ -1655,7 +1643,7 @@ function openMaintenanceDialog(journalType) {
   const journal = isRepair ? state.maintenance.repair : state.maintenance.service;
   const title = isRepair ? "Добавить запись о ремонте" : "Добавить запись о ТО";
   const machines = journal.machines ?? Array.from({ length: 16 }, (_, index) => index + 1);
-  const performers = journal.performers ?? [];
+  const performers = operationalAuthorNames().length ? operationalAuthorNames() : (journal.performers ?? []);
   const categories = journal.categories ?? [];
   const workByCategory = journal.workByCategory ?? {};
   const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
@@ -1756,8 +1744,9 @@ function openProductionDialog(record = null) {
     const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
     try {
       const people = { packers: packerNames, operators: operatorNames };
-      if (record) await productionService.update(record.id, data, people);
-      else await productionService.create({ ...data, requestId: `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people);
+      const leadership = activeShiftLeadership();
+      if (record) await productionService.update(record.id, { ...data, leadership }, people);
+      else await productionService.create({ ...data, leadership, requestId: `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people);
       dialog.close(); await refreshProduction(); render(); toast(record ? "Исправления сохранены в обоих листах журнала." : "Запись сохранена в оба листа журнала.", "success");
     } catch (error) { showFormError(form, error); submit.disabled = false; }
   });
@@ -2032,7 +2021,7 @@ function renderPersonnelSettings() {
 function renderShiftSettings() {
   return `<div class="shift-settings-grid">${state.workforce.shiftTeams.map(team => `<form class="card shift-settings-card" data-form="shift-settings">
     <input type="hidden" name="id" value="${team.id}">
-    <header><span class="team-orb">${team.code}</span><div><p class="eyebrow">Рабочая бригада</p><h2>${escapeHtml(team.name)}</h2></div></header>
+    <header><span class="team-orb">${team.code}</span><div><p class="eyebrow">Рабочая смена</p><h2>${escapeHtml(team.name)}</h2></div></header>
     <div class="form-grid">
       ${formField(`team-name-${team.id}`, "Название", `<input id="team-name-${team.id}" name="name" value="${attribute(team.name)}" required>`, "Отображается в табеле", "full")}
       ${formField(`team-anchor-${team.id}`, "Первый рабочий день цикла", `<input id="team-anchor-${team.id}" name="anchorDate" type="date" value="${team.anchorDate}" required>`)}
@@ -2338,12 +2327,12 @@ function openAnnulDialog(id) {
 }
 
 function openEmployeeDialog(id = null) {
-  if (state.account.role !== "manager") throw new Error("Редактировать справочник персонала может только начальник участка.");
+  if (state.account.role !== "manager") throw new Error("Редактировать справочник персонала может только Администрация.");
   const employee = id ? personnel().find(item => item.id === id) : null;
   const dialog = createDialog(`
     <form class="dialog-card employee-dialog" data-employee-form>
       <div class="dialog-heading"><div><p class="eyebrow">Справочник персонала</p><h2>${employee ? "Изменить сотрудника" : "Новый сотрудник"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-      <p class="dialog-lead">Основные данные используются в графике смен, табеле и списке исполнителей. Личные сведения доступны только начальнику участка.</p>
+      <p class="dialog-lead">Основные данные используются в графике смен, табеле и списке исполнителей. Личные сведения доступны только Администрации.</p>
       <div id="form-error" class="form-error" hidden></div>
       <div class="form-grid">
         ${formField("employee-full-name", "Имя и фамилия", `<input id="employee-full-name" name="fullName" value="${attribute(employee?.fullName ?? "")}" autocomplete="off" required>`, "Как в рабочих документах", "full")}
@@ -2388,7 +2377,7 @@ function openEmployeeDialog(id = null) {
 }
 
 function openSpecificationDialog(id = null) {
-  if (state.account?.role !== "manager") throw new Error("Редактировать спецификации может только начальник участка.");
+  if (state.account?.role !== "manager") throw new Error("Редактировать спецификации может только Администрация.");
   const specification = id ? state.specifications.specifications.find(item => item.id === id) : null;
   const value = (field) => specification?.[field] ?? "";
   const dialog = createDialog(`
@@ -2745,6 +2734,13 @@ function productionShiftCode() {
   return teamById(state.shift?.shiftTeamId)?.code ?? "";
 }
 
+function activeShiftLeadership() {
+  const seniorMechanic = String(state.shift?.seniorMechanic || state.shift?.supervisor || "").trim();
+  const mechanic = String(state.shift?.mechanic || "").trim();
+  if (!seniorMechanic || !mechanic) throw new Error("Сначала в табеле выберите старшего механика и механика.");
+  return { seniorMechanic, mechanic };
+}
+
 function scheduledTeam(date = today()) {
   const [year, monthIndex] = monthParts(date);
   return state.workforce?.shiftTeams?.find(team => getScheduleMonth(team, year, monthIndex).some(day => day.date === date && day.scheduled)) ?? null;
@@ -2753,6 +2749,53 @@ function scheduledTeam(date = today()) {
 function isCurrentSharedShift(shift = state.shift) {
   if (!shift?.active) return false;
   return !APP_CONFIG.centralAuth || shift.shiftDate === today();
+}
+
+function shiftLeadershipOptions(members, attendance = new Map(), activeShift = null, preferred = {}) {
+  const present = members.filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
+  const seniorCandidates = present.filter(employee => employee.role === "senior-mechanic");
+  // When the senior mechanic is absent, a present mechanic is automatically
+  // offered as the shift senior. Mechanic-operators remain the mechanic list.
+  const seniorPool = seniorCandidates.length ? seniorCandidates : present.filter(employee => employee.role === "mechanic");
+  const mechanicPool = present.filter(employee => employee.role === "mechanic-operator");
+  const seniorValue = String(preferred.seniorMechanic || activeShift?.seniorMechanic || activeShift?.supervisor || "");
+  const mechanicValue = String(preferred.mechanic || activeShift?.mechanic || "");
+  const optionMarkup = (items, value, empty, autoSelect) => {
+    if (!items.length) return `<option value="" selected>${empty}</option>`;
+    const selected = items.some(employee => employee.fullName === value) ? value : (autoSelect ? items[0].fullName : "");
+    return `${autoSelect ? "" : '<option value="">Выберите сотрудника</option>'}${items.map(employee => `<option value="${attribute(employee.fullName)}" ${employee.fullName === selected ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}`;
+  };
+  return {
+    senior: optionMarkup(seniorPool, seniorValue, "Сначала отметьте присутствующих", true),
+    mechanic: optionMarkup(mechanicPool, mechanicValue, "Сначала отметьте присутствующих", false)
+  };
+}
+
+function updateShiftLeadershipOptions(form) {
+  if (!form?.matches("[data-form=shift-attendance]")) return;
+  const teamId = String(form.elements.shiftTeamId?.value || state.selectedShiftTeamId || "");
+  const members = shiftStartMembers(teamId);
+  const attendance = new Map(members.map(employee => [employee.id, form.elements[`attendance-${employee.id}`]?.value || ""]));
+  const senior = form.elements.seniorMechanic;
+  const mechanic = form.elements.mechanic;
+  if (!senior || !mechanic) return;
+  const options = shiftLeadershipOptions(members, attendance, null, { seniorMechanic: senior.value, mechanic: mechanic.value });
+  senior.innerHTML = options.senior;
+  mechanic.innerHTML = options.mechanic;
+}
+
+function shiftLeadershipFromForm(form, teamId) {
+  const members = shiftStartMembers(teamId);
+  const attendance = new Map(members.map(employee => [employee.id, form.elements[`attendance-${employee.id}`]?.value || ""]));
+  const present = members.filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
+  const seniorCandidates = present.filter(employee => employee.role === "senior-mechanic");
+  const seniorPool = seniorCandidates.length ? seniorCandidates : present.filter(employee => employee.role === "mechanic");
+  const mechanicPool = present.filter(employee => employee.role === "mechanic-operator");
+  const seniorMechanic = String(form.elements.seniorMechanic?.value || "").trim();
+  const mechanic = String(form.elements.mechanic?.value || "").trim();
+  if (!seniorPool.some(employee => employee.fullName === seniorMechanic)) throw new Error("Выберите старшего механика из присутствующих в табеле.");
+  if (!mechanicPool.some(employee => employee.fullName === mechanic)) throw new Error("Выберите механика из присутствующих механиков-операторов.");
+  return { seniorMechanic, mechanic };
 }
 
 function responsibilityCandidates(teamId, roles) {
@@ -2963,6 +3006,10 @@ function sendWorkforceInBackground() {
 }
 
 function attendanceAuthorNames(teamId) {
+  if (isCurrentSharedShift() && state.shift?.shiftTeamId === teamId) {
+    const selected = [state.shift.seniorMechanic || state.shift.supervisor, state.shift.mechanic].map(value => String(value || "").trim()).filter(Boolean);
+    if (selected.length) return [...new Set(selected)];
+  }
   const responsible = state.shiftResponsible;
   const responsibleEmployee = responsible?.teamId === teamId
     ? activePersonnel().find(employee => employee.id === responsible.employeeId)

@@ -1,5 +1,5 @@
 export const ROLE_LABELS = Object.freeze({
-  "head-of-area": "Начальник участка",
+  "head-of-area": "Администрация",
   "production-manager": "Начальник производства",
   administrator: "Администратор",
   "warehouse-manager": "Начальник склада",

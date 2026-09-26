@@ -62,7 +62,7 @@ export const ACCOUNTS = Object.freeze([
   {
     id: "manager",
     role: "manager",
-    title: "Начальник участка",
+    title: "Администрация",
     description: "Все журналы, настройки, сотрудники и права доступа"
   },
   {

@@ -140,7 +140,7 @@ if (-not $NoStart) {
   Start-Process -FilePath $powerShellPath -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", $autoUpdateScript, "-Watch") -WindowStyle Hidden
 }
 
-$roleTitle = if ($Workstation -eq "manager") { "Начальник участка" } else { "Старший механик" }
+$roleTitle = if ($Workstation -eq "manager") { "Администрация" } else { "Старший механик" }
 Write-Host ""
 Write-Host "Packaging-Filling-Hub установлен." -ForegroundColor Green
 Write-Host "Папка: $targetRoot"
