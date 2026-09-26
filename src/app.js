@@ -1256,20 +1256,20 @@ function renderDashboard() {
         <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
       </article>
     </div>
-    <section class="card dashboard-maintenance-card dashboard-repair-card">
-      <div class="section-heading"><div><p class="eyebrow">Журнал ремонта</p><h2>Последние записи ремонта</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть журнал</button></div>
-      ${renderDashboardMaintenanceList(latestRepair, "Ремонт", 10)}
-    </section>
     <div class="dashboard-maintenance-grid">
       <section class="card dashboard-maintenance-card">
-        <div class="section-heading"><div><p class="eyebrow">Журнал ТО</p><h2>Последние записи ТО</h2></div><span class="status-pill neutral">5 последних</span></div>
-        ${renderDashboardMaintenanceList(latestService, "ТО", 5)}
+        <div class="section-heading"><div><p class="eyebrow">Журнал ремонта</p><h2>Последние записи ремонта</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть журнал</button></div>
+        ${renderDashboardMaintenanceList(latestRepair, "Ремонт", 10)}
       </section>
       <section class="card dashboard-maintenance-card maintenance-overview-card">
         <div class="section-heading"><div><p class="eyebrow">Таблица ТО · выпуск</p><h2>Остаток до ТО</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Журнал ТО</button></div>
         ${renderMaintenanceDueList(state.maintenanceDue)}
       </section>
-    </div>`;
+    </div>
+    <section class="card dashboard-maintenance-card dashboard-service-card">
+      <div class="section-heading"><div><p class="eyebrow">Журнал ТО</p><h2>Последние записи ТО</h2></div><span class="status-pill neutral">5 последних</span></div>
+      ${renderDashboardMaintenanceList(latestService, "ТО", 5)}
+    </section>`;
 }
 
 function renderDashboardMaintenanceList(records, kind, limit) {
