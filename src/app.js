@@ -1051,7 +1051,7 @@ function renderLogin() {
       </section>
       <section class="login-panel" aria-label="Выбор учётной записи">
         <div class="panel-heading">
-          <span class="mode-pill">${productionMode ? escapeHtml(APP_CONFIG.workstationLabel || "Рабочее место") : "Тестовый режим"}</span>
+          <span class="mode-pill">${productionMode ? escapeHtml(displayWorkstationLabel("Рабочее место")) : "Тестовый режим"}</span>
           <h2>Кто работает?</h2>
           <p>${APP_CONFIG.centralAuth ? "Выберите рабочую учётную запись. Права определяются центральным сервером." : APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
         </div>
@@ -1090,7 +1090,7 @@ function renderApplication() {
         <div class="sidebar-footer">
           <div class="signed-user">
             <span class="avatar">${state.account.role === "manager" ? "НУ" : "СМ"}</span>
-            <span><strong>${state.account.title}</strong><small>${escapeHtml(APP_CONFIG.workstationLabel || ui("account"))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
+            <span><strong>${state.account.title}</strong><small>${escapeHtml(displayWorkstationLabel(ui("account")))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
           </div>
           <button class="text-button" data-action="logout">${ui("logout")}</button>
         </div>
@@ -2717,6 +2717,13 @@ function operationLabel(type) {
 function pageTitle() {
   if (state.page === "sync") return "Синхронизация";
   return moduleLabelById(state.page) || ui("home");
+}
+
+function displayWorkstationLabel(fallback) {
+  const configured = String(APP_CONFIG.workstationLabel || "").trim();
+  if (!configured) return fallback;
+  const administrationDevice = APP_CONFIG.workstationRole === "manager" || state.account?.role === "manager";
+  return administrationDevice ? configured.replace(/начальника(?: участка)?/giu, "администрации") : configured;
 }
 
 function modulesForAccount() {

@@ -43,7 +43,7 @@ if (-not $WorkstationId) {
   $WorkstationId = if ($Workstation -eq "manager") { "manager-work" } else { "senior-work" }
 }
 if (-not $WorkstationLabel) {
-  $WorkstationLabel = if ($Workstation -eq "manager") { "Рабочий компьютер начальника" } else { "Рабочий компьютер старшего механика" }
+  $WorkstationLabel = if ($Workstation -eq "manager") { "Рабочий компьютер администрации" } else { "Рабочий компьютер старшего механика" }
 }
 if ($WorkstationId -notmatch "^[a-z0-9][a-z0-9-]{1,63}$") {
   throw "Идентификатор рабочего места должен содержать только латинские буквы, цифры и дефисы."
