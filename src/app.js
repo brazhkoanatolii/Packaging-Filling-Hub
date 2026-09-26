@@ -284,7 +284,14 @@ async function handleSubmit(event) {
       render();
       focusPackagingQuantity();
       toast("Расход сохранён. Итог за сегодня обновлён.", "success");
-      if (navigator.onLine) void refreshPackaging(true).then(() => render());
+      // Не только перечитываем журнал: сразу отправляем новую локальную запись.
+      // При ошибке сервис сохранит её в очереди для следующей попытки.
+      if (navigator.onLine) {
+        void packagingService.sync().then((snapshot) => {
+          state.packaging = snapshot;
+          render();
+        });
+      }
     } catch (error) {
       showFormError(form, error.message || "Не удалось сохранить расход.");
       submit.disabled = false;
@@ -436,7 +443,7 @@ async function handleClick(event) {
       state.packagingWarehouse = await packagingWarehouseService.remove(id);
       render(); toast("Движение удалено из журнала склада.", "success"); return;
     }
-    if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } return; }
+    if (action === "delete-packaging") { const record = state.packaging.records.find(item => item.id === id); if (record && window.confirm(`Удалить весь расход упаковки за ${formatDate(record.date)}?`)) { await packagingService.remove(record); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void packagingService.sync().then(snapshot => { state.packaging = snapshot; render(); }); } return; }
     if (action === "sync-packaging") {
       state.packaging = await packagingService.sync(); render();
       toast(state.packaging.error || "Журнал расхода упаковки обновлён", state.packaging.error ? "warning" : "success");
@@ -826,7 +833,7 @@ async function startStartupJournalSync() {
     ["Контроль весов", async () => { await repository.refresh(); await reloadLocalState(); }],
     ["Спецификации продуктов", async () => { await refreshSpecifications(); if (state.specifications.error) throw new Error(state.specifications.error); }],
     ["Учёт продукции и брака", async () => { await refreshProduction(); if (state.production.error) throw new Error(state.production.error); }],
-    ["Расход упаковки", async () => { await refreshPackaging(); if (state.packaging.error) throw new Error(state.packaging.error); }],
+    ["Расход упаковки", async () => { state.packaging = await packagingService.sync(); if (state.packaging.error) throw new Error(state.packaging.error); }],
     ["Ремонт и ТО", async () => { await refreshMaintenance(); if (state.maintenance.error) throw new Error(state.maintenance.error); }],
     ["Сводка ТО", async () => { await refreshMaintenanceDue(); if (state.maintenanceDue.error) throw new Error(state.maintenanceDue.error); }],
     ["Очистка циклонов", async () => { await refreshCyclones(); if (state.cyclones.error) throw new Error(state.cyclones.error); }]
@@ -3034,7 +3041,7 @@ function focusPackagingQuantity() {
 function openPackagingEditDialog(record) {
   const fields = PACKAGING_FIELDS.map(field => formField(`packaging-edit-${field.key}`, field.label, `<input id="packaging-edit-${field.key}" name="${field.key}" type="number" min="0" step="0.001" value="${attribute(record.values?.[field.key] || 0)}" inputmode="decimal">`)).join("");
   const dialog = createDialog(`<form class="dialog-card packaging-dialog"><div class="dialog-heading"><h2>Изменить итог за день</h2><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>${formField("packaging-edit-date", "Дата", `<input id="packaging-edit-date" name="date" type="date" value="${attribute(record.date)}" readonly required>`)}<div class="form-grid packaging-fields">${fields}</div><p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить итог</button></div></form>`);
-  dialog.querySelector("form").addEventListener("submit", async event => { event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true; try { await packagingService.update(record, Object.fromEntries(new FormData(form)), state.account); dialog.close(); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void refreshPackaging(true).then(render); } catch (error) { showFormError(form, error); submit.disabled = false; } }); dialog.showModal();
+  dialog.querySelector("form").addEventListener("submit", async event => { event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true; try { await packagingService.update(record, Object.fromEntries(new FormData(form)), state.account); dialog.close(); state.packaging = await packagingService.snapshot(); render(); if (navigator.onLine) void packagingService.sync().then(snapshot => { state.packaging = snapshot; render(); }); } catch (error) { showFormError(form, error); submit.disabled = false; } }); dialog.showModal();
 }
 
 function formatPercent(value) {

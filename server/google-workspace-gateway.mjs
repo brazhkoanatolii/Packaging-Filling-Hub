@@ -180,7 +180,6 @@ createServer(async (request, response) => {
       return sendJson(response, 200, await getUpdateStatus());
     }
     if (url.pathname === "/api/update" && request.method === "POST") {
-      requireActor(request, ["manager", "senior"]);
       const update = await getUpdateStatus();
       if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
       if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });

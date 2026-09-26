@@ -92,8 +92,9 @@ New-Item -ItemType Directory -Path (Join-Path $targetRoot "logs") -Force | Out-N
 New-Item -ItemType Directory -Path (Join-Path $targetRoot ".runtime") -Force | Out-Null
 
 $startScript = Join-Path $targetRoot "scripts\windows\start-program.ps1"
+$autoUpdateScript = Join-Path $targetRoot "scripts\windows\auto-update.ps1"
+$powerShellPath = Join-Path $PSHOME "powershell.exe"
 if (-not $NoShortcuts) {
-  $powerShellPath = Join-Path $PSHOME "powershell.exe"
   $shortcutArguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`""
   $shell = New-Object -ComObject WScript.Shell
 
@@ -123,12 +124,13 @@ if (-not $NoShortcuts) {
 
   $startupDirectory = [Environment]::GetFolderPath("Startup")
   $startupFile = Join-Path $startupDirectory "Packaging-Filling-Hub.cmd"
-  $startupCommand = "@`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -NoBrowser"
+  $startupCommand = "@`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -NoBrowser`r`n@`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$autoUpdateScript`" -Watch"
   Set-Content -LiteralPath $startupFile -Value $startupCommand -Encoding ascii
 }
 
 if (-not $NoStart) {
   & $startScript -InstallRoot $targetRoot
+  Start-Process -FilePath $powerShellPath -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", $autoUpdateScript, "-Watch") -WindowStyle Hidden
 }
 
 $roleTitle = if ($Workstation -eq "manager") { "Начальник участка" } else { "Старший механик" }
