@@ -439,7 +439,9 @@ async function getUpdateStatus() {
 }
 
 async function readUpdateManifest(url) {
-  const response = await fetch(url, {
+  const target = new URL(url);
+  target.searchParams.set("pfh-update", String(Date.now()));
+  const response = await fetch(target, {
     headers: { Accept: "application/json", "Cache-Control": "no-cache" },
     signal: AbortSignal.timeout(7_000)
   });
@@ -448,10 +450,11 @@ async function readUpdateManifest(url) {
 }
 
 async function readFreshUpdateManifest() {
-  if (Date.now() - fallbackManifestCheckedAt < 5 * 60_000) return cachedFallbackManifest;
+  if (Date.now() - fallbackManifestCheckedAt < 60_000) return cachedFallbackManifest;
   fallbackManifestCheckedAt = Date.now();
   try {
-    const response = await fetch(updateManifestFallbackUrl, {
+    const cacheKey = String(Date.now());
+    const response = await fetch(`${updateManifestFallbackUrl}&pfh-update=${cacheKey}`, {
       headers: { Accept: "application/vnd.github+json", "User-Agent": "Packaging-Filling-Hub" },
       signal: AbortSignal.timeout(7_000)
     });
@@ -459,7 +462,7 @@ async function readFreshUpdateManifest() {
     const payload = await response.json();
     const content = Buffer.from(String(payload.content || "").replace(/\s/g, ""), "base64").toString("utf8");
     const manifest = JSON.parse(content);
-    const commitResponse = await fetch(updateRepositoryCommitUrl, {
+    const commitResponse = await fetch(`${updateRepositoryCommitUrl}?pfh-update=${cacheKey}`, {
       headers: { Accept: "application/vnd.github+json", "User-Agent": "Packaging-Filling-Hub" },
       signal: AbortSignal.timeout(7_000)
     });
