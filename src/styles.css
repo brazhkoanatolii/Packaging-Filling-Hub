@@ -239,6 +239,11 @@ h3 { margin-bottom: 5px; }
 .production-summary::after { background: #5fbe98; }
 .scrap-summary::after { background: var(--amber-500); }
 .shift-summary::after { background: #719cf0; }
+.shift-summary-counts { position: relative; z-index: 1; display: flex; align-items: baseline; gap: 10px; margin-top: 19px; }
+.shift-summary-counts > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; }
+.shift-summary-counts span { color: var(--ink-100); font-size: .92rem; font-weight: 800; letter-spacing: 0; }
+.shift-summary-counts strong { font-size: 2.35rem; letter-spacing: -.05em; line-height: 1; }
+.shift-summary-counts > i { color: var(--ink-500); font-size: 1.2rem; font-style: normal; font-weight: 750; }
 .dashboard-shift-roles { position: relative; z-index: 1; display: grid; gap: 13px; margin-top: 16px; }
 .dashboard-shift-roles div { display: grid; gap: 3px; }
 .dashboard-shift-roles span { color: var(--ink-500); font-size: .7rem; font-weight: 750; }

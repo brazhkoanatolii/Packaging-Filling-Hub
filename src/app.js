@@ -831,16 +831,33 @@ async function refreshFromSource({ silent = false } = {}) {
 
 async function refreshMaintenanceDue() {
   try {
-    const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance-due`, {
-      headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000)
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !Array.isArray(payload?.records)) throw new Error(payload?.message || "Не удалось загрузить сводку ТО");
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/maintenance-due`, {
+          headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000)
+        });
+        payload = await response.json().catch(() => null);
+        if (!response.ok || !Array.isArray(payload?.records)) throw new Error(payload?.message || "Не удалось загрузить сводку ТО");
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        const message = String(error?.message || "").toLowerCase();
+        if (!/quota|rate limit|429|слишком много/.test(message) || attempt === 2) break;
+        await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 2_000));
+      }
+    }
+    if (lastError || !Array.isArray(payload?.records)) throw lastError || new Error("Не удалось загрузить сводку ТО");
     state.maintenanceDue = { records: payload.records, source: "google", cachedAt: new Date().toISOString(), error: null };
     await store.setPreference("maintenanceDueCache", state.maintenanceDue);
   } catch (error) {
     const cached = await store.preference("maintenanceDueCache", state.maintenanceDue);
-    state.maintenanceDue = { ...cached, error: error.message || "Не удалось загрузить сводку ТО" };
+    const hasVerifiedSnapshot = Array.isArray(cached?.records) && cached.records.length > 0;
+    state.maintenanceDue = hasVerifiedSnapshot
+      ? { ...cached, source: "cache", error: null }
+      : { ...cached, error: error.message || "Не удалось загрузить сводку ТО" };
   }
   return state.maintenanceDue;
 }
@@ -1248,7 +1265,11 @@ function renderDashboard() {
       <article class="card dashboard-summary-card shift-summary">
         <p class="eyebrow">Состав текущей смены</p>
         <h2>Состав смены</h2>
-        <strong><small>Упаковщиков</small> ${packers.length} <small>/ Механиков</small> ${operators.length}</strong>
+        <div class="shift-summary-counts" aria-label="Упаковщиков: ${packers.length}. Механиков: ${operators.length}.">
+          <div><span>Упаковщиков</span><strong>${packers.length}</strong></div>
+          <i aria-hidden="true">/</i>
+          <div><span>Механиков</span><strong>${operators.length}</strong></div>
+        </div>
         <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
       </article>
     </div>

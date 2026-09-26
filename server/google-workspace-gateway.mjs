@@ -90,6 +90,9 @@ if (centralAuth) {
 
 let tokenCache = null;
 let tokenRefreshPromise = null;
+let maintenanceDueSnapshotCache = null;
+let maintenanceDueSnapshotPromise = null;
+const maintenanceDueSnapshotCacheMs = 60_000;
 let automaticDailyExportCompletedDate = null;
 let automaticDailyExportAttemptAt = 0;
 let automaticDailyProductionExportCompletedDate = null;
@@ -563,6 +566,13 @@ async function getAccessToken() {
 }
 
 async function getMaintenanceDueSnapshot() {
+  const now = Date.now();
+  if (maintenanceDueSnapshotCache && now - maintenanceDueSnapshotCache.cachedAt < maintenanceDueSnapshotCacheMs) {
+    return maintenanceDueSnapshotCache.value;
+  }
+  if (maintenanceDueSnapshotPromise) return maintenanceDueSnapshotPromise;
+
+  maintenanceDueSnapshotPromise = (async () => {
   assertGoogleConfigured();
   const accessToken = await getAccessToken();
   const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(maintenanceDueSpreadsheetId)}/values/${encodeURIComponent(maintenanceDueRange)}?valueRenderOption=FORMATTED_VALUE`;
@@ -574,7 +584,7 @@ async function getMaintenanceDueSnapshot() {
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать сводку ТО");
   const values = Array.isArray(payload.values) ? payload.values : [];
   const rows = values.slice(1);
-  return {
+  const snapshot = {
     ok: true,
     records: rows.map(row => ({
       line: String(row[0] || "").trim(),
@@ -586,6 +596,16 @@ async function getMaintenanceDueSnapshot() {
       status: String(row[6] || "").trim()
     })).filter(record => record.line && record.intervalBoxes > 0 && Number.isFinite(record.remainingBoxes))
   };
+  maintenanceDueSnapshotCache = { value: snapshot, cachedAt: Date.now() };
+  return snapshot;
+  })().catch(error => {
+    // Do not mark the journal unavailable during a short Google quota limit
+    // when this gateway has already received a verified snapshot.
+    if (maintenanceDueSnapshotCache?.value) return maintenanceDueSnapshotCache.value;
+    throw error;
+  }).finally(() => { maintenanceDueSnapshotPromise = null; });
+
+  return maintenanceDueSnapshotPromise;
 }
 
 async function createRepairRecord(input) {
