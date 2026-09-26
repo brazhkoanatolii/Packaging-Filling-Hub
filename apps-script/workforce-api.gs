@@ -77,9 +77,13 @@ function wfSavePerson_(master,teams,op) {
  if(!wfMatches_(current,op)) return wfConflict_();
  const row=found?found.row:Math.max(6,s.getLastRow()+1), team=teams.find(t=>t.id===p.shiftTeamId);
  const isPacker=p.role==='packer', vals=[wfText_(p.fullName),WF_ROLES[p.role],team.name,isPacker?wfText_(p.pakNumber??current?.pakNumber??''):'',isPacker?wfText_(p.pakCode??current?.pakCode??''):'',p.active===false?'Не работает':'Работает',wfText_(p.note||current?.note||''),String(p.id),(Number(found?.values[8])||0)+1,new Date(),op.actor.performer,p.shiftTeamId,wfDateOrEmpty_(p.birthday||current?.birthday||''),wfDateOrEmpty_(p.hireDate||current?.hireDate||''),wfText_(p.phone||current?.phone||''),wfText_(p.email||current?.email||'')];
- s.getRange(row,1,1,16).setValues([vals]);
- s.getRange(row,13,1,2).setNumberFormat('dd.MM.yyyy');
- return {ok:true,record:wfPerson_(vals,teams)};
+  s.getRange(row,1,1,16).setValues([vals]);
+  s.getRange(row,13,1,2).setNumberFormat('dd.MM.yyyy');
+  s.getRange(row,17,1,2).setFormulas([[
+    '=IF(M'+row+'="","",DATEDIF(M'+row+',TODAY(),"Y"))',
+    '=IF(N'+row+'="","",DATEDIF(N'+row+',TODAY(),"Y")&" г. "&DATEDIF(N'+row+',TODAY(),"YM")&" мес.")'
+  ]]);
+  return {ok:true,record:wfPerson_(vals,teams)};
 }
 function wfSaveTeam_(master,op) {
  const s=master.getSheetByName('Смены'), t=op.record, found=wfRows_(s,8).find(r=>String(r.values[6])===t.id);

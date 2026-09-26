@@ -1,6 +1,7 @@
 import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-config.js";
 import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYEE_IDS } from "./config/workforce-config.js";
 import { calculateResult, formatDate, formatDateTime } from "./domain/scale-check.js";
+import { formatPersonnelAge, formatPersonnelExperience } from "./domain/personnel-dates.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
 import { JournalRepository } from "./repositories/journal-repository.js";
@@ -1583,7 +1584,9 @@ function renderPersonnelPage() {
 function renderPersonnelPrivateDetails(employee) {
   return `<details class="personnel-private"><summary>Личные сведения</summary><dl>
     <div><dt>Дата рождения</dt><dd>${escapeHtml(formatPersonnelDate(employee.birthday))}</dd></div>
+    <div><dt>Возраст</dt><dd>${escapeHtml(formatPersonnelAge(employee.birthday))}</dd></div>
     <div><dt>Дата приёма</dt><dd>${escapeHtml(formatPersonnelDate(employee.hireDate))}</dd></div>
+    <div><dt>Стаж работы</dt><dd>${escapeHtml(formatPersonnelExperience(employee.hireDate))}</dd></div>
     <div class="full"><dt>Телефон</dt><dd>${escapeHtml(employee.phone || "Не указан")}</dd></div>
     <div class="full"><dt>Электронная почта</dt><dd>${escapeHtml(employee.email || "Не указана")}</dd></div>
   </dl></details>`;
