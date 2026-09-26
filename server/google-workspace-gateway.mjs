@@ -28,6 +28,9 @@ const packagingSheetName = "Лист";
 const packagingRange = "'Лист'!B2:M";
 const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
 const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
+const packagingPendingPath = process.env.PACKAGING_PENDING_PATH
+  ? resolve(process.env.PACKAGING_PENDING_PATH)
+  : join(projectRoot, ".runtime", "packaging-pending.json");
 const packagingWarehouseSpreadsheetId = "1mv7W6IcetxpSNMlTvQclPMIs15ZWZw7Q3ZE_g_NXVok";
 const packagingWarehouseSheetName = "Операции";
 const packagingWarehouseRange = "'Операции'!A6:F";
@@ -52,7 +55,7 @@ const nonconformitySpreadsheetId = "1ovuf2QW5KC4_CI1wAEUcufhZXfLreeJhN2PNVPtjlrk
 const nonconformitySheetName = "Журнал";
 const nonconformityRange = "'Журнал'!A2:H";
 const nonconformityDictionaryRange = "'Справочник несоответсвий'!B2:B";
-const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 6);
+const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 7);
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
   attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
@@ -664,6 +667,13 @@ async function getWorkforceSnapshot() {
 }
 
 async function getPackagingSnapshot() {
+  const [records, pending] = await Promise.all([getPackagingSheetRecords(), Promise.resolve(readPackagingPendingRecords())]);
+  const byDate = new Map(records.map(record => [record.date, record]));
+  for (const record of pending) byDate.set(record.date, record);
+  return { ok: true, records: [...byDate.values()].sort((left, right) => left.date.localeCompare(right.date)) };
+}
+
+async function getPackagingSheetRecords() {
   const values = await getGoogleSheetRanges(packagingSpreadsheetId, [packagingRange]);
   const rows = values[0] ?? [];
   const headers = rows[0] ?? [];
@@ -671,13 +681,21 @@ async function getPackagingSnapshot() {
     throw new Error("Изменилась структура журнала расхода упаковки");
   }
   const notes = await getPackagingDateNotes();
-  return { ok: true, records: rows.slice(1).map((row, index) => packagingRecordFromRow(row, index + 3, notes[index] || "")).filter(Boolean) };
+  return rows.slice(1).map((row, index) => packagingRecordFromRow(row, index + 3, notes[index] || "")).filter(Boolean);
 }
 
 async function createPackagingRecord(input) {
   const record = validatePackagingRecord(input);
-  const before = await getPackagingSnapshot();
-  const existing = before.records.find(item => item.date === record.date);
+  if (record.date === vilniusDate()) {
+    const pending = readPackagingPendingRecords().filter(item => item.date !== record.date);
+    writePackagingPendingRecords([...pending, { ...record, pending: true, updatedAt: new Date().toISOString() }]);
+    return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values, pending: true } };
+  }
+  const existing = (await getPackagingSheetRecords()).find(item => item.date === record.date);
+  return { ok: true, record: await writePackagingRecordToSheet(record, existing) };
+}
+
+async function writePackagingRecordToSheet(record, existing = null) {
   const accessToken = await getAccessToken();
   const sheetId = await getPackagingSheetId(accessToken);
   const serial = Math.round((Date.parse(`${record.date}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000);
@@ -686,20 +704,35 @@ async function createPackagingRecord(input) {
     { userEnteredValue: { numberValue: serial }, note: receipt, userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } },
     ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } }))
   ];
-  const request = existing ? { updateCells: { start: { sheetId, rowIndex: existing.rowNumber - 1, columnIndex: 1 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } } : { appendCells: { sheetId, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } };
+  const rowNumber = existing?.rowNumber ?? (await getNextPackagingRowNumber());
+  const requests = [];
+  if (!existing && rowNumber > 3) {
+    requests.push({ copyPaste: {
+      source: { sheetId, startRowIndex: rowNumber - 2, endRowIndex: rowNumber - 1, startColumnIndex: 1, endColumnIndex: 13 },
+      destination: { sheetId, startRowIndex: rowNumber - 1, endRowIndex: rowNumber, startColumnIndex: 1, endColumnIndex: 13 },
+      pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
+    } });
+  }
+  requests.push({ updateCells: { start: { sheetId, rowIndex: rowNumber - 1, columnIndex: 1 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } });
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, {
     method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ requests: [request] }),
+    body: JSON.stringify({ requests }),
     signal: AbortSignal.timeout(20_000)
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось записать расход упаковки");
-  return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values } };
+  return { id: `packaging-day-${record.date}`, requestId: record.requestId, rowNumber, date: record.date, values: record.values };
 }
 
 async function deletePackagingRecord(input) {
   const id = String(input?.id || ""); if (!/^packaging-day-\d{4}-\d{2}-\d{2}$/.test(id)) throw new Error("Некорректный идентификатор дневной записи");
-  const record = (await getPackagingSnapshot()).records.find(item => item.id === id); if (!record) return { ok: true };
+  const date = id.slice("packaging-day-".length);
+  const pending = readPackagingPendingRecords();
+  if (pending.some(item => item.date === date)) {
+    writePackagingPendingRecords(pending.filter(item => item.date !== date));
+    return { ok: true };
+  }
+  const record = (await getPackagingSheetRecords()).find(item => item.id === id); if (!record) return { ok: true };
   const accessToken = await getAccessToken(); const sheetId = await getPackagingSheetId(accessToken);
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
   const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
@@ -838,6 +871,7 @@ async function runAutomaticDailyPackagingExport() {
   automaticDailyExportAttemptAt = Date.now();
   const date = previousCalendarDate(clock.date);
   try {
+    await flushPendingPackagingRecord(date);
     await exportPackagingDaily({ date });
     automaticDailyExportCompletedDate = clock.date;
     console.log(`Суточный перенос расхода упаковки выполнен: ${date}`);
@@ -1285,6 +1319,53 @@ function validatePackagingRecord(input) {
   }));
   if (!Object.values(values).some(value => value > 0)) throw new Error("Не указан расход упаковки");
   return { id, requestId, date, values, workstationId: String(input.workstationId || "") };
+}
+
+function readPackagingPendingRecords() {
+  if (!existsSync(packagingPendingPath)) return [];
+  try {
+    const value = JSON.parse(readFileSync(packagingPendingPath, "utf8"));
+    if (!Array.isArray(value?.records)) return [];
+    return value.records.map(item => {
+      const date = String(item?.date || "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+      const values = Object.fromEntries(packagingKeys.map(key => [key, Number(item?.values?.[key] || 0)]));
+      if (!Object.values(values).some(number => Number.isFinite(number) && number > 0)) return null;
+      return {
+        id: `packaging-day-${date}`,
+        requestId: String(item?.requestId || ""),
+        date,
+        values,
+        workstationId: String(item?.workstationId || ""),
+        pending: true
+      };
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writePackagingPendingRecords(records) {
+  const directory = dirname(packagingPendingPath);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${packagingPendingPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ records }, null, 2)}\n`, "utf8");
+  renameSync(temporary, packagingPendingPath);
+}
+
+async function flushPendingPackagingRecord(date) {
+  const pending = readPackagingPendingRecords();
+  const record = pending.find(item => item.date === date);
+  if (!record) return false;
+  const existing = (await getPackagingSheetRecords()).find(item => item.date === date);
+  await writePackagingRecordToSheet(record, existing);
+  writePackagingPendingRecords(pending.filter(item => item.date !== date));
+  return true;
+}
+
+async function getNextPackagingRowNumber() {
+  const records = await getPackagingSheetRecords();
+  return Math.max(2, ...records.map(record => record.rowNumber)) + 1;
 }
 
 async function getPackagingDateNotes() {

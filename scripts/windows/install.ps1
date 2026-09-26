@@ -87,6 +87,7 @@ Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ROLE" -Value $Wor
 Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_ID" -Value $WorkstationId
 Set-EnvironmentValue -Path $environmentPath -Name "WORKSTATION_LABEL" -Value $WorkstationLabel
 Set-EnvironmentValue -Path $environmentPath -Name "HOST" -Value "127.0.0.1"
+Set-EnvironmentValue -Path $environmentPath -Name "AUTOMATIC_DAILY_EXPORT_HOUR" -Value "7"
 
 New-Item -ItemType Directory -Path (Join-Path $targetRoot "logs") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $targetRoot ".runtime") -Force | Out-Null
