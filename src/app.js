@@ -541,6 +541,10 @@ async function handleClick(event) {
       return;
     }
     if (action === "refresh") {
+      if (state.page === "dashboard") {
+        await startStartupJournalSync();
+        return;
+      }
       await refreshFromSource();
       return;
     }
@@ -871,6 +875,7 @@ async function refreshCurrentPage() {
   if (state.page === "cyclones") { await refreshCyclones(); return; }
   if (state.page === "packaging") { await refreshPackaging(); return; }
   if (state.page === "packaging-warehouse") { await refreshPackagingWarehouse(); return; }
+  if (state.page === "nonconformities") { await refreshNonconformities(); return; }
   if (state.page === "maintenance") { await refreshMaintenance(); return; }
   if (state.page === "production") { await refreshProduction(); return; }
   if (state.page === "specifications") { await refreshSpecifications(); return; }
