@@ -401,8 +401,16 @@ function startVerifiedUpdate(update, source) {
     ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
     : "powershell.exe";
   const shell = existsSync(windowsPowerShell) ? windowsPowerShell : "powershell.exe";
-  const child = spawn(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
-    detached: true,
+  const psLiteral = value => `'${String(value).replace(/'/g, "''")}'`;
+  // A directly detached process is silently discarded by Windows on some
+  // managed desktops.  Start-Process creates an independent installer, while
+  // this tiny launcher can safely exit as soon as Windows accepts the job.
+  const command = `Start-Process -FilePath ${psLiteral(shell)} -ArgumentList @(${[
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater,
+    "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl,
+    "-ExpectedSha256", update.sha256
+  ].map(psLiteral).join(", ")}) -WindowStyle Hidden`;
+  const child = spawn(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     stdio: "ignore",
     windowsHide: true
   });
