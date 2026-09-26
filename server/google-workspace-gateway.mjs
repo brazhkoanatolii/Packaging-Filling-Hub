@@ -366,6 +366,7 @@ createServer(async (request, response) => {
     console.log(`Суточная сводка продукции: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
     runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport);
     setInterval(() => runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport), 5 * 60_000).unref();
+    runBackgroundTask("заполнение старшего механика и механика в журнале продукции", backfillProductionLeaders);
   }
   if (process.platform === "win32") {
     console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
@@ -954,16 +955,53 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
 
 async function productionShiftLeaders(date, shift) {
   const workforce = await getWorkforceSnapshot();
+  return productionShiftLeadersFromWorkforce(workforce, date, shift);
+}
+
+function productionShiftLeadersFromWorkforce(workforce, date, shift) {
   const teamId = shift === "A" ? "shift-team-a" : "shift-team-b";
   const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
   const present = (workforce.attendance ?? [])
-    .filter(item => item.date === date && item.shiftTeamId === teamId && item.value === "K")
+    .filter(item => item.date === date && item.shiftTeamId === teamId && isWorkedAttendance(item))
     .map(item => peopleById.get(item.employeeId))
     .filter(Boolean);
   return {
     seniorMechanic: present.filter(person => person.role === "senior-mechanic").map(person => person.fullName).join("; "),
     mechanic: present.filter(person => person.role === "mechanic").map(person => person.fullName).join("; ")
   };
+}
+
+function isWorkedAttendance(item) {
+  // "11" is the current timesheet code for a complete worked shift.
+  // "K" is retained only for records made by an older installation.
+  return ["11", "K"].includes(String(item?.value || "").trim());
+}
+
+async function backfillProductionLeaders() {
+  if (!writesEnabled || missingGoogleSettings().length) return { updated: 0 };
+  const [snapshot, rows, workforce, accessToken] = await Promise.all([
+    getProductionSnapshot(), getProductionShiftRows(), getWorkforceSnapshot(), getAccessToken()
+  ]);
+  const firstByRow = new Map(rows.first.map(record => [record.rowNumber, record]));
+  const secondByRow = new Map(rows.second.map(record => [record.rowNumber, record]));
+  const updates = [];
+  for (const record of snapshot.records) {
+    const { firstRowNumber, secondRowNumber } = parseProductionRecordId(record.id);
+    const first = firstByRow.get(firstRowNumber);
+    const second = secondByRow.get(secondRowNumber);
+    if (!first || !second) continue;
+    const leaders = productionShiftLeadersFromWorkforce(workforce, record.date, record.shift);
+    if (!leaders.seniorMechanic && !leaders.mechanic) continue;
+    const firstValues = [first.seniorMechanic || leaders.seniorMechanic, first.mechanic || leaders.mechanic];
+    const secondValues = [second.seniorMechanic || leaders.seniorMechanic, second.mechanic || leaders.mechanic];
+    if (!first.seniorMechanic || !first.mechanic) updates.push({ range: `'Учет продукции 1'!O${firstRowNumber}:P${firstRowNumber}`, values: [firstValues] });
+    if (!second.seniorMechanic || !second.mechanic) updates.push({ range: `'Учет продукции 2'!O${secondRowNumber}:P${secondRowNumber}`, values: [secondValues] });
+  }
+  for (let index = 0; index < updates.length; index += 100) {
+    await setGoogleSheetRanges(productionSpreadsheetId, accessToken, updates.slice(index, index + 100));
+  }
+  if (updates.length) console.log(`Заполнены старший механик и механик: ${updates.length} строк журнала продукции.`);
+  return { updated: updates.length };
 }
 
 async function getProductionShiftRows() {
@@ -1031,6 +1069,8 @@ async function exportProductionDaily(input) {
   const records = (await getProductionSnapshot()).records.filter(record => record.date === date);
   if (!records.length) return { ok: true, date, empty: true };
   if (records.some(record => !["A", "B"].includes(String(record.shift)))) throw new Error(`В продукции за ${displayDate(date)} есть записи без смены`);
+  const accessToken = await getAccessToken();
+  await ensureProductionDailyReportRows(date, accessToken);
   const [machineRows, packerRows, scrapRows, operatorRows, leaderRows, packerHeaders, scrapHeaders, operatorHeaders, leaderHeaders, workforce] = await Promise.all([
     getGoogleSheetRanges(productionReportSpreadsheetId, [productionMachineRange]),
     getGoogleSheetRanges(productionReportSpreadsheetId, [productionPackerRange]),
@@ -1043,7 +1083,6 @@ async function exportProductionDaily(input) {
     getGoogleSheetRanges(productionReportSpreadsheetId, ["'Старшие механики и механики'!A6:V6"]),
     getWorkforceSnapshot()
   ]);
-  const accessToken = await getAccessToken();
   const [machineSheetId, packerSheetId, scrapSheetId, operatorSheetId, leaderSheetId] = await Promise.all([
     getSheetId(productionReportSpreadsheetId, "Станки", accessToken),
     getSheetId(productionReportSpreadsheetId, "Упаковщики", accessToken),
@@ -1082,6 +1121,68 @@ async function exportProductionDaily(input) {
   );
   await Promise.all(writes);
   return { ok: true, date, records: records.length };
+}
+
+function reportRowHasValues(row) {
+  return Array.isArray(row) && row.some(value => String(value ?? "").trim() !== "");
+}
+
+function nextAvailableReportRow(rows, startRow, occupied) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const rowNumber = startRow + index;
+    if (!occupied.has(rowNumber) && !reportRowHasValues(rows[index])) return rowNumber;
+  }
+  let rowNumber = startRow + rows.length;
+  while (occupied.has(rowNumber)) rowNumber += 1;
+  return rowNumber;
+}
+
+async function ensureProductionDailyReportRows(date, accessToken) {
+  const [machineRows, packerRows, scrapRows, operatorRows, leaderRows] = await Promise.all([
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionMachineRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionPackerRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionScrapRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionOperatorRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionLeaderRange])
+  ]);
+  const [machineSheetId, packerSheetId, scrapSheetId, operatorSheetId, leaderSheetId] = await Promise.all([
+    getSheetId(productionReportSpreadsheetId, "Станки", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Упаковщики", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Брак", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Механики-операторы", accessToken),
+    getSheetId(productionReportSpreadsheetId, "Старшие механики и механики", accessToken)
+  ]);
+  const formatRequests = [];
+  const values = [];
+  const addRow = (sheetName, sheetId, rows, startRow, occupied, rowValues, width) => {
+    const rowNumber = nextAvailableReportRow(rows, startRow, occupied);
+    occupied.add(rowNumber);
+    if (rowNumber > startRow) {
+      formatRequests.push({ copyPaste: {
+        source: { sheetId, startRowIndex: rowNumber - 2, endRowIndex: rowNumber - 1, startColumnIndex: 0, endColumnIndex: width },
+        destination: { sheetId, startRowIndex: rowNumber - 1, endRowIndex: rowNumber, startColumnIndex: 0, endColumnIndex: width },
+        pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
+      } });
+    }
+    const endColumn = rowValues.length === 2 ? "B" : "A";
+    values.push({ range: `'${sheetName}'!A${rowNumber}:${endColumn}${rowNumber}`, values: [rowValues] });
+  };
+  const machine = machineRows[0] ?? [];
+  const machineOccupied = new Set();
+  for (const shift of ["A", "B"]) {
+    if (!machine.some(row => googleSheetDate(row[0]) === date && String(row[1] || "").trim().toUpperCase() === shift)) {
+      addRow("Станки", machineSheetId, machine, 7, machineOccupied, [displayDate(date), shift], 13);
+    }
+  }
+  const peopleSheets = [
+    ["Упаковщики", packerSheetId, packerRows[0] ?? []], ["Брак", scrapSheetId, scrapRows[0] ?? []],
+    ["Механики-операторы", operatorSheetId, operatorRows[0] ?? []], ["Старшие механики и механики", leaderSheetId, leaderRows[0] ?? []]
+  ];
+  for (const [sheetName, sheetId, rows] of peopleSheets) {
+    if (!rows.some(row => googleSheetDate(row[0]) === date)) addRow(sheetName, sheetId, rows, 7, new Set(), [displayDate(date)], 22);
+  }
+  if (formatRequests.length) await batchGoogleSheetRequests(productionReportSpreadsheetId, accessToken, formatRequests, "Не удалось оформить новые строки сводки продукции");
+  if (values.length) await setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, values);
 }
 
 async function updateDailyPeopleValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, records, valueFor) {
@@ -1183,7 +1284,7 @@ function validatePackagingRecord(input) {
     return [key, value];
   }));
   if (!Object.values(values).some(value => value > 0)) throw new Error("Не указан расход упаковки");
-  return { id, requestId, date, values, author, workstationId: String(input.workstationId || "") };
+  return { id, requestId, date, values, workstationId: String(input.workstationId || "") };
 }
 
 async function getPackagingDateNotes() {
