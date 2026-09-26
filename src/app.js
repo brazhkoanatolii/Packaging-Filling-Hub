@@ -61,6 +61,7 @@ const state = {
   specifications: { specifications: [], source: "loading", cachedAt: null },
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
   maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
+  machineStatuses: {},
   maintenanceDue: { records: [], source: "loading", cachedAt: null, error: null },
   maintenanceView: "repair",
   production: { records: [], source: "loading", cachedAt: null, error: null },
@@ -120,6 +121,7 @@ async function bootstrap() {
     new PackagingWarehouseGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })
   ));
   state.incidents = await store.preference("incidentLogRecords", []);
+  state.machineStatuses = normalizeMachineStatuses(await store.preference("machineStatuses", {}));
   nonconformityService = new NonconformityService(store, new NonconformityRepository(new NonconformityGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })));
   state.maintenanceDue = await store.preference("maintenanceDueCache", state.maintenanceDue);
   const remoteProvider = createRemoteProvider();
@@ -586,6 +588,19 @@ async function handleClick(event) {
     if (action === "refresh-maintenance") {
       await refreshMaintenance();
       render();
+      return;
+    }
+    if (action === "toggle-machine-status") {
+      if (!['manager', 'senior'].includes(state.account?.role)) throw new Error("Изменять состояние станков могут только Администрация и Старший механик.");
+      const machine = Number(actionElement.dataset.machine);
+      if (!Number.isInteger(machine) || machine < 1 || machine > 16) return;
+      state.machineStatuses = {
+        ...state.machineStatuses,
+        [machine]: state.machineStatuses[machine] === "repair" ? "work" : "repair"
+      };
+      await store.setPreference("machineStatuses", state.machineStatuses);
+      render();
+      toast(`Станок ${machine}: ${state.machineStatuses[machine] === "repair" ? "в ремонте" : "работает"}.`, "success");
       return;
     }
     if (action === "refresh-production") {
@@ -1143,9 +1158,9 @@ function renderMaintenancePage() {
     : view === "statistics"
       ? renderMaintenanceStatistics(service, repair)
       : renderMaintenanceTable("Журнал ремонта", repair.records, "Ремонт", false, true);
-  return `<section class="section-heading"><div><p class="eyebrow">Google Sheets · два независимых журнала</p><h2>Ремонт и ТО станков</h2><p>ТО и ремонт учитываются отдельно. Данные загружаются из рабочих журналов; незаполненные бумажные записи ремонта появятся после их внесения в таблицу.</p></div><button class="secondary-button" data-action="refresh-maintenance">Обновить</button></section>
+  return `<section class="section-heading maintenance-page-heading"><div><p class="eyebrow">Ремонт и ТО</p><h2>Станки</h2></div><button class="secondary-button" data-action="refresh-maintenance">Обновить</button></section>
     ${state.maintenance.error ? `<p class="form-error">${escapeHtml(state.maintenance.error)}</p>` : ""}
-    <div class="dashboard-grid"><article class="metric-card"><span>Журнал ремонта</span><strong>${repair.statistics.total || 0}</strong><small>${repair.statistics.machinesWithRecords || 0} станков с записями</small></article><article class="metric-card"><span>Журнал ТО</span><strong>${service.statistics.total || 0}</strong><small>${service.statistics.machinesWithRecords || 0} станков с записями</small></article></div>
+    ${renderMachineStatusPanel({ interactive: true })}
     <nav class="settings-tabs card maintenance-tabs" aria-label="Разделы журналов">${tabs.map(([key, label]) => `<button class="${view === key ? "active" : ""}" data-action="maintenance-view" data-view="${key}"><strong>${label}</strong></button>`).join("")}</nav>
     ${content}`;
 }
@@ -1273,6 +1288,7 @@ function renderDashboard() {
         <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
       </article>
     </div>
+    ${renderMachineStatusPanel({ compact: true })}
     <div class="dashboard-maintenance-grid">
       <section class="card dashboard-maintenance-card">
         <div class="section-heading"><div><p class="eyebrow">Журнал ремонта</p><h2>Последние записи ремонта</h2></div><button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть журнал</button></div>
@@ -2753,6 +2769,34 @@ function teamLabel(id) {
 
 function productionShiftCode() {
   return teamById(state.shift?.shiftTeamId)?.code ?? "";
+}
+
+function normalizeMachineStatuses(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(Array.from({ length: 16 }, (_, index) => {
+    const machine = index + 1;
+    return [machine, source[machine] === "repair" ? "repair" : "work"];
+  }));
+}
+
+function renderMachineStatusPanel({ compact = false, interactive = false } = {}) {
+  const statuses = normalizeMachineStatuses(state.machineStatuses);
+  const repairCount = Object.values(statuses).filter(status => status === "repair").length;
+  const canEdit = interactive && ["manager", "senior"].includes(state.account?.role);
+  const tiles = Array.from({ length: 16 }, (_, index) => {
+    const machine = index + 1;
+    const status = statuses[machine];
+    const label = status === "repair" ? "В ремонте" : "Работает";
+    const tag = interactive ? "button" : "div";
+    const attributes = interactive
+      ? ` type="button" data-action="toggle-machine-status" data-machine="${machine}" ${canEdit ? "" : "disabled"} aria-label="Станок ${machine}: ${label}. ${canEdit ? "Нажмите, чтобы изменить состояние." : ""}"`
+      : ` aria-label="Станок ${machine}: ${label}"`;
+    return `<${tag} class="machine-status-tile ${status}"${attributes}><strong>${machine}</strong><span>${label}</span></${tag}>`;
+  }).join("");
+  return `<section class="card machine-status-panel ${compact ? "compact" : ""}">
+    <div class="machine-status-heading"><div><p class="eyebrow">Состояние станков</p><h2>${repairCount ? `В ремонте: ${repairCount}` : "Все станки работают"}</h2></div>${interactive ? `<small>${canEdit ? "Нажмите плитку, чтобы изменить состояние" : "Только просмотр"}</small>` : `<button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть</button>`}</div>
+    <div class="machine-status-grid">${tiles}</div>
+  </section>`;
 }
 
 function activeShiftLeadership() {
