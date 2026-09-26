@@ -397,7 +397,11 @@ function startVerifiedUpdate(update, source) {
   const updater = join(projectRoot, "scripts", "windows", "update-program.ps1");
   if (!existsSync(updater)) throw new Error("Не найден сценарий обновления");
   console.log(`[update] ${source}: версия ${update.version}.`);
-  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
+  const windowsPowerShell = process.env.SystemRoot
+    ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : "powershell.exe";
+  const shell = existsSync(windowsPowerShell) ? windowsPowerShell : "powershell.exe";
+  const child = spawn(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", updater, "-InstallRoot", projectRoot, "-PackageUrl", update.packageUrl, "-ExpectedSha256", update.sha256], {
     detached: true,
     stdio: "ignore",
     windowsHide: true

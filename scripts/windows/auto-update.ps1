@@ -15,6 +15,10 @@ $logDirectory = Join-Path $installPath "logs"
 $packagePath = Join-Path $installPath "package.json"
 $updaterPath = Join-Path $installPath "scripts\windows\update-program.ps1"
 $manifestApi = "https://api.github.com/repos/brazhkoanatolii/Packaging-Filling-Hub-Updates/contents/update-manifest.json?ref=main"
+$powerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)) {
+  $powerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+}
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
@@ -58,7 +62,7 @@ function Invoke-AutomaticUpdate {
       return $false
     }
     Write-UpdateLog "Найдена версия $($manifest.version). Запускаем установку без участия пользователя."
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updaterPath -InstallRoot $installPath -PackageUrl $manifest.packageUrl -ExpectedSha256 $manifest.sha256
+    & $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $updaterPath -InstallRoot $installPath -PackageUrl $manifest.packageUrl -ExpectedSha256 $manifest.sha256
     $installedVersion = (Get-Content -LiteralPath $packagePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
     if ($installedVersion -ne $manifest.version) { throw "Установлена версия $installedVersion вместо $($manifest.version)." }
     Write-UpdateLog "Версия $installedVersion установлена автоматически."
@@ -74,7 +78,10 @@ if (-not $mutex.WaitOne(0)) { exit 0 }
 try {
   do {
     $installed = Invoke-AutomaticUpdate
-    if ($installed -or -not $Watch) { break }
+    # The installer deliberately starts another watcher.  During this update
+    # the current watcher owns the mutex, so that second process exits.  Keep
+    # this watcher alive instead of exiting after the first successful update.
+    if (-not $Watch) { break }
     Start-Sleep -Seconds 60
   } while ($true)
 } finally {
