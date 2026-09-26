@@ -594,13 +594,17 @@ async function handleClick(event) {
       if (!['manager', 'senior'].includes(state.account?.role)) throw new Error("Изменять состояние станков могут только Администрация и Старший механик.");
       const machine = Number(actionElement.dataset.machine);
       if (!Number.isInteger(machine) || machine < 1 || machine > 16) return;
+      const statuses = ["work", "attention", "repair"];
+      const current = normalizeMachineStatuses(state.machineStatuses)[machine];
+      const next = statuses[(statuses.indexOf(current) + 1) % statuses.length];
       state.machineStatuses = {
         ...state.machineStatuses,
-        [machine]: state.machineStatuses[machine] === "repair" ? "work" : "repair"
+        [machine]: next
       };
       await store.setPreference("machineStatuses", state.machineStatuses);
       render();
-      toast(`Станок ${machine}: ${state.machineStatuses[machine] === "repair" ? "в ремонте" : "работает"}.`, "success");
+      const label = { work: "рабочая", attention: "требует внимания", repair: "в ремонте" }[next];
+      toast(`Станок ${machine}: ${label}.`, next === "repair" ? "warning" : "success");
       return;
     }
     if (action === "refresh-production") {
@@ -2775,26 +2779,28 @@ function normalizeMachineStatuses(value) {
   const source = value && typeof value === "object" ? value : {};
   return Object.fromEntries(Array.from({ length: 16 }, (_, index) => {
     const machine = index + 1;
-    return [machine, source[machine] === "repair" ? "repair" : "work"];
+    return [machine, ["work", "attention", "repair"].includes(source[machine]) ? source[machine] : "work"];
   }));
 }
 
 function renderMachineStatusPanel({ compact = false, interactive = false } = {}) {
   const statuses = normalizeMachineStatuses(state.machineStatuses);
   const repairCount = Object.values(statuses).filter(status => status === "repair").length;
+  const attentionCount = Object.values(statuses).filter(status => status === "attention").length;
   const canEdit = interactive && ["manager", "senior"].includes(state.account?.role);
   const tiles = Array.from({ length: 16 }, (_, index) => {
     const machine = index + 1;
     const status = statuses[machine];
-    const label = status === "repair" ? "В ремонте" : "Работает";
+    const label = { work: "Рабочая", attention: "Требует внимания", repair: "В ремонте" }[status];
     const tag = interactive ? "button" : "div";
     const attributes = interactive
-      ? ` type="button" data-action="toggle-machine-status" data-machine="${machine}" ${canEdit ? "" : "disabled"} aria-label="Станок ${machine}: ${label}. ${canEdit ? "Нажмите, чтобы изменить состояние." : ""}"`
-      : ` aria-label="Станок ${machine}: ${label}"`;
+      ? ` type="button" data-action="toggle-machine-status" data-machine="${machine}" ${canEdit ? "" : "disabled"} aria-label="Станок ${machine}: ${label}. ${canEdit ? "Нажмите, чтобы изменить состояние." : ""}" title="Станок ${machine}: ${label}"`
+      : ` aria-label="Станок ${machine}: ${label}" title="Станок ${machine}: ${label}"`;
     return `<${tag} class="machine-status-tile ${status}"${attributes}><strong>${machine}</strong><span>${label}</span></${tag}>`;
   }).join("");
   return `<section class="card machine-status-panel ${compact ? "compact" : ""}">
-    <div class="machine-status-heading"><div><p class="eyebrow">Состояние станков</p><h2>${repairCount ? `В ремонте: ${repairCount}` : "Все станки работают"}</h2></div>${interactive ? `<small>${canEdit ? "Нажмите плитку, чтобы изменить состояние" : "Только просмотр"}</small>` : `<button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть</button>`}</div>
+    <div class="machine-status-heading"><div><p class="eyebrow">Состояние станков</p><h2>${repairCount ? `В ремонте: ${repairCount}` : attentionCount ? `Требуют внимания: ${attentionCount}` : "Все станки работают"}</h2></div>${interactive ? `<small>${canEdit ? "Клик: рабочая → требует внимания → в ремонте" : "Только просмотр"}</small>` : `<button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть</button>`}</div>
+    <div class="machine-status-legend" aria-label="Обозначения"><span class="work">Рабочая</span><span class="attention">Требует внимания</span><span class="repair">В ремонте</span></div>
     <div class="machine-status-grid">${tiles}</div>
   </section>`;
 }
