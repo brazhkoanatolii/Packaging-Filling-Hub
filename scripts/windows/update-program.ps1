@@ -29,6 +29,20 @@ function Set-EnvironmentValue {
   Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
+function Get-Sha256 {
+  param([string]$Path)
+  # Get-FileHash is unavailable on some older Windows PowerShell hosts used by
+  # the automatic updater.  The .NET SHA256 API is available on all targets.
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "")
+  } finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+  }
+}
+
 $targetRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 $logDirectory = Join-Path $targetRoot "logs"
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -57,7 +71,7 @@ $expandedPath = Join-Path $temporaryRoot "package"
 try {
   New-Item -ItemType Directory -Path $expandedPath -Force | Out-Null
   Invoke-WebRequest -Uri $uri.AbsoluteUri -OutFile $archivePath -UseBasicParsing
-  $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+  $actualHash = Get-Sha256 -Path $archivePath
   if (-not [string]::Equals($actualHash, $ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Контрольная сумма не совпала. Обновление отменено."
   }
