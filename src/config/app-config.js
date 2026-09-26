@@ -2,7 +2,9 @@ const runtimeConfig = globalThis.__PACKAGING_FILLING_CONFIG__ ?? {};
 
 export const APP_CONFIG = Object.freeze({
   name: "Packaging-Filling-Hub",
-  version: "0.8.79",
+  // The gateway reads this from its installed package, so the number shown in
+  // the interface always matches the program that is actually running.
+  version: typeof runtimeConfig.version === "string" ? runtimeConfig.version : "не определена",
   locale: "ru-RU",
   timeZone: "Europe/Vilnius",
   refreshIntervalMs: 60_000,

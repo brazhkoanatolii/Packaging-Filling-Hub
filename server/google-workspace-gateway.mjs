@@ -125,6 +125,7 @@ createServer(async (request, response) => {
         workstationRole: centralMode ? null : workstationRole,
         workstationId: centralMode ? null : workstationId,
         workstationLabel: centralMode ? "Центральный сервер участка" : workstationLabel,
+        version: appVersion,
         centralAuth: centralMode
       })});`);
     }
