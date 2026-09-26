@@ -2775,10 +2775,8 @@ function isCurrentSharedShift(shift = state.shift) {
 function shiftLeadershipOptions(members, attendance = new Map(), activeShift = null, preferred = {}) {
   const present = members.filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
   const seniorCandidates = present.filter(employee => employee.role === "senior-mechanic");
-  // When the senior mechanic is absent, a present mechanic is automatically
-  // offered as the shift senior. Mechanic-operators remain the mechanic list.
-  const seniorPool = seniorCandidates.length ? seniorCandidates : present.filter(employee => employee.role === "mechanic");
-  const mechanicPool = present.filter(employee => employee.role === "mechanic-operator");
+  const directMechanics = present.filter(employee => employee.role === "mechanic");
+  const seniorPool = seniorCandidates.length ? seniorCandidates : directMechanics;
   const seniorValue = String(preferred.seniorMechanic || activeShift?.seniorMechanic || activeShift?.supervisor || "");
   const mechanicValue = String(preferred.mechanic || activeShift?.mechanic || "");
   const optionMarkup = (items, value, empty, autoSelect) => {
@@ -2786,9 +2784,14 @@ function shiftLeadershipOptions(members, attendance = new Map(), activeShift = n
     const selected = items.some(employee => employee.fullName === value) ? value : (autoSelect ? items[0].fullName : "");
     return `${autoSelect ? "" : '<option value="">Выберите сотрудника</option>'}${items.map(employee => `<option value="${attribute(employee.fullName)}" ${employee.fullName === selected ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}`;
   };
+  const selectedSenior = seniorPool.some(employee => employee.fullName === seniorValue) ? seniorValue : seniorPool[0]?.fullName || "";
+  // A regular mechanic is the default choice. Mechanic-operators are used
+  // only when no regular mechanic is present or that mechanic leads the shift.
+  const mechanicPool = directMechanics.filter(employee => employee.fullName !== selectedSenior);
+  const fallbackMechanicPool = mechanicPool.length ? mechanicPool : present.filter(employee => employee.role === "mechanic-operator");
   return {
     senior: optionMarkup(seniorPool, seniorValue, "Сначала отметьте присутствующих", true),
-    mechanic: optionMarkup(mechanicPool, mechanicValue, "Сначала отметьте присутствующих", true)
+    mechanic: optionMarkup(fallbackMechanicPool, mechanicValue, "Сначала отметьте присутствующих", true)
   };
 }
 
@@ -2810,12 +2813,14 @@ function shiftLeadershipFromForm(form, teamId) {
   const attendance = new Map(members.map(employee => [employee.id, form.elements[`attendance-${employee.id}`]?.value || ""]));
   const present = members.filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
   const seniorCandidates = present.filter(employee => employee.role === "senior-mechanic");
-  const seniorPool = seniorCandidates.length ? seniorCandidates : present.filter(employee => employee.role === "mechanic");
-  const mechanicPool = present.filter(employee => employee.role === "mechanic-operator");
+  const directMechanics = present.filter(employee => employee.role === "mechanic");
+  const seniorPool = seniorCandidates.length ? seniorCandidates : directMechanics;
   const seniorMechanic = String(form.elements.seniorMechanic?.value || "").trim();
   const mechanic = String(form.elements.mechanic?.value || "").trim();
+  const mechanicPool = directMechanics.filter(employee => employee.fullName !== seniorMechanic);
+  const fallbackMechanicPool = mechanicPool.length ? mechanicPool : present.filter(employee => employee.role === "mechanic-operator");
   if (!seniorPool.some(employee => employee.fullName === seniorMechanic)) throw new Error("Выберите старшего механика из присутствующих в табеле.");
-  if (!mechanicPool.some(employee => employee.fullName === mechanic)) throw new Error("Выберите механика из присутствующих механиков-операторов.");
+  if (!fallbackMechanicPool.some(employee => employee.fullName === mechanic)) throw new Error("Выберите механика из присутствующих в табеле.");
   return { seniorMechanic, mechanic };
 }
 
