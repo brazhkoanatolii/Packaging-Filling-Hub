@@ -1765,7 +1765,17 @@ async function updateCentralShiftState(input, actor) {
     if (!current?.active) throw new Error("Общая смена не начата");
     if (current.shiftDate !== todayInVilnius()) throw new Error("Активная смена относится к другой дате. Сначала завершите её явно.");
     const attendance = normalizeCentralAttendance(input.attendance);
-    return writeCentralShiftState({ ...current, attendance, attendanceUpdatedAt: new Date().toISOString(), updatedBy: actor.id });
+    const leaders = await resolveCentralShiftLeaders(input, attendance);
+    return writeCentralShiftState({
+      ...current,
+      attendance,
+      employee: leaders.seniorMechanic,
+      supervisor: leaders.seniorMechanic,
+      seniorMechanic: leaders.seniorMechanic,
+      mechanic: leaders.mechanic,
+      attendanceUpdatedAt: new Date().toISOString(),
+      updatedBy: actor.id
+    });
   }
   if (action !== "start") throw new Error("Неизвестное действие со сменой");
   if (current?.active) throw new Error("На центральном сервере уже есть активная смена. Сначала завершите или исправьте её.");

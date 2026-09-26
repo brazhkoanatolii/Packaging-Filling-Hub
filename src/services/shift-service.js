@@ -40,14 +40,17 @@ export class ShiftService {
     return shift;
   }
 
-  async updateAttendance(attendance) {
-    if (this.remote) return this.remote.update("update-attendance", { attendance });
+  async updateAttendance(attendance, leadership = {}) {
+    if (this.remote) return this.remote.update("update-attendance", { attendance, ...leadership });
     const current = await this.current();
     if (!current?.active) throw new Error("Смена не начата");
     if (!Array.isArray(attendance) || !attendance.length) throw new Error("Отметьте присутствие сотрудников");
     const shift = {
       ...current,
       attendance: attendance.map(normalizeAttendance),
+      seniorMechanic: String(leadership.seniorMechanic || current.seniorMechanic || current.supervisor || "").trim(),
+      supervisor: String(leadership.seniorMechanic || current.seniorMechanic || current.supervisor || "").trim(),
+      mechanic: String(leadership.mechanic || current.mechanic || "").trim(),
       attendanceUpdatedAt: new Date().toISOString()
     };
     await this.store.setPreference("activeShift", shift);

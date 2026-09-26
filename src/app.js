@@ -371,7 +371,8 @@ async function handleSubmit(event) {
     const changes = attendanceChanges(teamId, attendance);
     if (changes.length && !window.confirm(attendanceChangeMessage(changes))) return;
     if (isCurrentSharedShift()) {
-      state.shift = await shiftService.updateAttendance(attendance);
+      const leadership = shiftLeadershipFromForm(form, teamId);
+      state.shift = await shiftService.updateAttendance(attendance, leadership);
       await saveShiftAttendanceToTimesheet(teamId, attendance, changes);
       state.shiftGuests = [];
       state.workforce = await workforceService.snapshot();
@@ -1267,7 +1268,6 @@ function renderDashboard() {
         <h2>Состав смены</h2>
         <div class="shift-summary-counts" aria-label="Упаковщиков: ${packers.length}. Механиков: ${operators.length}.">
           <div><span>Упаковщиков</span><strong>${packers.length}</strong></div>
-          <i aria-hidden="true">/</i>
           <div><span>Механиков</span><strong>${operators.length}</strong></div>
         </div>
         <p>${shiftPersonnel.length ? "Учтены отмеченные в табеле сотрудники" : "Состав появится после отметки табеля"}</p>
@@ -1432,8 +1432,8 @@ function renderShiftStartView() {
       </div>
       <div class="shift-start-controls">
         <label class="field"><span>Рабочая смена</span><select name="shiftTeamId" data-start-team ${activeShift ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Старший механик</span><select name="seniorMechanic" required ${activeShift ? "disabled" : ""}>${leadership.senior}</select></label>
-        <label class="field"><span>Механик</span><select name="mechanic" required ${activeShift ? "disabled" : ""}>${leadership.mechanic}</select></label>
+        <label class="field"><span>Старший механик</span><select name="seniorMechanic" required>${leadership.senior}</select></label>
+        <label class="field"><span>Механик</span><select name="mechanic" required>${leadership.mechanic}</select></label>
       </div>
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
@@ -2788,7 +2788,7 @@ function shiftLeadershipOptions(members, attendance = new Map(), activeShift = n
   };
   return {
     senior: optionMarkup(seniorPool, seniorValue, "Сначала отметьте присутствующих", true),
-    mechanic: optionMarkup(mechanicPool, mechanicValue, "Сначала отметьте присутствующих", false)
+    mechanic: optionMarkup(mechanicPool, mechanicValue, "Сначала отметьте присутствующих", true)
   };
 }
 

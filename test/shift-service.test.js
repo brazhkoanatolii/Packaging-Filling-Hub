@@ -49,6 +49,15 @@ test("отметки табеля можно исправить в активн�
   assert.ok(updated.attendanceUpdatedAt);
 });
 
+test("исправление табеля сохраняет выбранных старшего механика и механика", async () => {
+  const service = new ShiftService(createStore());
+  await service.start({ supervisor: "Старший", mechanic: "Первый механик", shiftNumber: 1, attendance });
+  const updated = await service.updateAttendance(attendance, { seniorMechanic: "Новый старший", mechanic: "Механик-оператор" });
+  assert.equal(updated.seniorMechanic, "Новый старший");
+  assert.equal(updated.supervisor, "Новый старший");
+  assert.equal(updated.mechanic, "Механик-оператор");
+});
+
 test("в центральном режиме смена берётся из общего провайдера, а не из IndexedDB", async () => {
   const calls = [];
   const remote = {
@@ -57,6 +66,6 @@ test("в центральном режиме смена берётся из об
   };
   const service = new ShiftService(createStore(), remote);
   assert.equal((await service.current()).shiftTeamId, "shift-team-b");
-  await service.updateAttendance(attendance);
-  assert.deepEqual(calls, ["current", { action: "update-attendance", payload: { attendance } }]);
+  await service.updateAttendance(attendance, { seniorMechanic: "Старший", mechanic: "Механик-оператор" });
+  assert.deepEqual(calls, ["current", { action: "update-attendance", payload: { attendance, seniorMechanic: "Старший", mechanic: "Механик-оператор" } }]);
 });
