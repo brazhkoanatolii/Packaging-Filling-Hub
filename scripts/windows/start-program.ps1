@@ -22,13 +22,12 @@ function Get-EnvironmentValue {
   return $Fallback
 }
 
-function Test-PackagingHub {
+function Get-PackagingHubHealth {
   param([string]$HealthUrl)
   try {
-    $response = Invoke-RestMethod -Uri $HealthUrl -Method Get -TimeoutSec 2
-    return $response.ok -eq $true -and [bool]$response.version
+    return Invoke-RestMethod -Uri $HealthUrl -Method Get -TimeoutSec 2
   } catch {
-    return $false
+    return $null
   }
 }
 
@@ -51,8 +50,18 @@ if (-not $node) {
 $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT" -Fallback "4173"
 $url = "http://127.0.0.1:$port/"
 $healthUrl = "${url}api/health"
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $installPath "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
+$runningHealth = Get-PackagingHubHealth -HealthUrl $healthUrl
 
-if (-not (Test-PackagingHub -HealthUrl $healthUrl)) {
+# During an update the old gateway can still answer on the port.  Do not treat
+# that as success: replace it only when its reported version differs from the
+# files just installed.  This keeps ordinary launches untouched and makes an
+# update restart the actual program instead of merely refreshing the browser.
+if (-not $runningHealth -or $runningHealth.version -ne $expectedVersion) {
+  if ($runningHealth) {
+    & (Join-Path $installPath "scripts\windows\stop-program.ps1") -InstallRoot $installPath
+    Start-Sleep -Milliseconds 500
+  }
   New-Item -ItemType Directory -Path $runtimePath -Force | Out-Null
   New-Item -ItemType Directory -Path $logPath -Force | Out-Null
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -70,7 +79,8 @@ if (-not (Test-PackagingHub -HealthUrl $healthUrl)) {
   $started = $false
   for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
     Start-Sleep -Milliseconds 500
-    if (Test-PackagingHub -HealthUrl $healthUrl) {
+    $health = Get-PackagingHubHealth -HealthUrl $healthUrl
+    if ($health -and $health.version -eq $expectedVersion) {
       $started = $true
       break
     }

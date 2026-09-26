@@ -559,8 +559,8 @@ async function handleClick(event) {
       const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update`, { method: "POST", headers: { Accept: "application/json" } });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.message || "Не удалось запустить обновление");
-      toast("Обновление скачивается и проверяется. Программа перезапустится через несколько секунд.", "success");
-      window.setTimeout(() => window.location.reload(), 9000);
+      toast("Обновление скачивается и проверяется. Ожидаем запуск новой версии…", "success");
+      await waitForInstalledUpdate(result.version);
       return;
     }
     if (action === "refresh-maintenance") {
@@ -895,6 +895,26 @@ async function checkForUpdate({ announce = false } = {}) {
     if (announce) toast(state.update.message, "warning");
     render();
   }
+}
+
+async function waitForInstalledUpdate(expectedVersion) {
+  const deadline = Date.now() + 45_000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => window.setTimeout(resolve, 1_000));
+    try {
+      const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/health`, { cache: "no-store" });
+      const health = await response.json();
+      if (response.ok && health.ok && health.version === expectedVersion) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      // The old gateway is expected to be briefly unavailable while it is replaced.
+    }
+  }
+  state.update.installing = false;
+  render();
+  toast("Файлы обновления получены, но новая версия не запустилась. Перезапустите программу и сообщите, если версия не изменилась.", "warning");
 }
 
 async function syncRecords({ silent = false } = {}) {
