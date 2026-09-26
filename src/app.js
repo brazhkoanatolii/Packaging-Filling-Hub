@@ -540,11 +540,18 @@ async function handleClick(event) {
       toast("Локальная незавершённая смена сохранена в архиве. Отметки табеля не менялись.", "success");
       return;
     }
-    if (action === "refresh") {
+    if (action === "refresh-and-reload") {
       if (state.page === "dashboard") {
         await startStartupJournalSync();
-        return;
+      } else {
+        await refreshFromSource();
       }
+      // Once Google data has been read, reload the interface just as F5 would.
+      // This also makes sure that the newest interface files are displayed.
+      window.location.reload();
+      return;
+    }
+    if (action === "refresh") {
       await refreshFromSource();
       return;
     }
@@ -1070,7 +1077,7 @@ function renderApplication() {
             <button class="icon-button theme-button" data-action="toggle-theme" title="${ui("theme")}" aria-label="${ui("theme")}">${state.theme === "dark" ? sunIcon() : moonIcon()}</button>
             ${connectionBadge()}
             <button class="utility-button ${state.update.available ? "update-available" : ""}" data-action="${state.update.available ? "install-update" : "check-update"}" title="${escapeHtml(state.update.message || "Проверить обновление программы")}" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Обновляем…" : state.update.available ? `Обновить ${escapeHtml(state.update.version)}` : "Обновить программу"}</button>
-            <button class="icon-button" data-action="refresh" title="${state.refreshing ? "Обновляем текущий раздел" : ui("refresh")}" aria-label="${ui("refresh")}" ${state.refreshing ? "disabled" : ""}>${state.refreshing ? "…" : refreshIcon()}</button>
+            <button class="icon-button" data-action="refresh-and-reload" title="Обновить данные и экран (как F5)" aria-label="Обновить данные и экран" ${(state.refreshing || state.startupSync.active) ? "disabled" : ""}>${(state.refreshing || state.startupSync.active) ? "…" : refreshIcon()}</button>
           </div>
         </header>
 
