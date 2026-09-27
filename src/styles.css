@@ -604,6 +604,26 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .attendance-counter small { opacity: .75; font-size: .62rem; }
 .shift-attendance-card > .form-error { margin: 14px 20px 0; }
 .shift-attendance-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 16px; padding: 5px 20px; }
+.personnel-distribution-card { margin-top: 18px; }
+.personnel-distribution-card > header { padding: 20px 20px 0; }
+.personnel-distribution-card > header p:last-child { margin: 6px 0 0; color: var(--ink-500); font-size: .8rem; }
+.personnel-distribution-selectors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 18px 20px; }
+.personnel-distribution-selectors fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.personnel-distribution-selectors legend { padding: 0 4px; color: var(--ink-500); font-size: .72rem; font-weight: 800; }
+.distribution-options { display: grid; gap: 6px; }
+.distribution-options label { display: flex; align-items: center; gap: 8px; min-height: 27px; font-size: .8rem; font-weight: 700; }
+.distribution-options input { accent-color: var(--green-600); }
+.distribution-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 20px 20px; }
+.distribution-actions small, .distribution-empty { color: var(--ink-500); font-size: .78rem; }
+.distribution-empty { margin: 18px 20px; }
+.distribution-result { padding: 18px 20px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--green-100) 35%, var(--surface)); }
+.distribution-result h3 { margin: 0 0 12px; font-size: .95rem; }
+.distribution-result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.distribution-result-grid article, .distribution-unassigned { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.distribution-result-grid article > strong { color: var(--green-700); }
+.distribution-result-grid span, .distribution-unassigned span { display: grid; gap: 2px; font-size: .82rem; font-weight: 700; }
+.distribution-result small, .distribution-unassigned small { color: var(--ink-500); font-size: .67rem; font-weight: 700; }
+.distribution-unassigned { margin-top: 12px; border-color: color-mix(in srgb, var(--amber-500) 45%, var(--line)); }
 .shift-person-row.is-substitute { background: color-mix(in srgb, var(--amber-100) 72%, var(--surface)); }
 .substitute-badge { display: inline-flex !important; width: fit-content; margin-top: 4px; padding: 3px 6px; border-radius: 7px; background: var(--amber-100); color: #8a5a10 !important; font-size: .61rem !important; font-weight: 800; }
 .remove-shift-guest { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid color-mix(in srgb, var(--red-600) 35%, var(--line)); border-radius: 8px; background: var(--surface-raised); color: var(--red-600); font-size: 1.1rem; }
@@ -904,6 +924,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .journal-actions { flex-direction: column-reverse; }
   .workflow-steps, .placeholder-grid { grid-template-columns: 1fr; }
   .shift-attendance-list { grid-template-columns: 1fr; }
+  .personnel-distribution-selectors { grid-template-columns: 1fr; }
   .settings-links { grid-template-columns: 1fr; }
   .schedule-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .schedule-summary-card.office { grid-column: 1 / -1; }
@@ -1024,6 +1045,8 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .shift-form-head, .shift-form-footer, .settings-intro, .roadmap-card, .placeholder-hero { align-items: stretch; flex-direction: column; }
   .shift-form-controls { grid-template-columns: 1fr; }
   .shift-start-controls { grid-template-columns: 1fr; }
+  .distribution-actions { align-items: stretch; flex-direction: column; }
+  .distribution-actions .primary-button { width: 100%; }
   .shift-start-controls .field:last-child { grid-column: auto; }
   .shift-day-banner { grid-template-columns: auto minmax(0,1fr); }
   .shift-day-banner > b { display: none; }

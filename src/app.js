@@ -3,6 +3,7 @@ import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYE
 import { calculateResult, formatDate as formatJournalDate, formatDateTime as formatJournalDateTime } from "./domain/scale-check.js";
 import { formatPersonnelAge, formatPersonnelExperience } from "./domain/personnel-dates.js";
 import { getScaleControlReminder } from "./domain/scale-control-reminder.js";
+import { distributePersonnel } from "./domain/personnel-distribution.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
 import { JournalRepository } from "./repositories/journal-repository.js";
@@ -61,6 +62,7 @@ const state = {
   selectedShiftTeamId: null,
   shiftResponsible: null,
   shiftGuests: [],
+  personnelDistribution: null,
   specifications: { specifications: [], source: "loading", cachedAt: null },
   cyclones: { records: [], operations: [], lastReadAt: null, error: null },
   maintenance: { service: { records: [], statistics: {} }, repair: { records: [], statistics: {} }, error: null },
@@ -339,6 +341,7 @@ async function handleChange(event) {
   if (event.target.matches("[data-start-team]")) {
     state.selectedShiftTeamId = event.target.value;
     state.shiftGuests = [];
+    state.personnelDistribution = null;
     render();
     return;
   }
@@ -366,6 +369,27 @@ async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
+  if (form.dataset.form === "personnel-distribution") {
+    const data = new FormData(form);
+    const teamId = String(data.get("teamId") || "");
+    const members = shiftStartMembers(teamId);
+    const attendance = attendanceForShiftStart(teamId, isCurrentSharedShift() ? state.shift : null);
+    const present = new Map(members
+      .filter(employee => attendanceCode(attendance.get(employee.id)) === "11")
+      .map(employee => [employee.id, employee]));
+    const lines = data.getAll("line").map(String).filter(line => PRODUCTION_LINES.includes(line));
+    const operatorIds = data.getAll("operator").map(String).filter(id => present.get(id)?.role === "mechanic-operator");
+    const packerIds = data.getAll("packer").map(String).filter(id => present.get(id)?.role === "packer");
+    state.personnelDistribution = {
+      teamId,
+      lines,
+      operatorIds,
+      packerIds,
+      result: distributePersonnel({ lines, operatorIds, packerIds })
+    };
+    render();
+    return;
+  }
   if (form.dataset.form === "packaging-quick") {
     const data = Object.fromEntries(new FormData(form));
     const submit = form.querySelector('[type="submit"]');
@@ -1580,7 +1604,38 @@ function renderShiftStartView() {
       </div>
       <div class="shift-guest-actions"><button type="button" class="secondary-button" data-action="add-shift-guest">+ Добавить сотрудника другой смены</button><small>Выберите причину: подработка или производственная необходимость.</small></div>
       <div class="shift-form-footer"><p>${activeShift ? "Исправления сохраняются в общей активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${activeShift ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
-    </form>`;
+    </form>
+    ${renderPersonnelDistribution(team, members, savedAttendance)}`;
+}
+
+function renderPersonnelDistribution(team, members, attendance) {
+  const present = members.filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
+  const operators = present.filter(employee => employee.role === "mechanic-operator");
+  const packers = present.filter(employee => employee.role === "packer");
+  const previous = state.personnelDistribution?.teamId === team?.id ? state.personnelDistribution : null;
+  const selected = values => new Set(previous?.[values] ?? []);
+  const selectedLines = selected("lines");
+  const selectedOperators = selected("operatorIds");
+  const selectedPackers = selected("packerIds");
+  const personById = new Map(present.map(employee => [employee.id, employee]));
+  const checkboxList = (name, options, selectedIds) => options.length
+    ? `<div class="distribution-options">${options.map(option => `<label><input type="checkbox" name="${name}" value="${attribute(option.id ?? option)}" ${selectedIds.has(option.id ?? option) ? "checked" : ""}><span>${escapeHtml(option.fullName ?? option)}</span></label>`).join("")}</div>`
+    : `<p class="distribution-empty">Нет присутствующих сотрудников этой роли.</p>`;
+  const name = id => escapeHtml(personById.get(id)?.fullName || "—");
+  const result = previous?.result;
+  return `<section class="card personnel-distribution-card">
+    <header class="section-heading"><div><p class="eyebrow">Необязательный помощник</p><h2>Распределение персонала</h2><p>Выберите работающие линии и присутствующих сотрудников. Результат случайный, сохраняется только на экране и никуда не отправляется.</p></div></header>
+    ${present.length ? `<form data-form="personnel-distribution">
+      <input type="hidden" name="teamId" value="${attribute(team?.id || "")}">
+      <div class="personnel-distribution-selectors">
+        <fieldset><legend>Линии в работе</legend>${checkboxList("line", PRODUCTION_LINES, selectedLines)}</fieldset>
+        <fieldset><legend>Механики-операторы</legend>${checkboxList("operator", operators, selectedOperators)}</fieldset>
+        <fieldset><legend>Упаковщики</legend>${checkboxList("packer", packers, selectedPackers)}</fieldset>
+      </div>
+      <div class="distribution-actions"><small>Выбор можно менять и распределять заново — запись не создаётся.</small><button class="primary-button" type="submit">Распределить вразброс</button></div>
+    </form>` : `<p class="distribution-empty">Сначала отметьте присутствующих в табеле и сохраните состав смены.</p>`}
+    ${result ? `<section class="distribution-result" aria-live="polite"><h3>Автоматическая расстановка</h3>${result.lines.length ? `<div class="distribution-result-grid">${result.lines.map(item => `<article><strong>Линия ${escapeHtml(item.line)}</strong><span><small>Механик-оператор</small>${item.operatorId ? name(item.operatorId) : "Не выбран"}</span><span><small>Упаковщик</small>${item.packerId ? name(item.packerId) : "Не выбран"}</span></article>`).join("")}</div>` : `<p class="distribution-empty">Выберите хотя бы одну линию.</p>`}${result.unassignedOperatorIds.length || result.unassignedPackerIds.length ? `<div class="distribution-unassigned"><strong>Без линии</strong>${result.unassignedOperatorIds.length ? `<span><small>Механики-операторы</small>${result.unassignedOperatorIds.map(name).join(", ")}</span>` : ""}${result.unassignedPackerIds.length ? `<span><small>Упаковщики</small>${result.unassignedPackerIds.map(name).join(", ")}</span>` : ""}</div>` : ""}</section>` : ""}
+  </section>`;
 }
 
 function attendanceForShiftStart(teamId, activeShift = null) {
