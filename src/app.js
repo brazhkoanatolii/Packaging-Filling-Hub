@@ -948,7 +948,9 @@ async function checkForUpdate({ announce = false } = {}) {
     state.update.checked = true;
     state.update.available = response.ok && result.available === true;
     state.update.version = state.update.available ? result.version : null;
-    state.update.message = state.update.available ? `Доступна версия ${result.version}` : "Новая версия не найдена";
+    state.update.message = state.update.available
+      ? `Доступна версия ${result.version}`
+      : String(result.message || "Новая версия не найдена");
     if (state.update.available && announce) toast(`Доступна версия ${result.version}. Нажмите «Обновить программу» в верхней панели.`, "warning");
     if (!state.update.available && announce) toast(state.update.message, "success");
     render();
@@ -2803,10 +2805,9 @@ function presentShiftPersonnel() {
     ? state.shift.shiftTeamId
     : state.selectedShiftTeamId ?? scheduledTeam()?.id;
   if (!teamId) return [];
-  const attendance = new Map((isCurrentSharedShift() && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
-    .map(item => [item.employeeId, attendanceCode(item.status)]));
-  const unsavedGuests = new Set(state.shiftGuests.map(item => item.employeeId));
-  return shiftStartMembers(teamId).filter(employee => attendance.get(employee.id) === "11" || unsavedGuests.has(employee.id));
+  const activeShift = isCurrentSharedShift() && state.shift.shiftTeamId === teamId ? state.shift : null;
+  const attendance = attendanceForShiftStart(teamId, activeShift);
+  return shiftStartMembers(teamId).filter(employee => attendanceCode(attendance.get(employee.id)) === "11");
 }
 
 function isSubstituteOnly(employee) {
