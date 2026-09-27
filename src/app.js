@@ -567,28 +567,7 @@ async function handleClick(event) {
     }
     if (action === "navigate") {
       actionElement.closest("dialog")?.close();
-      state.page = page;
-      render();
-      if (page === "maintenance") {
-        await refreshMaintenance();
-        render();
-      }
-      if (page === "production") {
-        await refreshProduction();
-        render();
-      }
-      if (page === "packaging") {
-        await refreshPackaging();
-        render();
-      }
-      if (page === "packaging-warehouse") {
-        await refreshPackagingWarehouse();
-        render();
-      }
-      if (page === "nonconformities") {
-        await refreshNonconformities();
-        render();
-      }
+      await navigateToPage(page);
       return;
     }
     if (action === "new-record") {
@@ -843,6 +822,17 @@ async function handleClick(event) {
   } catch (error) {
     toast(error.message || "Не удалось выполнить действие", "error");
   }
+}
+
+async function navigateToPage(page) {
+  state.page = page;
+  render();
+  if (page === "maintenance") await refreshMaintenance();
+  if (page === "production") await refreshProduction();
+  if (page === "packaging") await refreshPackaging();
+  if (page === "packaging-warehouse") await refreshPackagingWarehouse();
+  if (page === "nonconformities") await refreshNonconformities();
+  if (["maintenance", "production", "packaging", "packaging-warehouse", "nonconformities"].includes(page)) render();
 }
 
 async function reloadLocalState() {
@@ -2763,6 +2753,12 @@ function createDialog(content) {
       dialog.close();
       return;
     }
+    const navigation = event.target.closest('[data-action="mobile-navigate"]');
+    if (navigation) {
+      dialog.close();
+      void navigateToPage(navigation.dataset.page);
+      return;
+    }
     const rect = dialog.getBoundingClientRect();
     const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
     if (outside) dialog.close();
@@ -2829,7 +2825,7 @@ function openMobileMenu() {
       <button class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button>
     </header>
     <nav class="mobile-menu-grid" aria-label="Все разделы">
-      ${modulesForAccount().map(module => `<button class="mobile-menu-item ${state.page === module.id ? "active" : ""}" data-action="navigate" data-page="${module.id}">${moduleIcon(module.icon)}<span>${moduleLabel(module)}</span></button>`).join("")}
+      ${modulesForAccount().map(module => `<button class="mobile-menu-item ${state.page === module.id ? "active" : ""}" data-action="mobile-navigate" data-page="${module.id}">${moduleIcon(module.icon)}<span>${moduleLabel(module)}</span></button>`).join("")}
     </nav>
   </section>`);
   dialog.showModal();
