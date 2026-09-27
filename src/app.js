@@ -497,6 +497,7 @@ async function handleClick(event) {
 
   try {
     if (action === "new-cyclone") { openCycloneDialog(); return; }
+    if (action === "open-mobile-menu") { openMobileMenu(); return; }
     if (action === "add-incident") { openIncidentDialog(); return; }
     if (action === "delete-incident") {
       if (state.account?.role !== "manager") throw new Error("Удалять записи может только начальник участка.");
@@ -565,6 +566,7 @@ async function handleClick(event) {
       return;
     }
     if (action === "navigate") {
+      actionElement.closest("dialog")?.close();
       state.page = page;
       render();
       if (page === "maintenance") {
@@ -2816,8 +2818,21 @@ function renderMobileNav() {
     ${navItem("attendance", moduleLabelById("attendance"), attendanceIcon())}
     ${navItem("journals", moduleLabelById("journals"), journalIcon())}
     ${navItem("cyclones", moduleLabelById("cyclones"), moduleIcon("cyclone"))}
-    ${state.account.role === "manager" ? navItem("settings", moduleLabelById("settings"), settingsIcon()) : navItem("personnel", moduleLabelById("personnel"), personnelIcon())}
+    <button class="nav-item" data-action="open-mobile-menu" aria-haspopup="dialog">${settingsIcon()}<span>Меню</span></button>
   </nav>`;
+}
+
+function openMobileMenu() {
+  const dialog = createDialog(`<section class="dialog-card mobile-menu-dialog">
+    <header class="dialog-heading">
+      <div><p class="eyebrow">Основное меню</p><h2>Все разделы</h2></div>
+      <button class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button>
+    </header>
+    <nav class="mobile-menu-grid" aria-label="Все разделы">
+      ${modulesForAccount().map(module => `<button class="mobile-menu-item ${state.page === module.id ? "active" : ""}" data-action="navigate" data-page="${module.id}">${moduleIcon(module.icon)}<span>${moduleLabel(module)}</span></button>`).join("")}
+    </nav>
+  </section>`);
+  dialog.showModal();
 }
 
 function metricCard(label, value, note, tone, compactValue = false) {

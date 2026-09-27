@@ -518,6 +518,10 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .fatal-error .brand-mark { margin-bottom: 20px; }
 .fatal-error p { max-width: 550px; color: var(--ink-500); }
 .mobile-nav { display: none; }
+.mobile-menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 18px; }
+.mobile-menu-item { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 700; text-align: left; }
+.mobile-menu-item svg { width: 21px; color: var(--green-600); flex: 0 0 auto; }
+.mobile-menu-item.active { border-color: var(--green-500); background: var(--green-100); color: var(--green-700); }
 
 .journal-symbol.muted { background: var(--blue-100); color: #426d8e; }
 .scale-overview { margin: 18px 0; }
@@ -993,6 +997,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
   .packaging-toolbar { align-items: flex-start; flex-direction: column; }
   .field.full { grid-column: auto; }
   .dialog-card { padding: 19px; }
+  .mobile-menu-grid { grid-template-columns: 1fr; gap: 8px; padding-top: 14px; }
   .dialog-actions { flex-direction: column-reverse; }
   .dialog-actions button { width: 100%; }
   .compact-record { grid-template-columns: 34px minmax(0,1fr); }
