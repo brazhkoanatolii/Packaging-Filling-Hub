@@ -106,7 +106,7 @@ let refreshTimer;
 let clockTimer;
 const updateActivity = {
   sessionId: crypto.randomUUID(),
-  lastInteractionAt: 0,
+  lastInteractionAt: Date.now(),
   submittingUntil: 0,
   heartbeatTimer: null
 };
@@ -262,7 +262,7 @@ function updateSafetyPayload() {
     dirty: Boolean(document.querySelector("form[data-update-dirty='true']")),
     submitting: Date.now() < updateActivity.submittingUntil,
     pending: pendingUpdateOperations(),
-    lastInteractionAt: updateActivity.lastInteractionAt || Date.now(),
+    lastInteractionAt: updateActivity.lastInteractionAt,
     visible: !document.hidden
   };
 }

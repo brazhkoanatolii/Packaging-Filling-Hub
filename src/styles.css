@@ -960,7 +960,11 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .specification-empty { min-height: 330px; }
 
 @media (max-width: 600px) {
-  .topbar h1 { font-size: 1.45rem; }
+  .topbar { min-height: 0; align-items: flex-start; flex-wrap: wrap; gap: 7px; padding: 10px 12px; }
+  .topbar-title { width: 100%; min-width: 0; }
+  .topbar-title .eyebrow { display: none; }
+  .topbar h1 { overflow: hidden; font-size: 1.45rem; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-actions { width: 100%; justify-content: space-between; gap: 4px; }
   .connection-badge { width: 11px; height: 11px; padding: 0; overflow: hidden; border: 0; background: transparent; color: transparent; }
   .connection-badge i { flex: 0 0 8px; }
   .metric-grid, .metric-grid.three { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
