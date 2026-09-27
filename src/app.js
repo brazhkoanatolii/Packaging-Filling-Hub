@@ -1476,7 +1476,7 @@ function renderShiftStartView() {
   const activeShift = isCurrentSharedShift() ? state.shift : null;
   const team = teamById(activeShift?.shiftTeamId ?? state.selectedShiftTeamId) ?? state.workforce.shiftTeams[0];
   const members = shiftStartMembers(team?.id);
-  const savedAttendance = new Map((activeShift?.shiftTeamId === team?.id ? activeShift.attendance : []).map(item => [item.employeeId, item.status]));
+  const savedAttendance = attendanceForShiftStart(team?.id, activeShift);
   const leadership = shiftLeadershipOptions(members, savedAttendance, activeShift);
   const presentCount = members.filter(employee => attendanceCode(savedAttendance.get(employee.id)) === "11").length;
   const scheduled = team ? getScheduleMonth(team, ...monthParts(today())).some(day => day.date === today() && day.scheduled) : false;
@@ -1510,6 +1510,18 @@ function renderShiftStartView() {
       <div class="shift-guest-actions"><button type="button" class="secondary-button" data-action="add-shift-guest">+ Добавить сотрудника другой смены</button><small>Выберите причину: подработка или производственная необходимость.</small></div>
       <div class="shift-form-footer"><p>${activeShift ? "Исправления сохраняются в общей активной смене и не требуют нового запуска." : "После сохранения появится напоминание о весах, но другие разделы останутся доступны."}</p><button class="primary-button" type="submit">${activeShift ? "Сохранить исправления" : "Подтвердить состав и начать"}</button></div>
     </form>`;
+}
+
+function attendanceForShiftStart(teamId, activeShift = null) {
+  if (!teamId) return new Map();
+  const source = activeShift?.shiftTeamId === teamId
+    ? activeShift.attendance
+    : (state.workforce.attendance || []).filter(item => item.date === today() && item.shiftTeamId === teamId);
+  const attendance = new Map((source || []).map(item => [item.employeeId, item.status ?? item.value]));
+  state.shiftGuests
+    .filter(item => !attendance.has(item.employeeId))
+    .forEach(item => attendance.set(item.employeeId, "11"));
+  return attendance;
 }
 
 function renderLegacyShiftWarning() {
@@ -2902,7 +2914,9 @@ function shiftLeadershipOptions(members, attendance = new Map(), activeShift = n
   const fallbackMechanicPool = mechanicPool.length ? mechanicPool : present.filter(employee => employee.role === "mechanic-operator");
   return {
     senior: optionMarkup(seniorPool, seniorValue, "Сначала отметьте присутствующих", true),
-    mechanic: optionMarkup(fallbackMechanicPool, mechanicValue, "Не назначен", false, true)
+    // If a regular mechanic is present, select them automatically. A
+    // mechanic-operator remains an optional fallback, never a forced choice.
+    mechanic: optionMarkup(fallbackMechanicPool, mechanicValue, "Не назначен", mechanicPool.length > 0, true)
   };
 }
 
