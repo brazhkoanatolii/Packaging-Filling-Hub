@@ -618,6 +618,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .distribution-empty { margin: 18px 20px; }
 .distribution-result { padding: 18px 20px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--green-100) 35%, var(--surface)); }
 .distribution-result h3 { margin: 0 0 12px; font-size: .95rem; }
+.distribution-run-counter { display: inline-flex; margin-left: 8px; padding: 3px 8px; border-radius: 999px; background: var(--blue-100); color: var(--blue-700); font-size: .75rem; font-weight: 800; vertical-align: middle; }
 .distribution-result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
 .distribution-result-grid article, .distribution-unassigned { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .distribution-result-grid article > strong { color: var(--green-700); }

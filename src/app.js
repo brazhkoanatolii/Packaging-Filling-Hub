@@ -380,12 +380,13 @@ async function handleSubmit(event) {
     const lines = data.getAll("line").map(String).filter(line => PRODUCTION_LINES.includes(line));
     const operatorIds = data.getAll("operator").map(String).filter(id => present.get(id)?.role === "mechanic-operator");
     const packerIds = data.getAll("packer").map(String).filter(id => present.get(id)?.role === "packer");
+    const runNumber = nextPersonnelDistributionRun(teamId);
     state.personnelDistribution = {
       teamId,
       lines,
       operatorIds,
       packerIds,
-      result: distributePersonnel({ lines, operatorIds, packerIds })
+      result: { ...distributePersonnel({ lines, operatorIds, packerIds }), runNumber }
     };
     render();
     return;
@@ -1634,7 +1635,7 @@ function renderPersonnelDistribution(team, members, attendance) {
       </div>
       <div class="distribution-actions"><small>Выбор можно менять и распределять заново — запись не создаётся.</small><button class="primary-button" type="submit">Распределить вразброс</button></div>
     </form>` : `<p class="distribution-empty">Сначала отметьте присутствующих в табеле и сохраните состав смены.</p>`}
-    ${result ? `<section class="distribution-result" aria-live="polite"><h3>Автоматическая расстановка</h3>${result.lines.length ? `<div class="distribution-result-grid">${result.lines.map(item => `<article><strong>Линия ${escapeHtml(item.line)}</strong><span><small>Механик-оператор</small>${item.operatorId ? name(item.operatorId) : "Не выбран"}</span><span><small>Упаковщик</small>${item.packerId ? name(item.packerId) : "Не выбран"}</span></article>`).join("")}</div>` : `<p class="distribution-empty">Выберите хотя бы одну линию.</p>`}${result.unassignedOperatorIds.length || result.unassignedPackerIds.length ? `<div class="distribution-unassigned"><strong>Без линии</strong>${result.unassignedOperatorIds.length ? `<span><small>Механики-операторы</small>${result.unassignedOperatorIds.map(name).join(", ")}</span>` : ""}${result.unassignedPackerIds.length ? `<span><small>Упаковщики</small>${result.unassignedPackerIds.map(name).join(", ")}</span>` : ""}</div>` : ""}</section>` : ""}
+    ${result ? `<section class="distribution-result" aria-live="polite"><h3>Автоматическая расстановка <span class="distribution-run-counter">№ ${formatNumber(result.runNumber || 1)}</span></h3>${result.lines.length ? `<div class="distribution-result-grid">${result.lines.map(item => `<article><strong>Линия ${escapeHtml(item.line)}</strong><span><small>Механик-оператор</small>${item.operatorId ? name(item.operatorId) : "Не выбран"}</span><span><small>Упаковщик</small>${item.packerId ? name(item.packerId) : "Не выбран"}</span></article>`).join("")}</div>` : `<p class="distribution-empty">Выберите хотя бы одну линию.</p>`}${result.unassignedOperatorIds.length || result.unassignedPackerIds.length ? `<div class="distribution-unassigned"><strong>Без линии</strong>${result.unassignedOperatorIds.length ? `<span><small>Механики-операторы</small>${result.unassignedOperatorIds.map(name).join(", ")}</span>` : ""}${result.unassignedPackerIds.length ? `<span><small>Упаковщики</small>${result.unassignedPackerIds.map(name).join(", ")}</span>` : ""}</div>` : ""}</section>` : ""}
   </section>`;
 }
 
@@ -3347,6 +3348,22 @@ function showInlineFormError(form, message) {
 
 function today() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: APP_CONFIG.timeZone }).format(new Date());
+}
+
+function personnelDistributionCounterKey(teamId, date = today()) {
+  return `pfh-personnel-distribution-runs:${date}:${String(teamId || "")}`;
+}
+
+function nextPersonnelDistributionRun(teamId) {
+  const key = personnelDistributionCounterKey(teamId);
+  try {
+    const current = Number.parseInt(window.localStorage.getItem(key) || "0", 10);
+    const next = Number.isFinite(current) && current > 0 ? current + 1 : 1;
+    window.localStorage.setItem(key, String(next));
+    return next;
+  } catch {
+    return 1;
+  }
 }
 
 function shiftMonth(value, offset) {
