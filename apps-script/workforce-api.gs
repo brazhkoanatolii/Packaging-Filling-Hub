@@ -97,6 +97,7 @@ function wfSaveTeam_(master,op) {
 function wfSaveAttendance_(people,teams,op) {
  const p=op.record, date=String(p.date||''), parsed=wfDate_(date),year=Number(date.slice(0,4)),month=Number(date.slice(5,7)),day=Number(date.slice(8,10));
  if(!WF_YEARS.includes(year)) throw new Error('Табель подготовлен на 2025–2029 годы');
+  if(op.role==='senior'&&date!==Utilities.formatDate(new Date(),'Europe/Vilnius','yyyy-MM-dd')) throw new Error('Старший механик может исправлять табель только за текущий день смены. Прошлые даты исправляет Администрация.');
  const employee=people.find(e=>e.id===p.employeeId);if(!employee)throw new Error('Сотрудник не найден');
  if(employee.shiftTeamId==='office')throw new Error('В табель фасовочного участка можно вносить только сотрудников смен.');
  if(!teams.some(t=>t.id===p.shiftTeamId))throw new Error('Смена не найдена');

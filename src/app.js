@@ -348,6 +348,9 @@ async function handleChange(event) {
   if (event.target.matches("[data-timesheet-cell]")) {
     const select = event.target;
     try {
+      if (!canEditTimesheetDate(select.dataset.date)) {
+        throw new Error("Старший механик может исправлять табель только за текущий день смены.");
+      }
       await withWorkforceActor(() => workforceService.saveAttendance({
         date: select.dataset.date,
         shiftTeamId: select.dataset.shiftTeamId,
@@ -1694,7 +1697,10 @@ function renderScheduleTeam(team, days) {
 function renderTimesheetView() {
   const days = monthDays(state.attendanceMonth);
   const teams = teamsWithCurrentShiftFirst();
-  return `${renderWorkforceMonthToolbar("Табель рабочего времени", "Нажмите на ячейку, чтобы изменить часы или причину отсутствия")}
+  const editHint = state.account?.role === "senior"
+    ? "Старший механик может изменять только текущий день; прошлые даты исправляет Администрация"
+    : "Нажмите на ячейку, чтобы изменить часы или причину отсутствия";
+  return `${renderWorkforceMonthToolbar("Табель рабочего времени", editHint)}
     <section class="attendance-code-strip">${ATTENDANCE_CODES.map(item => `<span class="tone-${item.tone}"><b>${item.value}</b>${item.label}</span>`).join("")}</section>
     <div class="schedule-groups">${teams.map(team => renderTimesheetTeam(team, days)).join("")}</div>`;
 }
@@ -1725,7 +1731,9 @@ function renderTimesheetRow(employee, team, days, schedule, records) {
     const value = record?.value ?? (workforceRepository ? "" : String(team.accountingHours));
     const hours = Number(value);
     if (Number.isFinite(hours)) total += hours;
-    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}">${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
+    const canEdit = canEditTimesheetDate(day.date);
+    const editNote = canEdit ? "" : " title=\"Прошлые даты может исправлять только Администрация\"";
+    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} ${canEdit ? "" : "is-readonly"} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}"${editNote} ${canEdit ? "" : "disabled"}>${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
   }).join("");
   return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substituteNote}</th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
 }
@@ -3348,6 +3356,10 @@ function showInlineFormError(form, message) {
 
 function today() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: APP_CONFIG.timeZone }).format(new Date());
+}
+
+function canEditTimesheetDate(date) {
+  return state.account?.role === "manager" || String(date || "") === today();
 }
 
 function personnelDistributionCounterKey(teamId, date = today()) {
