@@ -97,13 +97,17 @@ function validateProductionRecord(input, { packers, operators }) {
   if (!["A", "B"].includes(shift)) throw new Error("Смена должна быть определена из табеля");
   const note = String(input.note || "").trim();
   if (note.length > 5000) throw new Error("Примечание не должно превышать 5000 символов");
+  const seniorMechanic = String(input.leadership?.seniorMechanic || "").trim();
+  const mechanic = String(input.leadership?.mechanic || "").trim();
+  if (!seniorMechanic) throw new Error("Выберите старшего механика из текущей смены");
   return {
     requestId: String(input.requestId || makeId("production-request")), date, startTime, time,
     product: text("product", "Продукт"), strength: numeric("strength", "Крепость", true),
     catalogLine: text("catalogLine", "Линейка продукта"),
     quantity: numeric("quantity", "Количество готовой продукции", true), scrapKg: numeric("scrapKg", "Брак продукции"),
     canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer,
-    operator: [operator, operatorSecond].filter(Boolean).join(PARTICIPANT_SEPARATOR), machineLine: line, shift, note
+    operator: [operator, operatorSecond].filter(Boolean).join(PARTICIPANT_SEPARATOR), machineLine: line, shift,
+    seniorMechanic, mechanic, note
   };
 }
 

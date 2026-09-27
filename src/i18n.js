@@ -47,6 +47,7 @@ const RU_LT = {
 // catalog lets every view use one rendering path instead of maintaining three
 // copies of a journal form.
 Object.assign(RU_EN, {
+  "Механик (необязательно)": "Mechanic (optional)", "Не назначен": "Not assigned",
   "Проверено:": "Checked:", "шт.": "pcs", "кор.": "boxes", "рул.": "rolls", "записей": "entries", "записи": "entries", "запись": "entry",
   "Смена B работает по графику": "Shift B is scheduled to work", "Цикл 2 рабочих / 2 выходных · 12 ч на производстве · 11 учётных часов": "2 workdays / 2 days off · 12 h in production · 11 recorded hours",
   "ШАГ 1 · СОСТАВ СМЕНЫ": "STEP 1 · SHIFT TEAM", "Исправить присутствие": "Edit attendance", "Выберите смену, отметьте присутствующих, затем назначьте старшего механика и механика.": "Select a shift, mark attendees, then assign the senior mechanic and mechanic.", "Рабочая смена": "Work shift", "Выберите сотрудника": "Select employee", "На работе": "At work", "полная": "full", "на работе": "at work", "Сохранить исправления": "Save changes", "Добавить сотрудника другой смены": "Add employee from another shift",
@@ -62,6 +63,7 @@ Object.assign(RU_EN, {
 });
 
 Object.assign(RU_LT, {
+  "Механик (необязательно)": "Mechanikas (nebūtinas)", "Не назначен": "Nepaskirtas",
   "Проверено:": "Patikrinta:", "шт.": "vnt.", "кор.": "dėž.", "рул.": "rit.", "записей": "įrašų", "записи": "įrašai", "запись": "įrašas",
   "Смена B работает по графику": "B pamaina dirba pagal grafiką", "Цикл 2 рабочих / 2 выходных · 12 ч на производстве · 11 учётных часов": "2 darbo dienos / 2 poilsio dienos · 12 val. gamyboje · 11 apskaitos val.",
   "ШАГ 1 · СОСТАВ СМЕНЫ": "1 ŽINGSNIS · PAMAINOS SUDĖTIS", "Исправить присутствие": "Keisti dalyvavimą", "Выберите смену, отметьте присутствующих, затем назначьте старшего механика и механика.": "Pasirinkite pamainą, pažymėkite dalyvaujančius, tada paskirkite vyresnįjį mechaniką ir mechaniką.", "Рабочая смена": "Darbo pamaina", "Выберите сотрудника": "Pasirinkite darbuotoją", "На работе": "Darbe", "полная": "visa", "на работе": "darbe", "Сохранить исправления": "Išsaugoti pakeitimus", "Добавить сотрудника другой смены": "Pridėti darbuotoją iš kitos pamainos",

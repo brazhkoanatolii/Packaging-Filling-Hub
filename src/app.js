@@ -393,6 +393,7 @@ async function handleSubmit(event) {
       supervisor: leadership.seniorMechanic,
       seniorMechanic: leadership.seniorMechanic,
       mechanic: leadership.mechanic,
+      shiftDate: today(),
       shiftNumber: 1,
       shiftTeamId: teamId,
       attendance
@@ -1208,15 +1209,47 @@ function renderProductionPeopleSummary(records) {
     const assigned = splitProductionParticipants(record.operator);
     assigned.forEach(name => add(operators, name, record, 1 / assigned.length));
   });
-  const shiftLeaders = presentShiftPersonnel().filter(person => ["senior-mechanic", "mechanic"].includes(person.role));
-  const total = records.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
-  const totalScrap = records.reduce((sum, record) => sum + Number(record.scrapKg || 0), 0);
+  const leaderEntries = productionLeaderEntries(records);
   const rows = (title, entries, suffix = "") => entries.length ? `<article><h3>${title}</h3><table><thead><tr><th>Сотрудник</th><th>Выпуск, шт</th><th>Коробки</th><th>Брак, кг</th></tr></thead><tbody>${entries.map(([name, values]) => `<tr><td>${escapeHtml(name)}${suffix}</td><td>${formatNumber(values.quantity)}</td><td>${formatNumber(values.quantity / 240)}</td><td>${formatNumber(values.scrapKg + values.canScrapKg)}</td></tr>`).join("")}</tbody></table></article>` : "";
-  // Выпуск и брак продукции смены засчитываются обоим руководителям полностью.
+  // Выпуск и брак продукции смены засчитываются руководителям, указанным
+  // в самих записях. Это исключает привязку сегодняшней смены к старой смене.
   // Брак банок остаётся отдельным показателем журнала и сюда не включается.
-  const leaderEntries = shiftLeaders.map(person => [person.fullName, { quantity: total, scrapKg: totalScrap, canScrapKg: 0 }]);
   if (!packers.size && !operators.size && !leaderEntries.length) return "";
   return `<section class="card table-card production-people-summary"><div class="section-heading"><div><p class="eyebrow">Смена · персональные показатели</p><h2>Кому засчитывается выпуск</h2></div><span class="status-pill neutral">Итог линии не удваивается</span></div><div class="production-people-grid">${rows("Упаковщики", [...packers.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Механики-операторы", [...operators.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru")))}${rows("Старший механик и Механик", leaderEntries, " · сменный итог")}</div></section>`;
+}
+
+function productionLeaderEntries(records) {
+  const byShift = new Map();
+  records.forEach(record => {
+    const shift = String(record.shift || "").trim().toUpperCase();
+    const group = byShift.get(shift) ?? { quantity: 0, scrapKg: 0, names: new Set() };
+    group.quantity += Number(record.quantity || 0);
+    group.scrapKg += Number(record.scrapKg || 0);
+    [record.seniorMechanic, record.mechanic]
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+      .forEach(name => group.names.add(name));
+    byShift.set(shift, group);
+  });
+
+  const leaders = new Map();
+  byShift.forEach((group, shiftCode) => {
+    // Old rows may have no leader columns yet. Use a current shift only when
+    // it has the same code as the production records; never use yesterday's shift.
+    if (!group.names.size && isCurrentSharedShift() && productionShiftCode() === shiftCode) {
+      [state.shift.seniorMechanic || state.shift.supervisor, state.shift.mechanic]
+        .map(value => String(value || "").trim())
+        .filter(Boolean)
+        .forEach(name => group.names.add(name));
+    }
+    group.names.forEach(name => {
+      const values = leaders.get(name) ?? { quantity: 0, scrapKg: 0, canScrapKg: 0 };
+      values.quantity += group.quantity;
+      values.scrapKg += group.scrapKg;
+      leaders.set(name, values);
+    });
+  });
+  return [...leaders.entries()].sort((left, right) => left[0].localeCompare(right[0], "ru"));
 }
 
 function renderMaintenanceTable(title, records, type, compact, canAdd = false) {
@@ -1463,7 +1496,7 @@ function renderShiftStartView() {
       <div class="shift-start-controls">
         <label class="field"><span>Рабочая смена</span><select name="shiftTeamId" data-start-team ${activeShift ? "disabled" : ""}>${state.workforce.shiftTeams.map(item => `<option value="${item.id}" ${item.id === team?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
         <label class="field"><span>Старший механик</span><select name="seniorMechanic" required>${leadership.senior}</select></label>
-        <label class="field"><span>Механик</span><select name="mechanic" required>${leadership.mechanic}</select></label>
+        <label class="field"><span>Механик (необязательно)</span><select name="mechanic">${leadership.mechanic}</select></label>
       </div>
       <div id="attendance-form-error" class="form-error" hidden></div>
       <div class="shift-attendance-list">
@@ -2754,7 +2787,9 @@ function activePersonnel() {
 }
 
 function presentShiftPersonnel() {
-  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  const teamId = isCurrentSharedShift()
+    ? state.shift.shiftTeamId
+    : state.selectedShiftTeamId ?? scheduledTeam()?.id;
   if (!teamId) return [];
   const attendance = new Map((isCurrentSharedShift() && state.shift.shiftTeamId === teamId ? state.shift.attendance : [])
     .map(item => [item.employeeId, attendanceCode(item.status)]));
@@ -2792,7 +2827,10 @@ function teamLabel(id) {
 }
 
 function productionShiftCode() {
-  return teamById(state.shift?.shiftTeamId)?.code ?? "";
+  const teamId = isCurrentSharedShift()
+    ? state.shift?.shiftTeamId
+    : state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  return teamById(teamId)?.code ?? "";
 }
 
 function normalizeMachineStatuses(value) {
@@ -2826,9 +2864,10 @@ function renderMachineStatusPanel({ compact = false, interactive = false } = {})
 }
 
 function activeShiftLeadership() {
+  if (!isCurrentSharedShift()) throw new Error("Сначала в табеле начните сегодняшнюю смену.");
   const seniorMechanic = String(state.shift?.seniorMechanic || state.shift?.supervisor || "").trim();
   const mechanic = String(state.shift?.mechanic || "").trim();
-  if (!seniorMechanic || !mechanic) throw new Error("Сначала в табеле выберите старшего механика и механика.");
+  if (!seniorMechanic) throw new Error("Сначала в табеле выберите старшего механика.");
   return { seniorMechanic, mechanic };
 }
 
@@ -2839,7 +2878,8 @@ function scheduledTeam(date = today()) {
 
 function isCurrentSharedShift(shift = state.shift) {
   if (!shift?.active) return false;
-  return !APP_CONFIG.centralAuth || shift.shiftDate === today();
+  const shiftDate = String(shift.shiftDate || (shift.startedAt ? new Intl.DateTimeFormat("en-CA", { timeZone: APP_CONFIG.timeZone }).format(new Date(shift.startedAt)) : ""));
+  return shiftDate === today();
 }
 
 function shiftLeadershipOptions(members, attendance = new Map(), activeShift = null, preferred = {}) {
@@ -2849,10 +2889,11 @@ function shiftLeadershipOptions(members, attendance = new Map(), activeShift = n
   const seniorPool = seniorCandidates.length ? seniorCandidates : directMechanics;
   const seniorValue = String(preferred.seniorMechanic || activeShift?.seniorMechanic || activeShift?.supervisor || "");
   const mechanicValue = String(preferred.mechanic || activeShift?.mechanic || "");
-  const optionMarkup = (items, value, empty, autoSelect) => {
+  const optionMarkup = (items, value, empty, autoSelect, optional = false) => {
     if (!items.length) return `<option value="" selected>${empty}</option>`;
     const selected = items.some(employee => employee.fullName === value) ? value : (autoSelect ? items[0].fullName : "");
-    return `${autoSelect ? "" : '<option value="">Выберите сотрудника</option>'}${items.map(employee => `<option value="${attribute(employee.fullName)}" ${employee.fullName === selected ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}`;
+    const emptyOption = optional ? '<option value="">Не назначен</option>' : autoSelect ? "" : '<option value="">Выберите сотрудника</option>';
+    return `${emptyOption}${items.map(employee => `<option value="${attribute(employee.fullName)}" ${employee.fullName === selected ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}`;
   };
   const selectedSenior = seniorPool.some(employee => employee.fullName === seniorValue) ? seniorValue : seniorPool[0]?.fullName || "";
   // A regular mechanic is the default choice. Mechanic-operators are used
@@ -2861,7 +2902,7 @@ function shiftLeadershipOptions(members, attendance = new Map(), activeShift = n
   const fallbackMechanicPool = mechanicPool.length ? mechanicPool : present.filter(employee => employee.role === "mechanic-operator");
   return {
     senior: optionMarkup(seniorPool, seniorValue, "Сначала отметьте присутствующих", true),
-    mechanic: optionMarkup(fallbackMechanicPool, mechanicValue, "Сначала отметьте присутствующих", true)
+    mechanic: optionMarkup(fallbackMechanicPool, mechanicValue, "Не назначен", false, true)
   };
 }
 
@@ -2890,7 +2931,7 @@ function shiftLeadershipFromForm(form, teamId) {
   const mechanicPool = directMechanics.filter(employee => employee.fullName !== seniorMechanic);
   const fallbackMechanicPool = mechanicPool.length ? mechanicPool : present.filter(employee => employee.role === "mechanic-operator");
   if (!seniorPool.some(employee => employee.fullName === seniorMechanic)) throw new Error("Выберите старшего механика из присутствующих в табеле.");
-  if (!fallbackMechanicPool.some(employee => employee.fullName === mechanic)) throw new Error("Выберите механика из присутствующих в табеле.");
+  if (mechanic && !fallbackMechanicPool.some(employee => employee.fullName === mechanic)) throw new Error("Выберите механика из присутствующих в табеле.");
   return { seniorMechanic, mechanic };
 }
 
@@ -3125,7 +3166,9 @@ function attendanceAuthorNames(teamId) {
 }
 
 function operationalAuthorNames() {
-  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  const teamId = isCurrentSharedShift()
+    ? state.shift.shiftTeamId
+    : state.selectedShiftTeamId ?? scheduledTeam()?.id;
   return attendanceAuthorNames(teamId);
 }
 

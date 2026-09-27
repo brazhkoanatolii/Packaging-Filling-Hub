@@ -1,3 +1,5 @@
+import { getVilniusDate } from "../domain/scale-check.js";
+
 export class ShiftService {
   constructor(store, remote = null) {
     this.store = store;
@@ -11,11 +13,13 @@ export class ShiftService {
 
   async start(employee) {
     if (this.remote) return this.remote.update("start", typeof employee === "string" ? { supervisor: employee } : employee);
-    const current = await this.current();
-    if (current?.active) return current;
     const input = typeof employee === "string"
       ? { supervisor: employee, shiftNumber: 1, attendance: [{ employeeId: "legacy-supervisor", status: "present" }] }
       : employee;
+    const shiftDate = String(input?.shiftDate || getVilniusDate());
+    const current = await this.current();
+    const currentDate = String(current?.shiftDate || (current?.startedAt ? getVilniusDate(new Date(current.startedAt)) : ""));
+    if (current?.active && currentDate === shiftDate) return current;
     const seniorMechanic = String(input?.seniorMechanic || input?.supervisor || "").trim();
     const mechanic = String(input?.mechanic || "").trim();
     if (!seniorMechanic) throw new Error("Выберите старшего механика");
@@ -28,6 +32,7 @@ export class ShiftService {
       supervisor: seniorMechanic,
       seniorMechanic,
       mechanic,
+      shiftDate,
       shiftNumber,
       shiftTeamId: String(input.shiftTeamId || ""),
       attendance: input.attendance.map(normalizeAttendance),
@@ -50,7 +55,7 @@ export class ShiftService {
       attendance: attendance.map(normalizeAttendance),
       seniorMechanic: String(leadership.seniorMechanic || current.seniorMechanic || current.supervisor || "").trim(),
       supervisor: String(leadership.seniorMechanic || current.seniorMechanic || current.supervisor || "").trim(),
-      mechanic: String(leadership.mechanic || current.mechanic || "").trim(),
+      mechanic: String(Object.hasOwn(leadership, "mechanic") ? leadership.mechanic : current.mechanic || "").trim(),
       attendanceUpdatedAt: new Date().toISOString()
     };
     await this.store.setPreference("activeShift", shift);

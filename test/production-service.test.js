@@ -23,6 +23,7 @@ function record(overrides = {}) {
     requestId: "request-1", date: getVilniusDate(), startTime: "07:30", time: "10:00",
     product: "Test", catalogLine: "Линейка тест", strength: "40", quantity: "2400", scrapKg: "0", canScrapKg: "0",
     packer: "Упаковщик 1", operator: "Оператор 1", machineLine: "A", shift: "A", note: "",
+    leadership: { seniorMechanic: "Старший механик", mechanic: "" },
     ...overrides
   };
 }
@@ -38,6 +39,13 @@ test("личная запись упаковщика может содержат
 test("одного механика-оператора нельзя выбрать дважды", async () => {
   const service = new ProductionService(new MemoryStore(), new MemoryRepository());
   await assert.rejects(service.create(record({ operatorSecond: "Оператор 1" }), people), /должен отличаться/);
+});
+
+test("механик необязателен, но выбранный старший механик записывается в журнал", async () => {
+  const service = new ProductionService(new MemoryStore(), new MemoryRepository());
+  const saved = await service.create(record({ leadership: { seniorMechanic: "Механик стал старшим", mechanic: "" } }), people);
+  assert.equal(saved.seniorMechanic, "Механик стал старшим");
+  assert.equal(saved.mechanic, "");
 });
 
 test("масса готовой продукции использует вес одной банки без повторного умножения на подушки", () => {

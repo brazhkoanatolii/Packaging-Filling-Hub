@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getVilniusDate } from "../src/domain/scale-check.js";
 import { ShiftService } from "../src/services/shift-service.js";
 
 function createStore() {
@@ -35,6 +36,14 @@ test("вторая смена не блокируется контролем в�
   assert.ok(shift.weightsCompletedAt);
 });
 
+test("вчерашняя активная смена не блокирует начало сегодняшней", async () => {
+  const store = createStore();
+  await store.setPreference("activeShift", { active: true, shiftDate: "2000-01-01", shiftTeamId: "shift-team-b" });
+  const shift = await new ShiftService(store).start({ supervisor: "Старший", shiftTeamId: "shift-team-a", shiftDate: getVilniusDate(), attendance });
+  assert.equal(shift.shiftTeamId, "shift-team-a");
+  assert.equal(shift.shiftDate, getVilniusDate());
+});
+
 test("отметки табеля можно исправить в активной смене", async () => {
   const service = new ShiftService(createStore());
   await service.start({ supervisor: "Старший", shiftNumber: 1, attendance });
@@ -56,6 +65,14 @@ test("исправление табеля сохраняет выбранных 
   assert.equal(updated.seniorMechanic, "Новый старший");
   assert.equal(updated.supervisor, "Новый старший");
   assert.equal(updated.mechanic, "Механик-оператор");
+});
+
+test("механика можно снять с назначения, не отменяя старшего механика", async () => {
+  const service = new ShiftService(createStore());
+  await service.start({ supervisor: "Старший", mechanic: "Механик", shiftNumber: 1, attendance });
+  const updated = await service.updateAttendance(attendance, { seniorMechanic: "Старший", mechanic: "" });
+  assert.equal(updated.seniorMechanic, "Старший");
+  assert.equal(updated.mechanic, "");
 });
 
 test("в центральном режиме смена берётся из общего провайдера, а не из IndexedDB", async () => {
