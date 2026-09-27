@@ -2,6 +2,7 @@ import { APP_CONFIG, JOURNALS, LANGUAGES, MODULES, SCALES } from "./config/app-c
 import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYEE_IDS } from "./config/workforce-config.js";
 import { calculateResult, formatDate as formatJournalDate, formatDateTime as formatJournalDateTime } from "./domain/scale-check.js";
 import { formatPersonnelAge, formatPersonnelExperience } from "./domain/personnel-dates.js";
+import { getScaleControlReminder } from "./domain/scale-control-reminder.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
 import { JournalRepository } from "./repositories/journal-repository.js";
@@ -2783,7 +2784,15 @@ function showFormError(form, error) {
 function renderPreparationReminder() {
   const reminders = [];
   if (state.account?.role === "senior" && !state.shift?.active) reminders.push(`<button class="preparation-reminder" data-action="navigate" data-page="attendance"><span>1</span><div><strong>Смена ещё не начата</strong><small>Заполните табель. Разделы доступны — это напоминание, а не блокировка.</small></div><b>Перейти →</b></button>`);
-  if (state.account?.role === "senior" && state.shift?.active && state.shift.requiresScaleControl && !state.shift.weightsCompletedAt) reminders.push(`<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>13</span><div><strong>Не завершён контроль весов F1–F13</strong><small>Продолжить работу можно, но напоминание останется до сохранения полного обхода.</small></div><b>Проверить →</b></button>`);
+  const team = scheduledTeam();
+  const scaleReminder = getScaleControlReminder({ date: today(), team, records: state.records });
+  if (["manager", "senior"].includes(state.account?.role) && scaleReminder) {
+    const teamCode = team?.code || "";
+    const message = scaleReminder.day === 1
+      ? `Сегодня выполнено ${scaleReminder.recordCount} из ${scaleReminder.minimum} проверок. Напоминание исчезнет после четвёртой записи.`
+      : "В первый день смены проверок весов не было. Выполните проверку сегодня.";
+    reminders.push(`<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>${scaleReminder.minimum}</span><div><strong>${scaleReminder.day === 1 ? `Контроль весов — первый день смены ${teamCode}` : `Контроль весов — второй день смены ${teamCode}`}</strong><small>${message}</small></div><b>Проверить →</b></button>`);
+  }
   const overdueCyclones = pendingCycloneCleaningDates(state.cyclones.records);
   if (overdueCyclones.length) {
     const days = overdueCyclones.map(date => Number(date.slice(-2))).join(" и ");
