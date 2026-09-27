@@ -2789,7 +2789,7 @@ function renderPreparationReminder() {
   if (["manager", "senior"].includes(state.account?.role) && scaleReminder) {
     const teamCode = team?.code || "";
     const message = scaleReminder.day === 1
-      ? `Сегодня выполнено ${scaleReminder.recordCount} из ${scaleReminder.minimum} проверок. Напоминание исчезнет после четвёртой записи.`
+      ? `Сегодня проверено ${scaleReminder.recordCount} из ${scaleReminder.minimum} разных весов. Напоминание исчезнет после четвёртой записи по разным весам.`
       : "В первый день смены проверок весов не было. Выполните проверку сегодня.";
     reminders.push(`<button class="preparation-reminder scales" data-action="navigate" data-page="journals"><span>${scaleReminder.minimum}</span><div><strong>${scaleReminder.day === 1 ? `Контроль весов — первый день смены ${teamCode}` : `Контроль весов — второй день смены ${teamCode}`}</strong><small>${message}</small></div><b>Проверить →</b></button>`);
   }

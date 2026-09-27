@@ -6,7 +6,10 @@ export function getScaleControlReminder({ date, team, records = [], minimum = SC
   if (!team || !getScheduleDay(team, date).scheduled) return null;
   const previousDate = dayBefore(date);
   const firstWorkDay = !getScheduleDay(team, previousDate).scheduled;
-  const countFor = value => records.filter(record => record?.date === value && record?.status !== "Аннулировано").length;
+  const countFor = value => new Set(records
+    .filter(record => record?.date === value && record?.status !== "Аннулировано")
+    .map(record => String(record.scaleName || "").trim())
+    .filter(Boolean)).size;
 
   if (firstWorkDay) {
     const recordCount = countFor(date);
