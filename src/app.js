@@ -163,7 +163,11 @@ async function bootstrap() {
   state.production = await productionService.snapshot();
   state.nonconformities = await nonconformityService.snapshot();
   state.shiftResponsible = await store.preference("sessionShiftResponsible", null);
-  state.selectedShiftTeamId = state.shift?.shiftTeamId ?? scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
+  // A completed or yesterday's shared shift must not pin the attendance page
+  // to its old team.  Outside the active shift, always open today's team.
+  state.selectedShiftTeamId = isCurrentSharedShift(state.shift)
+    ? state.shift.shiftTeamId
+    : scheduledTeam()?.id ?? state.workforce.shiftTeams[0]?.id ?? null;
   state.language = normalizeLanguage(await store.preference("interfaceLanguage", "ru"));
   state.theme = (await store.preference("interfaceTheme", "light")) === "dark" ? "dark" : "light";
   await reloadLocalState();

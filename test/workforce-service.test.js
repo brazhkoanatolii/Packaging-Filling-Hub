@@ -28,6 +28,8 @@ test("график смен A и B повторяет цикл 2 через 2", 
   assert.equal(getScheduleDay(SHIFT_TEAMS[0], "2026-07-02").scheduled, true);
   assert.equal(getScheduleDay(SHIFT_TEAMS[0], "2026-07-03").scheduled, false);
   assert.equal(getScheduleDay(SHIFT_TEAMS[1], "2026-07-03").scheduled, true);
+  assert.equal(getScheduleDay(SHIFT_TEAMS[0], "2026-09-27").scheduled, true);
+  assert.equal(getScheduleDay(SHIFT_TEAMS[1], "2026-09-27").scheduled, false);
 
   const septemberA = getScheduleMonth(SHIFT_TEAMS[0], 2026, 8);
   const septemberB = getScheduleMonth(SHIFT_TEAMS[1], 2026, 8);
