@@ -1028,7 +1028,7 @@ async function productionShiftLeaders(date, shift, selected = null) {
   const fallback = productionShiftLeadersFromWorkforce(workforce, date, shift);
   const seniorMechanic = String(selected?.seniorMechanic || "").trim();
   const mechanic = String(selected?.mechanic || "").trim();
-  if (!seniorMechanic || !mechanic) return fallback;
+  if (!seniorMechanic) return fallback;
   const teamId = shift === "A" ? "shift-team-a" : "shift-team-b";
   const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
   const present = (workforce.attendance ?? []).filter(item => item.date === date && item.shiftTeamId === teamId && isWorkedAttendance(item))
@@ -1036,10 +1036,10 @@ async function productionShiftLeaders(date, shift, selected = null) {
   const seniorPool = present.some(person => person.role === "senior-mechanic")
     ? present.filter(person => person.role === "senior-mechanic")
     : present.filter(person => person.role === "mechanic");
-  const mechanicPool = present.filter(person => person.role === "mechanic-operator");
-  if (!seniorPool.some(person => person.fullName === seniorMechanic) || !mechanicPool.some(person => person.fullName === mechanic)) {
-    throw new Error("Выбранные старший механик и механик должны быть отмечены в табеле этой смены.");
-  }
+  const directMechanics = present.filter(person => person.role === "mechanic" && person.fullName !== seniorMechanic);
+  const mechanicPool = directMechanics.length ? directMechanics : present.filter(person => person.role === "mechanic-operator");
+  if (!seniorPool.some(person => person.fullName === seniorMechanic)) throw new Error("Старший механик должен быть отмечен в табеле этой смены.");
+  if (mechanic && !mechanicPool.some(person => person.fullName === mechanic)) throw new Error("Механик должен быть отмечен в табеле этой смены.");
   return { seniorMechanic, mechanic };
 }
 
@@ -1050,9 +1050,13 @@ function productionShiftLeadersFromWorkforce(workforce, date, shift) {
     .filter(item => item.date === date && item.shiftTeamId === teamId && isWorkedAttendance(item))
     .map(item => peopleById.get(item.employeeId))
     .filter(Boolean);
+  const seniorMechanics = present.filter(person => person.role === "senior-mechanic");
+  const directMechanics = present.filter(person => person.role === "mechanic");
+  const seniorPool = seniorMechanics.length ? seniorMechanics : directMechanics;
+  const seniorNames = seniorPool.map(person => person.fullName);
   return {
-    seniorMechanic: present.filter(person => person.role === "senior-mechanic").map(person => person.fullName).join("; "),
-    mechanic: present.filter(person => person.role === "mechanic").map(person => person.fullName).join("; ")
+    seniorMechanic: seniorNames.join("; "),
+    mechanic: directMechanics.filter(person => !seniorNames.includes(person.fullName)).map(person => person.fullName).join("; ")
   };
 }
 
@@ -1817,9 +1821,11 @@ async function resolveCentralShiftLeaders(input, attendance) {
   const seniorMechanic = String(input.seniorMechanic || input.supervisor || seniorPool[0]?.fullName || "").trim();
   const mechanics = directMechanics.filter(person => person.fullName !== seniorMechanic);
   const mechanicPool = mechanics.length ? mechanics : present.filter(person => person.role === "mechanic-operator");
-  const mechanic = String(input.mechanic || mechanicPool[0]?.fullName || "").trim();
+  const mechanic = Object.hasOwn(input, "mechanic")
+    ? String(input.mechanic || "").trim()
+    : String(mechanicPool[0]?.fullName || "").trim();
   if (!seniorPool.some(person => person.fullName === seniorMechanic)) throw new Error("Старший механик должен быть отмечен присутствующим в табеле.");
-  if (!mechanicPool.some(person => person.fullName === mechanic)) throw new Error("Механик должен быть отмечен присутствующим в табеле.");
+  if (mechanic && !mechanicPool.some(person => person.fullName === mechanic)) throw new Error("Механик должен быть отмечен присутствующим в табеле.");
   return { seniorMechanic, mechanic };
 }
 
