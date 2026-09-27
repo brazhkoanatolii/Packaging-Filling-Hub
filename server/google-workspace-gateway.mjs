@@ -56,6 +56,7 @@ const nonconformitySheetName = "Журнал";
 const nonconformityRange = "'Журнал'!A2:H";
 const nonconformityDictionaryRange = "'Справочник несоответсвий'!B2:B";
 const automaticDailyExportHour = hourFromEnvironment("AUTOMATIC_DAILY_EXPORT_HOUR", 7);
+const automaticDailyExportsEnabled = String(process.env.AUTOMATIC_DAILY_EXPORT_ENABLED || "false").trim().toLowerCase() === "true";
 const workforceSpreadsheetIds = Object.freeze({
   personnel: "1r1opRywv4upVl4oMrUlOqmRsjAuETUu3-JFMUqjRu04",
   attendance: "1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0",
@@ -380,12 +381,16 @@ createServer(async (request, response) => {
   console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
   if (centralMode || workstationRole === "manager") {
-    console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
-    runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport);
-    setInterval(() => runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport), 5 * 60_000).unref();
-    console.log(`Суточная сводка продукции: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
-    runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport);
-    setInterval(() => runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport), 5 * 60_000).unref();
+    if (automaticDailyExportsEnabled) {
+      console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
+      runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport);
+      setInterval(() => runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport), 5 * 60_000).unref();
+      console.log(`Суточная сводка продукции: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
+      runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport);
+      setInterval(() => runBackgroundTask("суточная сводка продукции", runAutomaticDailyProductionExport), 5 * 60_000).unref();
+    } else {
+      console.log("Суточный перенос итогов отключён: фактические записи остаются в рабочих журналах.");
+    }
     runBackgroundTask("заполнение старшего механика и механика в журнале продукции", backfillProductionLeaders);
   }
   if (process.platform === "win32") {
