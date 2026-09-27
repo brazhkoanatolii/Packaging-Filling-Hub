@@ -3003,7 +3003,7 @@ function teamsWithCurrentShiftFirst() {
 
 function comparePersonnel(left, right) {
   const teamOrder = { "shift-team-a": 0, "shift-team-b": 1, office: 2 };
-  const roleOrder = { "senior-mechanic": 0, "mechanic-operator": 1, packer: 2, "head-of-area": 3, "production-manager": 4, administrator: 5, "warehouse-manager": 6 };
+  const roleOrder = { "senior-mechanic": 0, mechanic: 1, "mechanic-operator": 2, packer: 3, "head-of-area": 4, "production-manager": 5, administrator: 6, "warehouse-manager": 7 };
   return (teamOrder[left.shiftTeamId] ?? 9) - (teamOrder[right.shiftTeamId] ?? 9) || (roleOrder[left.role] ?? 9) - (roleOrder[right.role] ?? 9) || left.fullName.localeCompare(right.fullName, "ru");
 }
 
