@@ -27,6 +27,16 @@ function Write-UpdateLog {
   Add-Content -LiteralPath (Join-Path $logDirectory "auto-update.log") -Value "$(Get-Date -Format s) $Message" -Encoding UTF8
 }
 
+function Get-EnvironmentValue {
+  param([string]$Path, [string]$Name)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+  $match = Get-Content -LiteralPath $Path -Encoding UTF8 |
+    Where-Object { $_ -match "^\s*$([regex]::Escape($Name))\s*=" } |
+    Select-Object -Last 1
+  if (-not $match) { return "" }
+  return ($match -split "=", 2)[1].Trim().Trim('"').Trim("'")
+}
+
 function Compare-Version {
   param([string]$Left, [string]$Right)
   $leftParts = $Left.Split(".") | ForEach-Object { [int]$_ }
@@ -51,10 +61,30 @@ function Get-VerifiedManifest {
   return $manifest
 }
 
+function Get-UpdateSafety {
+  $environmentPath = Join-Path $installPath ".env"
+  $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT"
+  if (-not $port) { $port = "4173" }
+  try {
+    $status = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/update-safety" -TimeoutSec 8 -UseBasicParsing
+    if ($status.ok -and $status.safe) { return @{ Safe = $true; Message = [string]$status.message } }
+    $message = [string]$status.message
+    if (-not $message) { $message = "Безопасность обновления не подтверждена" }
+    return @{ Safe = $false; Message = $message }
+  } catch {
+    return @{ Safe = $false; Message = "Программа не подтвердила безопасное состояние для обновления" }
+  }
+}
+
 function Invoke-AutomaticUpdate {
   try {
     if (-not (Test-Path -LiteralPath $packagePath)) { throw "Не найден package.json программы." }
     if (-not (Test-Path -LiteralPath $updaterPath)) { throw "Не найден сценарий обновления." }
+    $safety = Get-UpdateSafety
+    if (-not $safety.Safe) {
+      Write-UpdateLog "Обновление отложено: $($safety.Message)"
+      return $false
+    }
     $currentVersion = (Get-Content -LiteralPath $packagePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
     $manifest = Get-VerifiedManifest
     if ((Compare-Version $manifest.version $currentVersion) -le 0) {

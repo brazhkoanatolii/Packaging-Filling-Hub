@@ -104,6 +104,12 @@ let nonconformityRefreshPromise = null;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
+const updateActivity = {
+  sessionId: crypto.randomUUID(),
+  lastInteractionAt: 0,
+  submittingUntil: 0,
+  heartbeatTimer: null
+};
 
 registerServiceWorker();
 bootstrap().catch(error => renderFatalError(error));
@@ -175,6 +181,7 @@ async function bootstrap() {
   state.lastRefresh = new Date().toISOString();
   render();
   bindGlobalEvents();
+  startUpdateSafetyHeartbeat();
   startAutomaticRefresh();
   startClock();
   registerServiceWorker();
@@ -194,6 +201,18 @@ function bindGlobalEvents() {
   root.addEventListener("input", handleInput);
   root.addEventListener("change", handleChange);
   root.addEventListener("submit", handleSubmit);
+  // Dialogues are mounted outside #app, so protect their unfinished forms too.
+  document.addEventListener("input", noteUpdateFormInput, true);
+  document.addEventListener("change", noteUpdateFormInput, true);
+  document.addEventListener("submit", noteUpdateFormSubmit, true);
+  document.addEventListener("reset", event => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (form) window.setTimeout(() => delete form.dataset.updateDirty, 0);
+  }, true);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) noteUpdateInteraction();
+    else void sendUpdateSafetyHeartbeat({ keepalive: true });
+  });
   window.addEventListener("keydown", event => {
     if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "F5") {
       event.preventDefault();
@@ -209,6 +228,63 @@ function bindGlobalEvents() {
     render();
     toast("Нет интернета. Новые записи сохранятся на этом компьютере.", "warning");
   });
+}
+
+function noteUpdateFormInput(event) {
+  const field = event.target instanceof Element ? event.target : null;
+  if (!field?.matches("input:not([type=hidden]), select, textarea")) return;
+  const form = field.closest("form");
+  if (form) form.dataset.updateDirty = "true";
+  noteUpdateInteraction();
+}
+
+function noteUpdateFormSubmit(event) {
+  if (!(event.target instanceof HTMLFormElement)) return;
+  updateActivity.submittingUntil = Date.now() + 90_000;
+  noteUpdateInteraction();
+}
+
+function noteUpdateInteraction() {
+  updateActivity.lastInteractionAt = Date.now();
+  void sendUpdateSafetyHeartbeat();
+}
+
+function pendingUpdateOperations() {
+  return (state.operations?.length || 0)
+    + (state.workforce?.pending?.length || 0)
+    + (state.packaging?.operations?.length || 0)
+    + (state.cyclones?.operations?.length || 0);
+}
+
+function updateSafetyPayload() {
+  return {
+    sessionId: updateActivity.sessionId,
+    dirty: Boolean(document.querySelector("form[data-update-dirty='true']")),
+    submitting: Date.now() < updateActivity.submittingUntil,
+    pending: pendingUpdateOperations(),
+    lastInteractionAt: updateActivity.lastInteractionAt || Date.now(),
+    visible: !document.hidden
+  };
+}
+
+async function sendUpdateSafetyHeartbeat({ keepalive = false } = {}) {
+  if (!state.account || !navigator.onLine) return;
+  try {
+    await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update-activity`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(updateSafetyPayload()),
+      keepalive
+    });
+  } catch {
+    // A temporary gateway restart is expected while an update is installed.
+  }
+}
+
+function startUpdateSafetyHeartbeat() {
+  if (updateActivity.heartbeatTimer) clearInterval(updateActivity.heartbeatTimer);
+  void sendUpdateSafetyHeartbeat();
+  updateActivity.heartbeatTimer = window.setInterval(() => void sendUpdateSafetyHeartbeat(), 15_000);
 }
 
 function handleInput(event) {

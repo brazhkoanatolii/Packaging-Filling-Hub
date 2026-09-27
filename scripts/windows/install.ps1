@@ -92,6 +92,18 @@ Set-EnvironmentValue -Path $environmentPath -Name "AUTOMATIC_DAILY_EXPORT_HOUR" 
 New-Item -ItemType Directory -Path (Join-Path $targetRoot "logs") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $targetRoot ".runtime") -Force | Out-Null
 
+# An updater started by an older version remains in memory after its script is
+# replaced. Stop only that watch process, so the newly installed safety-aware
+# watcher below becomes the single source of automatic updates.
+$escapedTargetRoot = [regex]::Escape($targetRoot)
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.ProcessId -ne $PID -and $_.CommandLine -match $escapedTargetRoot -and $_.CommandLine -match "auto-update\.ps1"
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+
 $startScript = Join-Path $targetRoot "scripts\windows\start-program.ps1"
 $autoUpdateScript = Join-Path $targetRoot "scripts\windows\auto-update.ps1"
 # Always use Windows PowerShell for the background launcher.  When this

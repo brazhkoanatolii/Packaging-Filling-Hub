@@ -99,6 +99,10 @@ let automaticDailyProductionExportCompletedDate = null;
 let automaticDailyProductionExportAttemptAt = 0;
 let automaticUpdateAttemptAt = 0;
 let automaticUpdateRunning = false;
+const updateActivitySessions = new Map();
+const updateSafetyIdleMs = 120_000;
+const updateActivityTtlMs = 5 * 60_000;
+const automaticUpdateNotBefore = Date.now() + 3 * 60_000;
 let cachedFallbackManifest = null;
 let fallbackManifestCheckedAt = 0;
 
@@ -186,7 +190,16 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/update-status" && request.method === "GET") {
       return sendJson(response, 200, await getUpdateStatus());
     }
+    if (url.pathname === "/api/update-activity" && request.method === "POST") {
+      recordUpdateActivity(await readJsonBody(request));
+      return sendJson(response, 200, { ok: true, ...updateInstallationSafety() });
+    }
+    if (url.pathname === "/api/update-safety" && request.method === "GET") {
+      return sendJson(response, 200, { ok: true, ...updateInstallationSafety() });
+    }
     if (url.pathname === "/api/update" && request.method === "POST") {
+      const safety = updateInstallationSafety();
+      if (!safety.safe) return sendJson(response, 409, { ok: false, message: safety.message });
       const update = await getUpdateStatus();
       if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
       if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });
@@ -385,6 +398,8 @@ createServer(async (request, response) => {
 async function runAutomaticUpdate() {
   if (automaticUpdateRunning || Date.now() - automaticUpdateAttemptAt < 55_000) return;
   automaticUpdateAttemptAt = Date.now();
+  const safety = updateInstallationSafety();
+  if (!safety.safe) return;
   const update = await getUpdateStatus();
   if (!update.available) return;
   automaticUpdateRunning = true;
@@ -394,6 +409,43 @@ async function runAutomaticUpdate() {
     automaticUpdateRunning = false;
     console.error(`[update] Не удалось запустить обновление: ${error.message}`);
   }
+}
+
+function recordUpdateActivity(input) {
+  const sessionId = String(input?.sessionId || "").trim();
+  if (!/^[a-zA-Z0-9-]{16,128}$/.test(sessionId)) return;
+  updateActivitySessions.set(sessionId, {
+    dirty: input?.dirty === true,
+    submitting: input?.submitting === true,
+    pending: Math.max(0, Math.min(10_000, Number(input?.pending) || 0)),
+    lastInteractionAt: Math.min(Date.now(), Math.max(0, Number(input?.lastInteractionAt) || Date.now())),
+    seenAt: Date.now()
+  });
+}
+
+function updateInstallationSafety() {
+  const now = Date.now();
+  for (const [sessionId, session] of updateActivitySessions) {
+    if (now - session.seenAt > updateActivityTtlMs) updateActivitySessions.delete(sessionId);
+  }
+  if (now < automaticUpdateNotBefore) {
+    return { safe: false, message: "Ожидание подключения программы перед проверкой обновления" };
+  }
+  const blockers = [...updateActivitySessions.values()].filter(session => session.dirty
+    || session.submitting
+    || session.pending > 0
+    || now - session.lastInteractionAt < updateSafetyIdleMs);
+  if (!blockers.length) return { safe: true, message: "Можно устанавливать обновление" };
+  const hasDraft = blockers.some(session => session.dirty || session.submitting);
+  const hasQueue = blockers.some(session => session.pending > 0);
+  return {
+    safe: false,
+    message: hasDraft
+      ? "Обновление отложено: в программе есть несохранённый ввод"
+      : hasQueue
+        ? "Обновление отложено: есть записи в очереди отправки"
+        : "Обновление отложено: пользователь работает в программе"
+  };
 }
 
 function startVerifiedUpdate(update, source) {
