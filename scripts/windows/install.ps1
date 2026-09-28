@@ -120,24 +120,11 @@ if (-not $NoShortcuts) {
 
   $desktopShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "Packaging-Filling-Hub.lnk"))
   $applicationIcon = Join-Path $targetRoot "assets\garant-shortcut-icon.ico"
-  $chromeCandidates = @(
-    (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
-    (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
-  )
-  $chromePath = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-  if ($chromePath) {
-    # The gateway starts from Windows Startup; opening Chrome directly avoids a hidden
-    # PowerShell shortcut that can silently fail to foreground the application.
-    $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT" -Fallback "4173"
-    $desktopShortcut.TargetPath = $chromePath
-    $desktopShortcut.Arguments = "--app=http://127.0.0.1:$port/ --start-maximized"
-    $desktopShortcut.IconLocation = "$applicationIcon,0"
-  } else {
-    $desktopShortcut.TargetPath = $powerShellPath
-    $desktopShortcut.Arguments = $shortcutArguments
-    $desktopShortcut.IconLocation = "$applicationIcon,0"
-  }
+  # Always use the launcher so it can maximize the Chrome app window even
+  # when Chrome restores a previously remembered, smaller window size.
+  $desktopShortcut.TargetPath = $powerShellPath
+  $desktopShortcut.Arguments = $shortcutArguments
+  $desktopShortcut.IconLocation = "$applicationIcon,0"
   $desktopShortcut.WorkingDirectory = $targetRoot
   $desktopShortcut.Description = "Открыть Packaging-Filling-Hub"
   $desktopShortcut.Save()

@@ -1099,10 +1099,21 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
 async function productionShiftLeaders(date, shift, selected = null) {
   const workforce = await getWorkforceSnapshot();
   const fallback = productionShiftLeadersFromWorkforce(workforce, date, shift);
-  const seniorMechanic = String(selected?.seniorMechanic || "").trim();
-  const mechanic = String(selected?.mechanic || "").trim();
-  if (!seniorMechanic) return fallback;
   const teamId = shift === "A" ? "shift-team-a" : "shift-team-b";
+  // The shared shift is the authoritative source for a current production
+  // entry. A production dialog may have been opened before the senior
+  // mechanic was chosen; in that case its browser state is stale and must not
+  // erase the mechanic saved in the central shift.
+  const sharedShift = readCentralShiftState();
+  const sharedLeadership = sharedShift?.active
+    && sharedShift.shiftDate === date
+    && sharedShift.shiftTeamId === teamId
+    ? { seniorMechanic: sharedShift.seniorMechanic, mechanic: sharedShift.mechanic }
+    : null;
+  const source = String(sharedLeadership?.seniorMechanic || "").trim() ? sharedLeadership : selected;
+  const seniorMechanic = String(source?.seniorMechanic || "").trim();
+  const mechanic = String(source?.mechanic || "").trim();
+  if (!seniorMechanic) return fallback;
   const peopleById = new Map((workforce.personnel ?? []).map(person => [person.id, person]));
   const present = (workforce.attendance ?? []).filter(item => item.date === date && item.shiftTeamId === teamId && isWorkedAttendance(item))
     .map(item => peopleById.get(item.employeeId)).filter(Boolean);
@@ -1864,7 +1875,7 @@ function normalizeMachineStatuses(value) {
   return Object.fromEntries(Array.from({ length: 16 }, (_, index) => {
     const machine = index + 1;
     const status = source[machine];
-    return [machine, ["work", "attention", "repair"].includes(status) ? status : "work"];
+    return [machine, ["work", "attention", "maintenance", "repair", "inactive"].includes(status) ? status : "work"];
   }));
 }
 

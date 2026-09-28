@@ -699,7 +699,7 @@ async function handleClick(event) {
       if (!['manager', 'senior'].includes(state.account?.role)) throw new Error("Изменять состояние станков могут только Администрация и Старший механик.");
       const machine = Number(actionElement.dataset.machine);
       if (!Number.isInteger(machine) || machine < 1 || machine > 16) return;
-      const statuses = ["work", "attention", "repair"];
+      const statuses = ["work", "attention", "maintenance", "repair", "inactive"];
       const current = normalizeMachineStatuses(state.machineStatuses)[machine];
       const next = statuses[(statuses.indexOf(current) + 1) % statuses.length];
       state.machineStatuses = {
@@ -712,8 +712,8 @@ async function handleClick(event) {
         state.machineStatuses = normalizeMachineStatuses(shared.statuses);
       }
       render();
-      const label = { work: "рабочая", attention: "требует внимания", repair: "в ремонте" }[next];
-      toast(`Станок ${machine}: ${label}.`, next === "repair" ? "warning" : "success");
+      const label = { work: "рабочая", attention: "требует внимания", maintenance: "на ТО", repair: "в ремонте", inactive: "не в работе" }[next];
+      toast(`Станок ${machine}: ${label}.`, ["attention", "maintenance", "repair", "inactive"].includes(next) ? "warning" : "success");
       return;
     }
     if (action === "refresh-production") {
@@ -1975,7 +1975,7 @@ function openProductionDialog(record = null) {
   const dialog = createDialog(`<form class="dialog-card production-dialog"><div class="dialog-heading"><div><p class="eyebrow">Учёт продукции и брака</p><h2>${record ? "Исправить запись" : "Завершить продукт"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
     <p>Дата и смена подставляются из начатой смены в табеле. Упаковщик вносит только свой выпуск; общий итог линии программа сложит автоматически.</p>
     <div class="form-grid">${formField("production-date", "Дата", `<input id="production-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("production-shift", "Смена", `<input id="production-shift" name="shift" value="${attribute(record?.shift || productionShiftCode())}" readonly>`)}${formField("production-start-time", "Время начала", `<input id="production-start-time" name="startTime" type="time" value="${attribute(record?.startTime || "")}" required>`)}${formField("production-time", "Время окончания", `<input id="production-time" name="time" type="time" value="${attribute(record?.time || "")}" required>`)}${formField("production-strength", "Крепость, mg/g", `<select id="production-strength" name="strength" required>${optionList(strengths, "Выберите крепость")}</select>`)}${formField("production-product", "Продукт", `<select id="production-product" name="product" required disabled><option value="">Сначала выберите крепость</option></select>`)}${formField("production-catalog-line", "Линейка", `<select id="production-catalog-line" name="catalogLine" required disabled><option value="">Сначала выберите продукт</option></select>`)}</div>
-    <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
+    <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" value="${attribute(record?.canScrapKg ?? 0)}" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
     <div class="form-grid">${formField("production-packer", "Упаковщик (мой выпуск)", `<select id="production-packer" name="packer" required>${optionList(packerNames, "Выберите себя")}</select>`)}${formField("production-operator", "Механик-оператор", `<select id="production-operator" name="operator" required>${optionList(operatorNames, "Выберите механика-оператора")}</select>`)}${formField("production-operator-second", "Второй механик-оператор", `<select id="production-operator-second" name="operatorSecond"><option value="">Нет второго механика</option>${operatorNames.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}</select>`)}</div>
     ${formField("production-note", "Примечание", `<textarea id="production-note" name="note" rows="3" maxlength="5000" placeholder="При необходимости добавьте комментарий">${escapeHtml(record?.note || "")}</textarea>`) }
     <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить исправления" : "Сохранить"}</button></div></form>`);
@@ -3042,7 +3042,7 @@ function normalizeMachineStatuses(value) {
   const source = value && typeof value === "object" ? value : {};
   return Object.fromEntries(Array.from({ length: 16 }, (_, index) => {
     const machine = index + 1;
-    return [machine, ["work", "attention", "repair"].includes(source[machine]) ? source[machine] : "work"];
+    return [machine, ["work", "attention", "maintenance", "repair", "inactive"].includes(source[machine]) ? source[machine] : "work"];
   }));
 }
 
@@ -3050,11 +3050,13 @@ function renderMachineStatusPanel({ compact = false, interactive = false } = {})
   const statuses = normalizeMachineStatuses(state.machineStatuses);
   const repairCount = Object.values(statuses).filter(status => status === "repair").length;
   const attentionCount = Object.values(statuses).filter(status => status === "attention").length;
+  const maintenanceCount = Object.values(statuses).filter(status => status === "maintenance").length;
+  const inactiveCount = Object.values(statuses).filter(status => status === "inactive").length;
   const canEdit = interactive && ["manager", "senior"].includes(state.account?.role);
   const tiles = Array.from({ length: 16 }, (_, index) => {
     const machine = index + 1;
     const status = statuses[machine];
-    const label = { work: "Рабочая", attention: "Требует внимания", repair: "В ремонте" }[status];
+    const label = { work: "Рабочая", attention: "Требует внимания", maintenance: "ТО", repair: "В ремонте", inactive: "Не в работе" }[status];
     const tag = interactive ? "button" : "div";
     const attributes = interactive
       ? ` type="button" data-action="toggle-machine-status" data-machine="${machine}" ${canEdit ? "" : "disabled"} aria-label="Станок ${machine}: ${label}. ${canEdit ? "Нажмите, чтобы изменить состояние." : ""}" title="Станок ${machine}: ${label}"`
@@ -3062,8 +3064,8 @@ function renderMachineStatusPanel({ compact = false, interactive = false } = {})
     return `<${tag} class="machine-status-tile ${status}"${attributes}><strong>${machine}</strong><span>${label}</span></${tag}>`;
   }).join("");
   return `<section class="card machine-status-panel ${compact ? "compact" : ""}">
-    <div class="machine-status-heading"><div><p class="eyebrow">Состояние станков</p><h2>${repairCount ? `В ремонте: ${repairCount}` : attentionCount ? `Требуют внимания: ${attentionCount}` : "Все станки работают"}</h2></div>${interactive ? `<small>${canEdit ? "Клик: рабочая → требует внимания → в ремонте" : "Только просмотр"}</small>` : `<button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть</button>`}</div>
-    <div class="machine-status-legend" aria-label="Обозначения"><span class="work">Рабочая</span><span class="attention">Требует внимания</span><span class="repair">В ремонте</span></div>
+    <div class="machine-status-heading"><div><p class="eyebrow">Состояние станков</p><h2>${repairCount ? `В ремонте: ${repairCount}` : maintenanceCount ? `На ТО: ${maintenanceCount}` : inactiveCount ? `Не в работе: ${inactiveCount}` : attentionCount ? `Требуют внимания: ${attentionCount}` : "Все станки работают"}</h2></div>${interactive ? `<small>${canEdit ? "Клик: рабочая → требует внимания → ТО → в ремонте → не в работе" : "Только просмотр"}</small>` : `<button class="secondary-button" data-action="navigate" data-page="maintenance">Открыть</button>`}</div>
+    <div class="machine-status-legend" aria-label="Обозначения"><span class="work">Рабочая</span><span class="attention">Требует внимания</span><span class="maintenance">ТО</span><span class="repair">В ремонте</span><span class="inactive">Не в работе</span></div>
     <div class="machine-status-grid">${tiles}</div>
   </section>`;
 }

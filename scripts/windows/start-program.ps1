@@ -31,6 +31,35 @@ function Get-PackagingHubHealth {
   }
 }
 
+function Maximize-PackagingHubWindow {
+  param([int]$TimeoutSeconds = 10)
+
+  # Chrome restores the previous size of an app window and can ignore
+  # --start-maximized.  Maximize only the Hub app window after it appears.
+  if (-not ("PackagingHubWindow" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PackagingHubWindow {
+  [DllImport("user32.dll")]
+  public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}
+'@
+  }
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $window = Get-Process -Name chrome -ErrorAction SilentlyContinue |
+      Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Packaging-Filling-Hub*" } |
+      Select-Object -First 1
+    if ($window) {
+      [PackagingHubWindow]::ShowWindowAsync($window.MainWindowHandle, 3) | Out-Null
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
 $ErrorActionPreference = "Stop"
 $installPath = [System.IO.Path]::GetFullPath($InstallRoot)
 $serverPath = Join-Path $installPath "server\google-workspace-gateway.mjs"
@@ -100,6 +129,7 @@ if (-not $NoBrowser) {
   $chromePath = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
   if ($chromePath) {
     Start-Process -FilePath $chromePath -ArgumentList @("--app=$url", "--start-maximized")
+    [void](Maximize-PackagingHubWindow)
   } else {
     Start-Process $url
   }

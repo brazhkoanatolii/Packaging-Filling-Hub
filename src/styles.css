@@ -257,16 +257,20 @@ h3 { margin-bottom: 5px; }
 .machine-status-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .machine-status-legend span::before { width: 9px; height: 9px; border-radius: 3px; background: currentColor; content: ""; }
 .machine-status-legend .work { color: #2fbd82; }
-.machine-status-legend .attention { color: #eaa342; }
+.machine-status-legend .attention { color: #bd6415; }
+.machine-status-legend .maintenance { color: #d5ac18; }
 .machine-status-legend .repair { color: #df6262; }
+.machine-status-legend .inactive { color: #8a98ad; }
 .machine-status-grid { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 8px; }
 .machine-status-tile { appearance: none; display: grid; place-items: center; align-content: center; aspect-ratio: 1; min-height: 48px; padding: 5px; border: 1px solid transparent; border-radius: 9px; color: #fff; font: inherit; text-align: center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); transition: transform .15s ease, filter .15s ease; }
 button.machine-status-tile { cursor: pointer; }
 button.machine-status-tile:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.12); }
 button.machine-status-tile:focus-visible { outline: 2px solid var(--blue-600); outline-offset: 2px; }
 .machine-status-tile.work { border-color: #34c98c; background: linear-gradient(135deg, #269f6e, #36c487); }
-.machine-status-tile.attention { border-color: #f2b758; background: linear-gradient(135deg, #c77a22, #eca842); }
+.machine-status-tile.attention { border-color: #d47b25; background: linear-gradient(135deg, #843d0d, #ba6117); }
+.machine-status-tile.maintenance { border-color: #e7c445; background: linear-gradient(135deg, #a77b00, #d5ad19); }
 .machine-status-tile.repair { border-color: #ea7777; background: linear-gradient(135deg, #a9454b, #d86464); }
+.machine-status-tile.inactive { border-color: #9aa8bd; background: linear-gradient(135deg, #59677d, #7f8da1); }
 .machine-status-tile strong { font-size: 1rem; line-height: 1; }
 .machine-status-tile span { display: none; }
 .machine-status-panel.compact { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: center; gap: 16px; padding: 13px 18px; }
