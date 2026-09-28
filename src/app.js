@@ -1049,6 +1049,7 @@ async function startStartupJournalSync() {
     state.startupSync.current = "";
     state.startupSync.completedAt = new Date().toISOString();
     state.lastRefresh = state.startupSync.completedAt;
+    if (state.account) state.shift = await shiftService.current();
     render();
   })().finally(() => { startupSyncPromise = null; });
   return startupSyncPromise;
@@ -1063,6 +1064,7 @@ async function refreshCurrentPage() {
   }
   if (state.page === "attendance" || state.page === "personnel" || state.page === "vacations" || state.page === "settings") {
     state.workforce = workforceRepository ? await workforceRepository.refresh() : await workforceService.snapshot();
+    if (state.account) state.shift = await shiftService.current();
     return;
   }
   if (state.page === "cyclones") { await refreshCyclones(); return; }

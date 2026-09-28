@@ -38,6 +38,7 @@ test("central gateway authenticates users before protected journals", async () =
       ...process.env,
       PORT: String(port), HOST: "127.0.0.1", DEPLOYMENT_MODE: "central",
       CENTRAL_ACCOUNTS_PATH: join(temp, "accounts.json"),
+      CENTRAL_MACHINE_STATUSES_PATH: join(temp, "machine-statuses.json"),
       CENTRAL_MANAGER_PASSWORD: managerCredential, CENTRAL_SENIOR_PASSWORD: seniorCredential
     }, stdio: "ignore"
   });

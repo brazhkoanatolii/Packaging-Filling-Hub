@@ -183,7 +183,7 @@ createServer(async (request, response) => {
     // browser data. Every central-mode client therefore reads the same record.
     if (url.pathname === "/api/shift-state" && request.method === "GET") {
       requireActor(request, ["manager", "senior"]);
-      return sendJson(response, 200, { ok: true, shift: readCentralShiftState() });
+      return sendJson(response, 200, { ok: true, shift: await currentCentralShiftState() });
     }
     if (url.pathname === "/api/shift-state" && request.method === "POST") {
       const actor = requireActor(request, ["manager", "senior"]);
@@ -1821,6 +1821,38 @@ function writeCentralShiftState(value) {
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   renameSync(temporary, centralShiftStatePath);
   return value;
+}
+
+async function currentCentralShiftState() {
+  const shift = readCentralShiftState();
+  if (!shift?.active || shift.shiftDate !== todayInVilnius()) return shift;
+  try {
+    const workforce = await getWorkforceSnapshot();
+    const actual = new Map((workforce.attendance || [])
+      .filter(item => item.date === shift.shiftDate && item.shiftTeamId === shift.shiftTeamId)
+      .map(item => [item.employeeId, item]));
+    if (!actual.size) return shift;
+    // Google Sheets is the authoritative personnel timesheet. The central
+    // record coordinates the active shift, but must never show an older status
+    // after an attendance entry was saved from another workstation.
+    const attendance = (shift.attendance || []).map(item => {
+      const record = actual.get(item.employeeId);
+      return record ? {
+        ...item,
+        status: String(record.value || item.status),
+        ...(record.substitutionReason ? {
+          isSubstitute: true,
+          substitutionReason: record.substitutionReason,
+          homeShiftTeamId: record.homeShiftTeamId || item.homeShiftTeamId || ""
+        } : {})
+      } : item;
+    });
+    return { ...shift, attendance };
+  } catch (error) {
+    // A temporary Google failure must not make the shared active shift vanish.
+    console.warn(`[shift] Не удалось сверить табель с Google: ${error.message}`);
+    return shift;
+  }
 }
 
 function defaultMachineStatuses() {
