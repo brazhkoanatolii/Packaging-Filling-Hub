@@ -40,10 +40,20 @@ try {
     "ENABLE-GOOGLE-WRITES.cmd",
     "VERIFY-INSTALLATION.cmd"
   )) {
-    Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination (Join-Path $stagePath $file)
+    $sourcePath = Join-Path $projectRoot $file
+    if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
+      Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $stagePath $file)
+    } else {
+      Write-Host "Не включён отсутствующий дополнительный файл: $file" -ForegroundColor Yellow
+    }
   }
-  New-Item -ItemType Directory -Path (Join-Path $stagePath "docs") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $projectRoot "docs\CENTRAL-SERVER-RU.md") -Destination (Join-Path $stagePath "docs\CENTRAL-SERVER-RU.md")
+  $centralServerGuide = Join-Path $projectRoot "docs\CENTRAL-SERVER-RU.md"
+  if (Test-Path -LiteralPath $centralServerGuide -PathType Leaf) {
+    New-Item -ItemType Directory -Path (Join-Path $stagePath "docs") -Force | Out-Null
+    Copy-Item -LiteralPath $centralServerGuide -Destination (Join-Path $stagePath "docs\CENTRAL-SERVER-RU.md")
+  } else {
+    Write-Host "Не включено отсутствующее дополнительное руководство: docs\\CENTRAL-SERVER-RU.md" -ForegroundColor Yellow
+  }
 
   if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
   if (Test-Path -LiteralPath $hashPath) { Remove-Item -LiteralPath $hashPath -Force }
