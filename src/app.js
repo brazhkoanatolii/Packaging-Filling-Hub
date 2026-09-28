@@ -54,6 +54,7 @@ const state = {
   recordMonth: today().slice(0, 7),
   loading: true,
   syncing: false,
+  syncTransfer: { active: false, source: "" },
   refreshing: false,
   startupSync: { active: false, completed: 0, total: 8, current: "", failed: [], completedAt: null },
   lastRefresh: null,
@@ -1126,6 +1127,7 @@ async function syncRecords({ silent = false } = {}) {
     return;
   }
   state.syncing = true;
+  state.syncTransfer = { active: true, source: "Контроль весов, табель и персонал, расход упаковки, очистка циклонов" };
   render();
   try {
     const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), packagingService?.sync(), cycloneService?.sync()]);
@@ -1144,6 +1146,7 @@ async function syncRecords({ silent = false } = {}) {
     }
   } finally {
     state.syncing = false;
+    state.syncTransfer = { active: false, source: "" };
     render();
   }
 }
@@ -1446,6 +1449,7 @@ function renderDashboard() {
   const latestService = newest(service.records).slice(0, 5);
   return `
     ${state.account.role === "manager" ? renderBirthdayReminders() : ""}
+    ${renderDataTransferStatus()}
     ${renderJournalReadiness()}
     ${state.account.role === "senior" ? renderShiftPanel() : ""}
     ${state.account.role === "senior" ? renderWorkflowPanel() : ""}
@@ -1487,6 +1491,12 @@ function renderDashboard() {
       <div class="section-heading"><div><p class="eyebrow">Журнал ТО</p><h2>Последние записи ТО</h2></div><span class="status-pill neutral">5 последних</span></div>
       ${renderDashboardMaintenanceList(latestService, "ТО", 5)}
     </section>`;
+}
+
+function renderDataTransferStatus() {
+  const transfer = state.syncTransfer;
+  if (!transfer?.active) return "";
+  return `<section class="workforce-connection data-transfer-status" role="status"><span>↥</span><p><strong>Отправляем: ${escapeHtml(transfer.source)}</strong><br><small>Куда: защищённый шлюз → Google Таблицы. Не закрывайте программу до завершения отправки.</small></p></section>`;
 }
 
 function renderDashboardMaintenanceList(records, kind, limit) {
@@ -3354,8 +3364,17 @@ async function archiveLegacyShift() {
 
 function sendWorkforceInBackground() {
   if (!workforceRepository || !navigator.onLine) return;
+  if (!state.syncing) {
+    state.syncTransfer = { active: true, source: "Табель и персонал" };
+    render();
+  }
   void syncWorkforce().catch(error => {
     toast(`Табель сохранён на этом компьютере. Отправка в Google будет повторена автоматически: ${error.message}`, "warning");
+  }).finally(() => {
+    if (!state.syncing) {
+      state.syncTransfer = { active: false, source: "" };
+      render();
+    }
   });
 }
 
