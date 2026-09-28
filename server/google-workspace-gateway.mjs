@@ -104,7 +104,6 @@ let automaticDailyProductionExportAttemptAt = 0;
 let automaticUpdateAttemptAt = 0;
 let automaticUpdateRunning = false;
 const updateActivitySessions = new Map();
-const updateSafetyIdleMs = 120_000;
 const updateActivityTtlMs = 5 * 60_000;
 const automaticUpdateNotBefore = Date.now() + 3 * 60_000;
 let cachedFallbackManifest = null;
@@ -452,10 +451,11 @@ function updateInstallationSafety() {
   if (now < automaticUpdateNotBefore) {
     return { safe: false, message: "Ожидание подключения программы перед проверкой обновления" };
   }
+  // Merely viewing the program must not block an update. Only an actual
+  // draft, an in-flight save, or a queued operation can put data at risk.
   const blockers = [...updateActivitySessions.values()].filter(session => session.dirty
     || session.submitting
-    || session.pending > 0
-    || now - session.lastInteractionAt < updateSafetyIdleMs);
+    || session.pending > 0);
   if (!blockers.length) return { safe: true, message: "Можно устанавливать обновление" };
   const hasDraft = blockers.some(session => session.dirty || session.submitting);
   const hasQueue = blockers.some(session => session.pending > 0);
