@@ -92,5 +92,15 @@ if (-not $runningHealth -or $runningHealth.version -ne $expectedVersion) {
 }
 
 if (-not $NoBrowser) {
-  Start-Process $url
+  $chromeCandidates = @(
+    (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
+    (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+  )
+  $chromePath = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+  if ($chromePath) {
+    Start-Process -FilePath $chromePath -ArgumentList @("--app=$url", "--start-maximized")
+  } else {
+    Start-Process $url
+  }
 }

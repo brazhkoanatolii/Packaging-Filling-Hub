@@ -131,7 +131,7 @@ if (-not $NoShortcuts) {
     # PowerShell shortcut that can silently fail to foreground the application.
     $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT" -Fallback "4173"
     $desktopShortcut.TargetPath = $chromePath
-    $desktopShortcut.Arguments = "--app=http://127.0.0.1:$port/"
+    $desktopShortcut.Arguments = "--app=http://127.0.0.1:$port/ --start-maximized"
     $desktopShortcut.IconLocation = "$applicationIcon,0"
   } else {
     $desktopShortcut.TargetPath = $powerShellPath

@@ -1181,7 +1181,6 @@ function render() {
 
 function renderLogin() {
   const accounts = authService.availableAccounts();
-  const productionMode = APP_CONFIG.integration.mode === "gateway";
   return `
     <main class="login-shell">
       <section class="login-brand" aria-labelledby="login-title">
@@ -1975,28 +1974,25 @@ function openProductionDialog(record = null) {
   const optionList = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
   const dialog = createDialog(`<form class="dialog-card production-dialog"><div class="dialog-heading"><div><p class="eyebrow">Учёт продукции и брака</p><h2>${record ? "Исправить запись" : "Завершить продукт"}</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
     <p>Дата и смена подставляются из начатой смены в табеле. Упаковщик вносит только свой выпуск; общий итог линии программа сложит автоматически.</p>
-    <div class="form-grid">${formField("production-date", "Дата", `<input id="production-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("production-shift", "Смена", `<input id="production-shift" name="shift" value="${attribute(record?.shift || productionShiftCode())}" readonly>`)}${formField("production-start-time", "Время начала", `<input id="production-start-time" name="startTime" type="time" value="${attribute(record?.startTime || "")}" required>`)}${formField("production-time", "Время окончания", `<input id="production-time" name="time" type="time" value="${attribute(record?.time || "")}" required>`)}${formField("production-strength", "Крепость, mg/g", `<select id="production-strength" name="strength" required>${optionList(strengths, "Выберите крепость")}</select>`)}${formField("production-product-search", "Поиск продукта", `<input id="production-product-search" type="search" placeholder="Введите часть названия" disabled>`)}${formField("production-product", "Продукт", `<select id="production-product" name="product" required disabled><option value="">Сначала выберите крепость</option></select>`)}${formField("production-catalog-line", "Линейка", `<select id="production-catalog-line" name="catalogLine" required disabled><option value="">Сначала выберите продукт</option></select>`)}</div>
-    <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" value="0" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
+    <div class="form-grid">${formField("production-date", "Дата", `<input id="production-date" name="date" type="date" value="${attribute(record?.date || today())}" readonly>`)}${formField("production-shift", "Смена", `<input id="production-shift" name="shift" value="${attribute(record?.shift || productionShiftCode())}" readonly>`)}${formField("production-start-time", "Время начала", `<input id="production-start-time" name="startTime" type="time" value="${attribute(record?.startTime || "")}" required>`)}${formField("production-time", "Время окончания", `<input id="production-time" name="time" type="time" value="${attribute(record?.time || "")}" required>`)}${formField("production-strength", "Крепость, mg/g", `<select id="production-strength" name="strength" required>${optionList(strengths, "Выберите крепость")}</select>`)}${formField("production-product", "Продукт", `<select id="production-product" name="product" required disabled><option value="">Сначала выберите крепость</option></select>`)}${formField("production-catalog-line", "Линейка", `<select id="production-catalog-line" name="catalogLine" required disabled><option value="">Сначала выберите продукт</option></select>`)}</div>
+    <div class="form-grid">${formField("production-quantity", "Готовая продукция, шт", `<input id="production-quantity" name="quantity" type="number" min="0.001" step="0.001" required>`)}${formField("production-scrap", "Брак продукции, кг", `<input id="production-scrap" name="scrapKg" type="number" min="0" step="0.001" required>`)}${formField("production-can-scrap", "Брак банок, кг", `<input id="production-can-scrap" name="canScrapKg" type="number" min="0" step="0.001" required>`)}${formField("production-machine-line", "Линия (машина)", `<select id="production-machine-line" name="machineLine" required>${optionList(PRODUCTION_LINES, "Выберите линию")}</select>`)}</div>
     <div class="form-grid">${formField("production-packer", "Упаковщик (мой выпуск)", `<select id="production-packer" name="packer" required>${optionList(packerNames, "Выберите себя")}</select>`)}${formField("production-operator", "Механик-оператор", `<select id="production-operator" name="operator" required>${optionList(operatorNames, "Выберите механика-оператора")}</select>`)}${formField("production-operator-second", "Второй механик-оператор", `<select id="production-operator-second" name="operatorSecond"><option value="">Нет второго механика</option>${operatorNames.map(item => `<option value="${attribute(item)}">${escapeHtml(item)}</option>`).join("")}</select>`)}</div>
     ${formField("production-note", "Примечание", `<textarea id="production-note" name="note" rows="3" maxlength="5000" placeholder="При необходимости добавьте комментарий">${escapeHtml(record?.note || "")}</textarea>`) }
     <p id="form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button type="submit" class="primary-button">${record ? "Сохранить исправления" : "Сохранить"}</button></div></form>`);
   const form = dialog.querySelector("form");
-  const strength = form.elements.strength, product = form.elements.product, catalogLine = form.elements.catalogLine, search = form.querySelector("#production-product-search");
+  const strength = form.elements.strength, product = form.elements.product, catalogLine = form.elements.catalogLine;
   const matching = () => specifications.filter(item => String(item.variant) === String(strength.value));
   const fillProducts = () => {
-    const query = String(search.value || "").trim().toLocaleLowerCase("ru");
-    const names = [...new Set(matching().map(item => item.product).filter(name => name.toLocaleLowerCase("ru").includes(query)))].sort((a, b) => a.localeCompare(b, "ru"));
+    const names = [...new Set(matching().map(item => item.product))].sort((a, b) => a.localeCompare(b, "ru"));
     product.innerHTML = optionList(names, names.length ? "Выберите продукт" : "Нет подходящих продуктов"); product.disabled = !names.length; catalogLine.innerHTML = '<option value="">Сначала выберите продукт</option>'; catalogLine.disabled = true;
   };
-  strength.addEventListener("change", () => { search.disabled = !strength.value; search.value = ""; fillProducts(); });
-  search.addEventListener("input", fillProducts);
+  strength.addEventListener("change", fillProducts);
   product.addEventListener("change", () => {
     const lines = [...new Set(matching().filter(item => item.product === product.value).map(item => item.line))].sort((a, b) => a.localeCompare(b, "ru"));
     catalogLine.innerHTML = optionList(lines, lines.length ? "Выберите линейку" : "Нет вариантов"); catalogLine.disabled = !lines.length;
   });
   if (record) {
     strength.value = String(record.strength);
-    search.disabled = false;
     fillProducts();
     product.value = record.product;
     product.dispatchEvent(new Event("change"));
@@ -2852,6 +2848,7 @@ function createDialog(content) {
   dialog.innerHTML = content;
   localizeElement(dialog, state.language);
   dialog.addEventListener("close", () => dialog.remove());
+  dialog.addEventListener("cancel", event => event.preventDefault());
   dialog.addEventListener("click", event => {
     if (event.target.closest('[data-action="close-dialog"]')) {
       dialog.close();
@@ -2863,9 +2860,6 @@ function createDialog(content) {
       void navigateToPage(navigation.dataset.page);
       return;
     }
-    const rect = dialog.getBoundingClientRect();
-    const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
-    if (outside) dialog.close();
   });
   document.body.append(dialog);
   return dialog;
