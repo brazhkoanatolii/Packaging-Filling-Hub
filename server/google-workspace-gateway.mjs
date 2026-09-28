@@ -79,6 +79,9 @@ const centralAccountsPath = process.env.CENTRAL_ACCOUNTS_PATH
 const centralShiftStatePath = process.env.CENTRAL_SHIFT_STATE_PATH
   ? resolve(process.env.CENTRAL_SHIFT_STATE_PATH)
   : join(projectRoot, ".runtime", "central-shift-state.json");
+const centralMachineStatusesPath = process.env.CENTRAL_MACHINE_STATUSES_PATH
+  ? resolve(process.env.CENTRAL_MACHINE_STATUSES_PATH)
+  : join(projectRoot, ".runtime", "central-machine-statuses.json");
 const centralAuth = centralMode
   ? new CentralAuthService({ accountsPath: centralAccountsPath })
   : null;
@@ -186,6 +189,19 @@ createServer(async (request, response) => {
       const actor = requireActor(request, ["manager", "senior"]);
       const input = await readJsonBody(request);
       return sendJson(response, 200, { ok: true, shift: await updateCentralShiftState(input, actor) });
+    }
+
+    // Machine status is shared operational state. It is intentionally kept on
+    // the central server rather than in a browser or Google Sheets.
+    if (url.pathname === "/api/machine-statuses" && request.method === "GET") {
+      requireActor(request, ["manager", "senior"]);
+      const statuses = readCentralMachineStatuses();
+      return sendJson(response, 200, { ok: true, configured: statuses !== null, statuses: statuses ?? defaultMachineStatuses() });
+    }
+    if (url.pathname === "/api/machine-statuses" && request.method === "PUT") {
+      const actor = requireActor(request, ["manager", "senior"]);
+      const statuses = writeCentralMachineStatuses((await readJsonBody(request)).statuses, actor);
+      return sendJson(response, 200, { ok: true, configured: true, statuses });
     }
 
     if (url.pathname === "/api/update-status" && request.method === "GET") {
@@ -1805,6 +1821,44 @@ function writeCentralShiftState(value) {
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   renameSync(temporary, centralShiftStatePath);
   return value;
+}
+
+function defaultMachineStatuses() {
+  return Object.fromEntries(Array.from({ length: 16 }, (_, index) => [index + 1, "work"]));
+}
+
+function normalizeMachineStatuses(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(Array.from({ length: 16 }, (_, index) => {
+    const machine = index + 1;
+    const status = source[machine];
+    return [machine, ["work", "attention", "repair"].includes(status) ? status : "work"];
+  }));
+}
+
+function readCentralMachineStatuses() {
+  if (!centralMode || !existsSync(centralMachineStatusesPath)) return null;
+  try {
+    const value = JSON.parse(readFileSync(centralMachineStatusesPath, "utf8"));
+    return normalizeMachineStatuses(value?.statuses ?? value);
+  } catch {
+    return null;
+  }
+}
+
+function writeCentralMachineStatuses(input, actor) {
+  if (!centralMode) {
+    const error = new Error("Общее состояние станков доступно только на центральном сервере");
+    error.statusCode = 409;
+    throw error;
+  }
+  const statuses = normalizeMachineStatuses(input);
+  const directory = dirname(centralMachineStatusesPath);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${centralMachineStatusesPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, statuses, updatedAt: new Date().toISOString(), updatedBy: actor.id }, null, 2)}\n`, "utf8");
+  renameSync(temporary, centralMachineStatusesPath);
+  return statuses;
 }
 
 async function updateCentralShiftState(input, actor) {

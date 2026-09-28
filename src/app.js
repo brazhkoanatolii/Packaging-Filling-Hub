@@ -11,6 +11,7 @@ import { AuthService } from "./services/auth-service.js";
 import { JournalService } from "./services/journal-service.js";
 import { ShiftService } from "./services/shift-service.js";
 import { CentralShiftGatewayProvider } from "./providers/central-shift-gateway-provider.js";
+import { MachineStatusGatewayProvider } from "./providers/machine-status-gateway-provider.js";
 import { WorkforceService, getScheduleMonth } from "./services/workforce-service.js";
 import { WorkforceGatewayProvider } from "./providers/workforce-gateway-provider.js";
 import { WorkforceRepository } from "./repositories/workforce-repository.js";
@@ -89,6 +90,7 @@ const state = {
 let store;
 let authService;
 let shiftService;
+let machineStatusGateway;
 let legacyShiftService;
 let repository;
 let journalService;
@@ -151,6 +153,9 @@ async function bootstrap() {
   shiftService = APP_CONFIG.centralAuth
     ? new ShiftService(store, new CentralShiftGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl }))
     : legacyShiftService;
+  machineStatusGateway = APP_CONFIG.centralAuth
+    ? new MachineStatusGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl })
+    : null;
   workforceRepository = APP_CONFIG.integration.mode === "gateway" ? new WorkforceRepository(store,
     new WorkforceGatewayProvider({ baseUrl: APP_CONFIG.integration.gatewayBaseUrl, writesEnabled: APP_CONFIG.integration.googleWritesEnabled }),
     () => ({ ...workforceActor, workstationId: APP_CONFIG.workstationId, account: state.account?.id })) : null;
@@ -167,6 +172,7 @@ async function bootstrap() {
 
   await repository.init();
   state.account = await authService.current();
+  if (state.account) await synchronizeMachineStatuses();
   state.packagingWarehouse = await packagingWarehouseService.refresh();
   state.legacyShift = APP_CONFIG.centralAuth ? await legacyShiftService.current() : null;
   state.shift = state.account ? await shiftService.current() : null;
@@ -431,6 +437,7 @@ async function handleSubmit(event) {
       state.account = await authService.login(accountId, String(data.get("password") || ""));
       state.shiftResponsible = null;
       state.shift = await shiftService.current();
+      await synchronizeMachineStatuses();
       state.page = "dashboard";
       render();
       if (navigator.onLine) void startStartupJournalSync().finally(() => syncInBackground());
@@ -700,6 +707,10 @@ async function handleClick(event) {
         [machine]: next
       };
       await store.setPreference("machineStatuses", state.machineStatuses);
+      if (machineStatusGateway) {
+        const shared = await machineStatusGateway.save(state.machineStatuses);
+        state.machineStatuses = normalizeMachineStatuses(shared.statuses);
+      }
       render();
       const label = { work: "рабочая", attention: "требует внимания", repair: "в ремонте" }[next];
       toast(`Станок ${machine}: ${label}.`, next === "repair" ? "warning" : "success");
@@ -872,6 +883,27 @@ async function navigateToPage(page) {
 async function reloadLocalState() {
   state.records = await journalService.list();
   state.operations = await repository.pendingOperations();
+}
+
+function hasNonWorkingMachineStatus(statuses) {
+  return Object.values(normalizeMachineStatuses(statuses)).some(status => status !== "work");
+}
+
+async function synchronizeMachineStatuses() {
+  if (!machineStatusGateway || !state.account) return state.machineStatuses;
+  const shared = await machineStatusGateway.current();
+  if (shared.configured) {
+    state.machineStatuses = normalizeMachineStatuses(shared.statuses);
+    await store.setPreference("machineStatuses", state.machineStatuses);
+    return state.machineStatuses;
+  }
+  // The senior mechanic's existing non-green browser state becomes the first
+  // shared state. A manager's untouched all-green view must never overwrite it.
+  if (state.account.role === "senior" && hasNonWorkingMachineStatus(state.machineStatuses)) {
+    const saved = await machineStatusGateway.save(state.machineStatuses);
+    state.machineStatuses = normalizeMachineStatuses(saved.statuses);
+  }
+  return state.machineStatuses;
 }
 
 async function syncWorkforce() {
@@ -1125,6 +1157,7 @@ function startAutomaticRefresh() {
   clearInterval(refreshTimer);
   refreshTimer = setInterval(async () => {
     if (!state.account || document.hidden || !navigator.onLine) return;
+    try { await synchronizeMachineStatuses(); render(); } catch {}
     syncInBackground();
   }, APP_CONFIG.refreshIntervalMs);
 }

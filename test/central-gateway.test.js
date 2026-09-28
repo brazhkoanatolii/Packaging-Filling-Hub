@@ -63,6 +63,24 @@ test("central gateway authenticates users before protected journals", async () =
     const shiftState = await fetch(`${base}/api/shift-state`, { headers: { Cookie: cookie } });
     assert.equal(shiftState.status, 200);
     assert.equal((await shiftState.json()).shift, null);
+    const initialMachineStatuses = await fetch(`${base}/api/machine-statuses`, { headers: { Cookie: cookie } });
+    assert.deepEqual(await initialMachineStatuses.json(), {
+      ok: true,
+      configured: false,
+      statuses: Object.fromEntries(Array.from({ length: 16 }, (_, index) => [index + 1, "work"]))
+    });
+    const savedMachineStatuses = await fetch(`${base}/api/machine-statuses`, {
+      method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ statuses: { 3: "repair", 7: "attention", invalid: "repair" } })
+    });
+    assert.equal(savedMachineStatuses.status, 200);
+    assert.equal((await savedMachineStatuses.json()).statuses[3], "repair");
+    const persistedMachineStatuses = await fetch(`${base}/api/machine-statuses`, { headers: { Cookie: cookie } });
+    const persistedMachineBody = await persistedMachineStatuses.json();
+    assert.equal(persistedMachineBody.configured, true);
+    assert.equal(persistedMachineBody.statuses[3], "repair");
+    assert.equal(persistedMachineBody.statuses[7], "attention");
+    assert.equal(persistedMachineBody.statuses[1], "work");
     const endShift = await fetch(`${base}/api/shift-state`, {
       method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
       body: JSON.stringify({ action: "end" })
