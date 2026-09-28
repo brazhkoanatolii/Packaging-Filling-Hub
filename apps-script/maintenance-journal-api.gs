@@ -49,6 +49,7 @@ function pfhCreateMaintenanceRecord_(input, journal) {
   try {
     const duplicate = pfhFindReceipt_(sheet, receipt);
     if (duplicate) return { ok: true, record: pfhMaintenanceRow_(sheet, duplicate, journal === 'service' ? 3 : 5) };
+    if (journal === 'service') pfhEnsureServicePerformer_(book, performer);
     const row = Math.max(5, sheet.getLastRow() + 1);
     const width = journal === 'service' ? 3 : 5;
     sheet.getRange(5, 1, 1, width).copyTo(sheet.getRange(row, 1), SpreadsheetApp.CopyPasteType.PASTE_NORMAL, false);
@@ -78,6 +79,7 @@ function pfhMaintenanceRowFromValues_(row, machine, sheetRow, width, receipt) { 
 function pfhRepairOptions_(book) { const sheet = book.getSheetByName('Справочники'); if (!sheet) throw new Error('Не найден лист «Справочники» журнала ремонта.'); const categories = pfhColumnValues_(sheet, 4); return { performers: pfhColumnValues_(sheet, 1), categories: categories, workByCategory: { 'Настройка': pfhColumnValues_(sheet, 2), 'Ремонт': pfhColumnValues_(sheet, 3) } }; }
 function pfhColumnValues_(sheet, column) { const last = Math.max(2, sheet.getLastRow()); return pfhUnique_(sheet.getRange(2, column, last - 1, 1).getDisplayValues().map(function (row) { return row[0]; })); }
 function pfhMachineOptions_(count) { return Array.from({ length: count }, function (_, index) { return index + 1; }); }
+function pfhEnsureServicePerformer_(book, performer) { const sheet = book.getSheetByName('Справочники'); if (!sheet) throw new Error('Не найден лист «Справочники» журнала ТО.'); if (pfhColumnValues_(sheet, 1).indexOf(performer) >= 0) return; sheet.getRange(Math.max(2, sheet.getLastRow() + 1), 1).setValue(performer); SpreadsheetApp.flush(); }
 function pfhPersonnelNames_() { try { return typeof listPersonnel === 'function' ? pfhUnique_(listPersonnel({}).filter(function (p) { return p.active !== false; }).map(function (p) { return p.fullName; })) : []; } catch (error) { return []; } }
 function pfhFindReceipt_(sheet, receipt) { const last = sheet.getLastRow(); if (last < 5) return 0; const notes = sheet.getRange(5, 1, last - 4, 1).getNotes(); for (let index = 0; index < notes.length; index += 1) if (notes[index][0] === receipt) return index + 5; return 0; }
 function pfhDate_(value) { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) throw new Error('Укажите дату записи.'); const date = new Date(String(value) + 'T12:00:00'); if (isNaN(date.getTime()) || date.getTime() > new Date().getTime() + 86400000) throw new Error('Дата не может быть в будущем.'); return date; }
