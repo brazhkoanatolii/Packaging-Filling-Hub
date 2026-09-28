@@ -1197,7 +1197,6 @@ function renderLogin() {
       </section>
       <section class="login-panel" aria-label="Выбор учётной записи">
         <div class="panel-heading">
-          <span class="mode-pill">${productionMode ? escapeHtml(displayWorkstationLabel("Рабочее место")) : "Тестовый режим"}</span>
           <h2>Кто работает?</h2>
           <p>${APP_CONFIG.centralAuth ? "Выберите рабочую учётную запись. Права определяются центральным сервером." : APP_CONFIG.workstationRole ? "Вход разрешён только для роли, назначенной этому компьютеру." : "Выберите рабочую учётную запись."}</p>
         </div>
@@ -1236,7 +1235,7 @@ function renderApplication() {
         <div class="sidebar-footer">
           <div class="signed-user">
             <span class="avatar">${state.account.role === "manager" ? "А" : "СМ"}</span>
-            <span><strong>${state.account.title}</strong><small>${escapeHtml(displayWorkstationLabel(ui("account")))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
+            <span><strong>${state.account.title}</strong><small>${escapeHtml(accountWorkstationLabel(state.account))}</small><small class="app-version">Версия ${escapeHtml(APP_CONFIG.version)}</small></span>
           </div>
           <button class="text-button" data-action="logout">${ui("logout")}</button>
         </div>
@@ -2973,11 +2972,10 @@ function pageTitle() {
   return moduleLabelById(state.page) || ui("home");
 }
 
-function displayWorkstationLabel(fallback) {
-  const configured = String(APP_CONFIG.workstationLabel || "").trim();
-  if (!configured) return fallback;
-  const administrationDevice = APP_CONFIG.workstationRole === "manager" || state.account?.role === "manager";
-  return administrationDevice ? configured.replace(/начальника(?: участка)?/giu, "администрации") : configured;
+function accountWorkstationLabel(account) {
+  if (account?.role === "manager") return "Рабочий компьютер начальника";
+  if (account?.role === "senior") return "Рабочий компьютер старшего механика";
+  return ui("account");
 }
 
 function modulesForAccount() {
