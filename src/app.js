@@ -107,8 +107,13 @@ let nonconformityRefreshPromise = null;
 let workforceActor = {};
 let refreshTimer;
 let clockTimer;
+function createRuntimeId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = globalThis.crypto?.getRandomValues ? globalThis.crypto.getRandomValues(new Uint32Array(2)) : null;
+  return `runtime-${Date.now().toString(36)}-${bytes ? `${bytes[0].toString(36)}${bytes[1].toString(36)}` : Math.random().toString(36).slice(2)}`;
+}
 const updateActivity = {
-  sessionId: crypto.randomUUID(),
+  sessionId: createRuntimeId(),
   lastInteractionAt: Date.now(),
   submittingUntil: 0,
   heartbeatTimer: null
