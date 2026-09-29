@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CentralAuthService, readCookie } from "./central-auth.mjs";
+import { PACKAGING_TARGET_RANGES, packagingTargetValues } from "./packaging-targets.mjs";
 
 const projectRoot = normalize(join(fileURLToPath(new URL(".", import.meta.url)), ".."));
 loadEnvironment(join(projectRoot, ".env"));
@@ -25,9 +26,11 @@ const repairsSpreadsheetId = "1pg2Y9Hnc-5BCU3QaF3k9VwOJjqNwdkXbE3qFAnY6Qw8";
 const repairsDictionaryRange = "'Справочники'!A1:D1000";
 const packagingSpreadsheetId = "1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI";
 const packagingSheetName = "Лист";
-const packagingRange = "'Лист'!B2:M";
+// The packaging journal contains exactly the date and eleven packaging totals (A:L).
+// The former contributor column was deliberately removed from the workbook.
+const packagingRange = "'Лист'!A2:L";
 const packagingReceiptPrefix = "PFH_PACKAGING_V1:";
-const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite"]);
+const packagingKeys = Object.freeze(["garantBox430", "garantBox570", "dochemsPaper", "killaCanClear", "killaCanGreen", "killaLidGreen", "dzCanClear", "dzCanGreen", "dzLidBlack", "dzLidWhite", "dzLidGreen"]);
 const packagingPendingPath = process.env.PACKAGING_PENDING_PATH
   ? resolve(process.env.PACKAGING_PENDING_PATH)
   : join(projectRoot, ".runtime", "packaging-pending.json");
@@ -37,13 +40,13 @@ const packagingWarehouseRange = "'Операции'!A6:F";
 const packagingWarehouseSummaryRange = "'Склад упаковки'!A6:I";
 const rawMaterialsSpreadsheetId = "1jXf8oZLrFLGEJo15VoFQBe_FjC0_dz_3p0cVxgV4xGo";
 const rawMaterialsSheetName = "Расход сырья";
-const rawMaterialsRange = "'Расход сырья'!A3:D500";
+const rawMaterialsRange = PACKAGING_TARGET_RANGES.rawMaterials;
 const cansSpreadsheetId = "1-rEj8fvmBE4A5GO8o1ZXU1Ke0-ppK-gwKwCZt_kpwV4";
 const cansSheetName = "Банки";
-const cansRange = "'Банки'!A4:J500";
+const cansRange = PACKAGING_TARGET_RANGES.cans;
 const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
-const productionSecondRange = "'Учет продукции 2'!A2:P";
-const productionFirstRange = "'Учет продукции 1'!B4:P";
+const productionSecondRange = "'Учет продукции 2'!A2:R";
+const productionFirstRange = "'Учет продукции 1'!B4:Q";
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -396,6 +399,9 @@ createServer(async (request, response) => {
   console.log(`Рабочее место: ${workstationLabel || workstationId || workstationRole || "не назначено"}`);
   console.log(`Google: ${missingGoogleSettings().length ? "требуется настройка" : "настроен"}; запись: ${writesEnabled ? "включена" : "выключена"}`);
   if (centralMode || workstationRole === "manager") {
+    if (writesEnabled && !missingGoogleSettings().length) {
+      runBackgroundTask("сверка журналов расхода упаковки", migrateAndReconcilePackagingRecords);
+    }
     if (automaticDailyExportsEnabled) {
       console.log(`Суточный перенос расхода упаковки: ежедневно после ${String(automaticDailyExportHour).padStart(2, "0")}:00 (Europe/Vilnius)`);
       runBackgroundTask("суточный перенос расхода упаковки", runAutomaticDailyPackagingExport);
@@ -722,15 +728,26 @@ async function validateRepairRecord(input) {
   if (note.length > 5000) throw requestError("Поле «Примечание» слишком длинное");
   if (selectedWorks.some(value => /(описать|какого).*примечани|примечани.*(описать|какого)/i.test(value)) && !note) throw requestError("Для выбранного вида работ заполните примечание");
 
-  const rows = (await getGoogleSheetRanges(repairsSpreadsheetId, [repairsDictionaryRange]))[0] ?? [];
+  const [rows, workforce] = await Promise.all([
+    getGoogleSheetRanges(repairsSpreadsheetId, [repairsDictionaryRange]).then(result => result[0] ?? []),
+    getWorkforceSnapshot()
+  ]);
   const dictionary = rows.slice(1);
   const performers = new Set(dictionary.map(row => String(row[0] || "").trim()).filter(Boolean));
+  const eligiblePerformers = new Set((workforce.personnel ?? [])
+    .filter(person => person.active !== false && (
+      person.fullName === "Anatolii Brazhko"
+      || ["senior-mechanic", "mechanic"].includes(person.role)
+    ))
+    .map(person => String(person.fullName || "").trim())
+    .filter(Boolean));
   const categories = new Set(dictionary.map(row => String(row[3] || "").trim()).filter(Boolean));
   const workColumn = category === "Настройка" ? 1 : category === "Ремонт" ? 2 : -1;
   if (!categories.has(category) || workColumn < 0) throw requestError("Категория работ отсутствует в справочнике журнала ремонта");
   const works = new Set(dictionary.map(row => String(row[workColumn] || "").trim()).filter(Boolean));
   if (selectedWorks.some(workItem => !works.has(workItem))) throw requestError("Один из выбранных видов работ отсутствует в справочнике журнала ремонта");
   if (!performers.has(performer)) throw requestError("Исполнитель отсутствует в справочнике журнала ремонта");
+  if (!eligiblePerformers.has(performer)) throw requestError("В журнале ремонта можно выбрать только Anatolii Brazhko, старшего механика или механика");
   return { date, machine, category, work, performer, note };
 }
 
@@ -786,7 +803,7 @@ async function getPackagingSheetRecords() {
   const values = await getGoogleSheetRanges(packagingSpreadsheetId, [packagingRange]);
   const rows = values[0] ?? [];
   const headers = rows[0] ?? [];
-  if (headers.length < 11 || String(headers[0]).trim() !== "Дата") {
+  if (headers.length < 12 || String(headers[0]).trim() !== "Дата") {
     throw new Error("Изменилась структура журнала расхода упаковки");
   }
   const notes = await getPackagingDateNotes();
@@ -795,13 +812,10 @@ async function getPackagingSheetRecords() {
 
 async function createPackagingRecord(input) {
   const record = validatePackagingRecord(input);
-  if (record.date === vilniusDate()) {
-    const pending = readPackagingPendingRecords().filter(item => item.date !== record.date);
-    writePackagingPendingRecords([...pending, { ...record, pending: true, updatedAt: new Date().toISOString() }]);
-    return { ok: true, record: { id: `packaging-day-${record.date}`, requestId: record.requestId, date: record.date, values: record.values, pending: true } };
-  }
   const existing = (await getPackagingSheetRecords()).find(item => item.date === record.date);
-  return { ok: true, record: await writePackagingRecordToSheet(record, existing) };
+  const saved = await writePackagingRecordToSheet(record, existing);
+  await syncPackagingTargets(saved);
+  return { ok: true, record: saved };
 }
 
 async function writePackagingRecordToSheet(record, existing = null) {
@@ -813,16 +827,22 @@ async function writePackagingRecordToSheet(record, existing = null) {
     { userEnteredValue: { numberValue: serial }, note: receipt, userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } },
     ...packagingKeys.map(key => ({ userEnteredValue: { numberValue: record.values[key] } }))
   ];
-  const rowNumber = existing?.rowNumber ?? (await getNextPackagingRowNumber());
+  let rowNumber = existing?.rowNumber ?? (await getNextPackagingRowNumber());
   const requests = [];
   if (!existing && rowNumber > 3) {
+    requests.push({ insertDimension: {
+      range: { sheetId, dimension: "ROWS", startIndex: rowNumber - 1, endIndex: rowNumber }, inheritFromBefore: true
+    } });
+    rowNumber += 1;
+  }
+  if (!existing && rowNumber > 3) {
     requests.push({ copyPaste: {
-      source: { sheetId, startRowIndex: rowNumber - 2, endRowIndex: rowNumber - 1, startColumnIndex: 1, endColumnIndex: 13 },
-      destination: { sheetId, startRowIndex: rowNumber - 1, endRowIndex: rowNumber, startColumnIndex: 1, endColumnIndex: 13 },
+      source: { sheetId, startRowIndex: rowNumber - 2, endRowIndex: rowNumber - 1, startColumnIndex: 0, endColumnIndex: 12 },
+      destination: { sheetId, startRowIndex: rowNumber - 1, endRowIndex: rowNumber, startColumnIndex: 0, endColumnIndex: 12 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
-  requests.push({ updateCells: { start: { sheetId, rowIndex: rowNumber - 1, columnIndex: 1 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } });
+  requests.push({ updateCells: { start: { sheetId, rowIndex: rowNumber - 1, columnIndex: 0 }, rows: [{ values: cells }], fields: "userEnteredValue,note,userEnteredFormat.numberFormat" } });
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, {
     method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ requests }),
@@ -836,15 +856,21 @@ async function writePackagingRecordToSheet(record, existing = null) {
 async function deletePackagingRecord(input) {
   const id = String(input?.id || ""); if (!/^packaging-day-\d{4}-\d{2}-\d{2}$/.test(id)) throw new Error("Некорректный идентификатор дневной записи");
   const date = id.slice("packaging-day-".length);
+  const emptyRecord = { date, values: Object.fromEntries(packagingKeys.map(key => [key, 0])) };
   const pending = readPackagingPendingRecords();
   if (pending.some(item => item.date === date)) {
     writePackagingPendingRecords(pending.filter(item => item.date !== date));
+    await syncPackagingTargets(emptyRecord);
     return { ok: true };
   }
-  const record = (await getPackagingSheetRecords()).find(item => item.id === id); if (!record) return { ok: true };
-  const accessToken = await getAccessToken(); const sheetId = await getPackagingSheetId(accessToken);
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
-  const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки"); return { ok: true };
+  const record = (await getPackagingSheetRecords()).find(item => item.id === id);
+  if (record) {
+    const accessToken = await getAccessToken(); const sheetId = await getPackagingSheetId(accessToken);
+    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: record.rowNumber - 1, endIndex: record.rowNumber } } }] }), signal: AbortSignal.timeout(20_000) });
+    const payload = await response.json().catch(() => ({})); if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось удалить дневной расход упаковки");
+  }
+  await syncPackagingTargets(emptyRecord);
+  return { ok: true };
 }
 
 async function getPackagingWarehouseSnapshot() {
@@ -955,6 +981,13 @@ async function exportPackagingDaily(input) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= vilniusDate()) throw new Error("Передавать можно только завершённый день");
   const source = (await getPackagingSnapshot()).records.find(record => record.date === date);
   if (!source) throw new Error(`В журнале упаковки нет итогов за ${displayDate(date)}`);
+  return syncPackagingTargets(source);
+}
+
+async function syncPackagingTargets(source) {
+  const date = String(source?.date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Некорректная дата переноса расхода упаковки");
+  const targetValues = packagingTargetValues(source.values);
   const [rawRow, cansRow] = await Promise.all([
     getDailyTargetRow(rawMaterialsSpreadsheetId, rawMaterialsRange, date, 3, "Расход сырья"),
     getDailyTargetRow(cansSpreadsheetId, cansRange, date, 4, "Банки")
@@ -964,11 +997,11 @@ async function exportPackagingDaily(input) {
     getSheetId(rawMaterialsSpreadsheetId, rawMaterialsSheetName, accessToken),
     getSheetId(cansSpreadsheetId, cansSheetName, accessToken)
   ]);
-  // Perform writes in order.  If one target is protected, no subsequent
-  // background request is left racing after the error has been handled.
-  await updateSheetCells(rawMaterialsSpreadsheetId, accessToken, { sheetId: rawSheetId, rowIndex: rawRow.rowNumber - 1, columnIndex: 1 }, [source.values.garantBox430, source.values.garantBox570, source.values.dochemsPaper]);
-  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 1 }, [source.values.killaCanClear, source.values.killaCanGreen]);
-  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 5 }, [source.values.killaLidGreen, source.values.dzCanClear, source.values.dzCanGreen, source.values.dzLidBlack, source.values.dzLidWhite]);
+  // Write exact daily totals rather than deltas. Retries are therefore safe,
+  // and any correction in the source journal is mirrored without duplication.
+  await updateSheetCells(rawMaterialsSpreadsheetId, accessToken, { sheetId: rawSheetId, rowIndex: rawRow.rowNumber - 1, columnIndex: 1 }, targetValues.rawMaterials);
+  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 1 }, targetValues.cansPrimary);
+  await updateSheetCells(cansSpreadsheetId, accessToken, { sheetId: cansSheetId, rowIndex: cansRow.rowNumber - 1, columnIndex: 5 }, targetValues.cansSecondary);
   return { ok: true, date, rawMaterials: { rowNumber: rawRow.rowNumber }, cans: { rowNumber: cansRow.rowNumber } };
 }
 
@@ -1012,12 +1045,19 @@ async function createProductionRecord(input) {
   const record = validateGatewayProductionRecord(input);
   const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const rows = await getProductionShiftRows();
-  const firstRowNumber = nextProductionRowNumber(rows.first, 4);
-  const secondRowNumber = nextProductionRowNumber(rows.second, 2);
+  let firstRowNumber = nextProductionRowNumber(rows.first, 4);
+  let secondRowNumber = nextProductionRowNumber(rows.second, 2);
   const accessToken = await getAccessToken();
+  if (needsDateSeparator(rows.first, record.date) || needsDateSeparator(rows.second, record.date)) {
+    await insertProductionDateSeparators(accessToken, firstRowNumber, secondRowNumber);
+    firstRowNumber += 1;
+    secondRowNumber += 1;
+  }
   await preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber);
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
-  return { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders };
+  const sorted = await sortProductionDayByLine(accessToken, record.date);
+  const stored = productionStoredRecord(sorted, record);
+  return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
 async function updateProductionRecord(input) {
@@ -1025,9 +1065,13 @@ async function updateProductionRecord(input) {
   const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
   const record = validateGatewayProductionRecord(input);
   const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
+  const before = await getProductionShiftRows();
+  const previousDate = before.first.find(row => row.rowNumber === firstRowNumber)?.date ?? before.second.find(row => row.rowNumber === secondRowNumber)?.date;
   const accessToken = await getAccessToken();
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
-  return { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders };
+  const sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
+  const stored = productionStoredRecord(sorted, record);
+  return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
 async function deleteProductionRecord(input) {
@@ -1035,34 +1079,111 @@ async function deleteProductionRecord(input) {
   const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
   const accessToken = await getAccessToken();
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
-    { range: `'Учет продукции 1'!B${firstRowNumber}:P${firstRowNumber}`, values: [Array(15).fill("")] },
-    { range: `'Учет продукции 2'!A${secondRowNumber}:P${secondRowNumber}`, values: [Array(16).fill("")] }
+    { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [Array(7).fill("")] },
+    { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[""]] },
+    { range: `'Учет продукции 1'!L${firstRowNumber}:Q${firstRowNumber}`, values: [Array(6).fill("")] },
+    { range: `'Учет продукции 2'!A${secondRowNumber}:G${secondRowNumber}`, values: [Array(7).fill("")] },
+    { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[""]] },
+    { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [Array(8).fill("")] }
   ]);
 }
 
 async function writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber) {
+  const first = productionFirstValues(record, leaders);
+  const second = productionSecondValues(record, leaders);
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
-    { range: `'Учет продукции 1'!B${firstRowNumber}:P${firstRowNumber}`, values: [productionFirstValues(record, leaders)] },
-    { range: `'Учет продукции 2'!A${secondRowNumber}:P${secondRowNumber}`, values: [productionSecondValues(record, leaders)] }
+    { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [first.beforeBoxes] },
+    { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[first.scrapKg]] },
+    { range: `'Учет продукции 1'!L${firstRowNumber}:Q${firstRowNumber}`, values: [first.afterBoxes] },
+    { range: `'Учет продукции 2'!A${secondRowNumber}:G${secondRowNumber}`, values: [second.beforeBoxes] },
+    { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[second.scrapKg]] },
+    { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [second.afterBoxes] }
   ]);
 }
 
 function productionFirstValues(record, leaders) {
-  return [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, "", record.packer, record.operator, record.machineLine, record.shift, leaders.seniorMechanic, leaders.mechanic];
+  return {
+    beforeBoxes: [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity],
+    scrapKg: record.scrapKg,
+    afterBoxes: [record.packer, record.operator, record.machineLine, record.shift, leaders.seniorMechanic, leaders.mechanic]
+  };
 }
 
 function productionSecondValues(record, leaders) {
-  return [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, record.packer, record.operator, record.machineLine, record.canScrapKg, record.note, record.shift, leaders.seniorMechanic, leaders.mechanic];
+  return {
+    beforeBoxes: [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity],
+    scrapKg: record.scrapKg,
+    afterBoxes: [record.packer, record.operator, record.machineLine, record.canScrapKg, record.note, record.shift, leaders.seniorMechanic, leaders.mechanic]
+  };
+}
+
+function productionSortValue(record) {
+  return String(record.line || record.machineLine || "").trim().toLocaleUpperCase("en");
+}
+
+function productionStoredRecord(rows, record) {
+  const signature = productionSignature({ ...record, line: record.machineLine });
+  const first = rows.first.find(row => productionSignature(row) === signature);
+  const second = rows.second.find(row => productionSignature(row) === signature);
+  if (!first || !second) throw new Error("Не удалось определить строку после сортировки журнала продукции");
+  return { firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber };
+}
+
+async function sortProductionDayByLine(accessToken, date) {
+  return sortProductionDaysByLine(accessToken, [date]);
+}
+
+async function sortProductionDaysByLine(accessToken, dates) {
+  const targetDates = [...new Set(dates.filter(Boolean))];
+  if (!targetDates.length) return getProductionShiftRows();
+  const rows = await getProductionShiftRows();
+  const ranges = [];
+  for (const date of targetDates) {
+    const first = rows.first.filter(row => row.date === date).sort((a, b) => productionSortValue(a).localeCompare(productionSortValue(b), "en"));
+    const second = rows.second.filter(row => row.date === date).sort((a, b) => productionSortValue(a).localeCompare(productionSortValue(b), "en"));
+    if (first.length) {
+      ranges.push(
+        { range: `'Учет продукции 1'!B${first[0].rowNumber}:H${first.at(-1).rowNumber}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
+        { range: `'Учет продукции 1'!J${first[0].rowNumber}:J${first.at(-1).rowNumber}`, values: first.map(row => [row.scrapKg]) },
+        { range: `'Учет продукции 1'!L${first[0].rowNumber}:Q${first.at(-1).rowNumber}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
+      );
+    }
+    if (second.length) {
+      ranges.push(
+        { range: `'Учет продукции 2'!A${second[0].rowNumber}:G${second.at(-1).rowNumber}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
+        { range: `'Учет продукции 2'!I${second[0].rowNumber}:I${second.at(-1).rowNumber}`, values: second.map(row => [row.scrapKg]) },
+        { range: `'Учет продукции 2'!K${second[0].rowNumber}:R${second.at(-1).rowNumber}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).afterBoxes) }
+      );
+    }
+  }
+  if (ranges.length) await setGoogleSheetRanges(productionSpreadsheetId, accessToken, ranges);
+  return getProductionShiftRows();
 }
 
 function nextProductionRowNumber(rows, firstDataRow) {
   return Math.max(firstDataRow, ...rows.map(row => row.rowNumber + 1));
 }
 
+function needsDateSeparator(rows, date) {
+  const latest = rows.reduce((result, row) => !result || row.rowNumber > result.rowNumber ? row : result, null);
+  return Boolean(latest && latest.date !== date);
+}
+
+async function insertProductionDateSeparators(accessToken, firstRowNumber, secondRowNumber) {
+  const [firstSheetId, secondSheetId] = await Promise.all([
+    getSheetId(productionSpreadsheetId, "Учет продукции 1", accessToken),
+    getSheetId(productionSpreadsheetId, "Учет продукции 2", accessToken)
+  ]);
+  await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, [
+    { insertDimension: { range: { sheetId: firstSheetId, dimension: "ROWS", startIndex: firstRowNumber - 1, endIndex: firstRowNumber }, inheritFromBefore: true } },
+    { insertDimension: { range: { sheetId: secondSheetId, dimension: "ROWS", startIndex: secondRowNumber - 1, endIndex: secondRowNumber }, inheritFromBefore: true } }
+  ], "Не удалось добавить разделитель между днями продукции");
+}
+
 async function assertProductionCatalogSchema() {
-  const [secondHeader, firstHeader] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:P1", "'Учет продукции 1'!B2:P2"]);
-  const ready = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
-  if (!ready) throw new Error("Журнал продукции ещё не подготовлен для графы «Линейка продукта». Обновите таблицу через центральный сервер.");
+  const [secondHeader, firstHeader] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:R1", "'Учет продукции 1'!B2:Q2"]);
+  const ready = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin") && String(secondHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(firstHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(secondHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент") && String(firstHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент");
+  if (!ready) throw new Error("Журнал продукции ещё не подготовлен для граф «Линейка продукта», «Коробки» и «Процент брака». Обновите таблицу через центральный сервер.");
 }
 
 function productionRecordId(firstRowNumber, secondRowNumber) { return `production:${firstRowNumber}:${secondRowNumber}`; }
@@ -1081,15 +1202,15 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
   const requests = [];
   if (firstRowNumber > 4) {
     requests.push({ copyPaste: {
-      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 16 },
-      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 16 },
+      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 17 },
+      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 17 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
   if (secondRowNumber > 2) {
     requests.push({ copyPaste: {
-      source: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 2, endRowIndex: secondRowNumber - 1, startColumnIndex: 0, endColumnIndex: 16 },
-      destination: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 1, endRowIndex: secondRowNumber, startColumnIndex: 0, endColumnIndex: 16 },
+      source: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 2, endRowIndex: secondRowNumber - 1, startColumnIndex: 0, endColumnIndex: 18 },
+      destination: { sheetId: secondSheetId, startRowIndex: secondRowNumber - 1, endRowIndex: secondRowNumber, startColumnIndex: 0, endColumnIndex: 18 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
@@ -1167,8 +1288,8 @@ async function backfillProductionLeaders() {
     if (!leaders.seniorMechanic && !leaders.mechanic) continue;
     const firstValues = [first.seniorMechanic || leaders.seniorMechanic, first.mechanic || leaders.mechanic];
     const secondValues = [second.seniorMechanic || leaders.seniorMechanic, second.mechanic || leaders.mechanic];
-    if (!first.seniorMechanic || !first.mechanic) updates.push({ range: `'Учет продукции 1'!O${firstRowNumber}:P${firstRowNumber}`, values: [firstValues] });
-    if (!second.seniorMechanic || !second.mechanic) updates.push({ range: `'Учет продукции 2'!O${secondRowNumber}:P${secondRowNumber}`, values: [secondValues] });
+    if (!first.seniorMechanic || !first.mechanic) updates.push({ range: `'Учет продукции 1'!P${firstRowNumber}:Q${firstRowNumber}`, values: [firstValues] });
+    if (!second.seniorMechanic || !second.mechanic) updates.push({ range: `'Учет продукции 2'!Q${secondRowNumber}:R${secondRowNumber}`, values: [secondValues] });
   }
   for (let index = 0; index < updates.length; index += 100) {
     await setGoogleSheetRanges(productionSpreadsheetId, accessToken, updates.slice(index, index + 100));
@@ -1178,7 +1299,7 @@ async function backfillProductionLeaders() {
 }
 
 async function getProductionShiftRows() {
-  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:P1", "'Учет продукции 1'!B2:P2", productionSecondRange, productionFirstRange]);
+  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:R1", "'Учет продукции 1'!B2:Q2", productionSecondRange, productionFirstRange]);
   const hasCatalogLine = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
   return {
     second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2, hasCatalogLine)).filter(Boolean),
@@ -1189,15 +1310,23 @@ async function getProductionShiftRows() {
 function productionRowFromSecond(row, rowNumber, hasCatalogLine) {
   const date = googleSheetDate(row?.[0]);
   if (!date || !String(row?.[hasCatalogLine ? 4 : 3] || "").trim()) return null;
-  if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: Number(row[4] || 0), quantity: Number(row[5] || 0), scrapKg: Number(String(row[6] || "0").replace(",", ".")) || 0, packer: String(row[7] || "").trim(), operator: String(row[8] || "").trim(), line: String(row[9] || "").trim(), canScrapKg: Number(String(row[10] || "0").replace(",", ".")) || 0, note: String(row[11] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[7] || "0").replace(",", ".")) || 0, packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), canScrapKg: Number(String(row[11] || "0").replace(",", ".")) || 0, note: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
+  if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: Number(row[4] || 0), quantity: Number(row[5] || 0), scrapKg: Number(String(row[6] || "0").replace(",", ".")) || 0, scrapPercent: productionScrapPercent(row[7]), packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), canScrapKg: Number(String(row[11] || "0").replace(",", ".")) || 0, note: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[8] || "0").replace(",", ".")) || 0, scrapPercent: productionScrapPercent(row[9]), packer: String(row[10] || "").trim(), operator: String(row[11] || "").trim(), line: String(row[12] || "").trim(), canScrapKg: Number(String(row[13] || "0").replace(",", ".")) || 0, note: String(row[14] || "").trim(), shift: String(row[15] || "").trim().toUpperCase(), seniorMechanic: String(row[16] || "").trim(), mechanic: String(row[17] || "").trim() };
+}
+
+function productionScrapPercent(value) {
+  const source = String(value ?? "").trim();
+  if (!source) return null;
+  const formattedAsPercent = source.endsWith("%");
+  const percent = googleNumber(source.replace("%", ""));
+  return Number.isFinite(percent) ? (formattedAsPercent ? percent / 100 : percent) : null;
 }
 
 function productionRowFromFirst(row, rowNumber, hasCatalogLine) {
   const date = googleSheetDate(row?.[0]);
   if (!date || !String(row?.[hasCatalogLine ? 4 : 3] || "").trim()) return null;
   if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: Number(row[4] || 0), quantity: Number(row[5] || 0), scrapKg: Number(String(row[6] || "0").replace(",", ".")) || 0, packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase(), seniorMechanic: String(row[12] || "").trim(), mechanic: String(row[13] || "").trim() };
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[7] || "0").replace(",", ".")) || 0, packer: String(row[9] || "").trim(), operator: String(row[10] || "").trim(), line: String(row[11] || "").trim(), shift: String(row[12] || "").trim().toUpperCase(), seniorMechanic: String(row[13] || "").trim(), mechanic: String(row[14] || "").trim() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: Number(row[5] || 0), quantity: Number(row[6] || 0), scrapKg: Number(String(row[8] || "0").replace(",", ".")) || 0, packer: String(row[10] || "").trim(), operator: String(row[11] || "").trim(), line: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
 }
 
 function productionSignature(record) {
@@ -1502,6 +1631,26 @@ async function flushPendingPackagingRecord(date) {
   return true;
 }
 
+async function migratePendingPackagingRecords() {
+  const pending = readPackagingPendingRecords();
+  if (!pending.length) return false;
+  const existingByDate = new Map((await getPackagingSheetRecords()).map(record => [record.date, record]));
+  for (const record of pending) {
+    const saved = await writePackagingRecordToSheet(record, existingByDate.get(record.date) || null);
+    existingByDate.set(record.date, saved);
+  }
+  writePackagingPendingRecords([]);
+  console.log(`Перенесено ранее не отправленных записей расхода упаковки: ${pending.length}`);
+  return true;
+}
+
+async function migrateAndReconcilePackagingRecords() {
+  await migratePendingPackagingRecords();
+  const records = await getPackagingSheetRecords();
+  for (const record of records) await syncPackagingTargets(record);
+  if (records.length) console.log(`Сверены целевые журналы расхода упаковки: ${records.length}`);
+}
+
 async function getNextPackagingRowNumber() {
   const records = await getPackagingSheetRecords();
   return Math.max(2, ...records.map(record => record.rowNumber)) + 1;
@@ -1510,7 +1659,7 @@ async function getNextPackagingRowNumber() {
 async function getPackagingDateNotes() {
   assertGoogleConfigured();
   const accessToken = await getAccessToken();
-  const query = new URLSearchParams({ includeGridData: "true", ranges: `'${packagingSheetName}'!B3:B`, fields: "sheets(data(rowData(values(note))))" });
+  const query = new URLSearchParams({ includeGridData: "true", ranges: `'${packagingSheetName}'!A3:A`, fields: "sheets(data(rowData(values(note))))" });
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(packagingSpreadsheetId)}?${query}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать журнал расхода упаковки");
@@ -1531,6 +1680,7 @@ async function getSheetId(spreadsheetId, sheetName, accessToken) {
 function packagingRecordFromRow(row, rowNumber, note) {
   if (!row?.some(value => value !== "" && value !== undefined)) return null;
   const date = googleSheetDate(row[0]);
+  if (!date && /^(Год|Месяц):/.test(String(row[0] || "").trim())) return null;
   if (!date) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
   let receipt = {};
   if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }

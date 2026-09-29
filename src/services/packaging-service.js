@@ -1,7 +1,13 @@
 import { getVilniusDate } from "../domain/scale-check.js";
 export const PACKAGING_FIELDS = Object.freeze([
-  { key: "garantBox430", label: "Коробки с логотипом GARANT (широкая) 430×285×255, шт" }, { key: "garantBox570", label: "Коробки с логотипом Garant (узкая) 570×210×249, шт" }, { key: "dochemsPaper", label: "Бумага Dochems 37 GSM, рул" }, { key: "killaCanClear", label: "Банка килла прозрачная, шт" }, { key: "killaCanGreen", label: "Банка килла зелёная, шт" }, { key: "killaLidGreen", label: "Крышка килла зелёная, шт" }, { key: "dzCanClear", label: "Банка ДЗ прозрачная, шт" }, { key: "dzCanGreen", label: "Банка ДЗ зелёная, шт" }, { key: "dzLidBlack", label: "Крышка ДЗ чёрная, шт" }, { key: "dzLidWhite", label: "Крышка ДЗ белая, шт" }
+  { key: "garantBox430", tone: "cardboard", label: "Коробки с логотипом GARANT (широкая) 430×285×255, шт" }, { key: "garantBox570", tone: "cardboard", label: "Коробки с логотипом Garant (узкая) 570×210×249, шт" }, { key: "dochemsPaper", tone: "paper", label: "Бумага Dochems 37 GSM, рул" }, { key: "killaCanClear", tone: "clear", label: "Банка килла прозрачная, шт" }, { key: "killaCanGreen", tone: "green", label: "Банка килла зелёная, шт" }, { key: "killaLidGreen", tone: "green", label: "Крышка килла зелёная, шт" }, { key: "dzCanClear", tone: "clear", label: "Банка ДЗ прозрачная, шт" }, { key: "dzCanGreen", tone: "green", label: "Банка ДЗ зелёная, шт" }, { key: "dzLidBlack", tone: "black", label: "Крышка ДЗ чёрная, шт" }, { key: "dzLidWhite", tone: "white", label: "Крышка ДЗ белая, шт" }, { key: "dzLidGreen", tone: "green", label: "Крышка ДЗ зелёная, шт" }
 ]);
+const packagingFieldByKey = Object.freeze(Object.fromEntries(PACKAGING_FIELDS.map(field => [field.key, field])));
+export const PACKAGING_DISPLAY_FIELDS = Object.freeze([
+  "garantBox430", "garantBox570", "dochemsPaper", "killaCanClear",
+  "dzCanClear", "dzLidBlack", "dzLidWhite", "dzCanGreen", "dzLidGreen",
+  "killaCanGreen", "killaLidGreen"
+].map(key => packagingFieldByKey[key]));
 const emptyValues = () => Object.fromEntries(PACKAGING_FIELDS.map(field => [field.key, 0]));
 export class PackagingService {
   constructor(repository) { this.repository = repository; this.error = null; }
