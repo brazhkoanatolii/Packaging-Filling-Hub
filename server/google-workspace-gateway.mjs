@@ -1834,7 +1834,7 @@ function columnLetter(index) {
 }
 
 function splitProductionParticipants(value) {
-  return String(value || "").split(/\s*[;|]\s*/).map(item => item.trim()).filter(Boolean);
+  return String(value || "").split(/\s*(?:;|\||\+)\s*/).map(item => item.trim()).filter(Boolean);
 }
 
 function findDailyShiftRow(rows, date, shift, startRow, label) {
