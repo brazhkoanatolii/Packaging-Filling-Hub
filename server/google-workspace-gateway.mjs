@@ -1733,15 +1733,19 @@ async function ensureProductionMechanicsReportLayout(accessToken, records) {
   const columns = [...people, ...Array.from({ length: 18 - people.length }, (_, index) => `Резерв ${index + 1}`)];
   const header = [
     "Дата", ...columns, "Всего, кор.", "Состояние записи", "Примечание",
-    "", ...columns, "Всего брака, кг", "Состояние записи", "Примечание",
-    "", ...columns, "Средний процент брака", "Состояние записи", "Примечание"
+    "Сотрудник", ...columns, "Всего брака, кг", "Состояние записи", "Примечание",
+    "Сотрудник", ...columns, "Средний процент брака", "Состояние записи", "Примечание"
   ];
   if (header.length !== 66) throw new Error("Некорректная структура листа «Механики»");
-  const requests = [];
-  if (sourceName !== productionMechanicsSheetName) requests.push({ updateSheetProperties: { properties: { sheetId, title: productionMechanicsSheetName, gridProperties: { columnCount: 66 } }, fields: "title,gridProperties.columnCount" } });
+  const requests = [{ updateSheetProperties: { properties: { sheetId, gridProperties: { columnCount: 66 } }, fields: "gridProperties.columnCount" } }];
+  if (sourceName !== productionMechanicsSheetName) requests.push({ updateSheetProperties: { properties: { sheetId, title: productionMechanicsSheetName }, fields: "title" } });
   if (sourceName !== productionMechanicsSheetName) requests.push(
     { copyPaste: { source: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 0, endColumnIndex: 22 }, destination: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 22, endColumnIndex: 44 }, pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL" } },
     { copyPaste: { source: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 0, endColumnIndex: 22 }, destination: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 44, endColumnIndex: 66 }, pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL" } }
+  );
+  requests.push(
+    { repeatCell: { range: { sheetId, startRowIndex: 6, endRowIndex: 1515, startColumnIndex: 23, endColumnIndex: 42 }, cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "0.000" } } }, fields: "userEnteredFormat.numberFormat" } },
+    { repeatCell: { range: { sheetId, startRowIndex: 6, endRowIndex: 1515, startColumnIndex: 45, endColumnIndex: 64 }, cell: { userEnteredFormat: { numberFormat: { type: "PERCENT", pattern: "0.0%" } } }, fields: "userEnteredFormat.numberFormat" } }
   );
   if (requests.length) await batchGoogleSheetRequests(productionReportSpreadsheetId, accessToken, requests, "Не удалось подготовить лист «Механики»");
   await setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, [
