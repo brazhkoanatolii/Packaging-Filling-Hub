@@ -1803,7 +1803,12 @@ async function updateDailyMechanicsValues(accessToken, rowNumber, headers, recor
     const operators = splitProductionParticipants(record.operator);
     const operatorShare = operators.length ? { boxes: boxes / operators.length, scrapKg: scrapKg / operators.length, finishedKg: finishedKg / operators.length } : null;
     operators.forEach(name => add(name, operatorShare));
-    [record.seniorMechanic, record.mechanic].map(value => String(value || "").trim()).filter(Boolean).forEach(name => add(name, { boxes, scrapKg, finishedKg }));
+    const creditedPeople = new Set(operators);
+    [record.seniorMechanic, record.mechanic].map(value => String(value || "").trim()).filter(Boolean).forEach(name => {
+      if (creditedPeople.has(name)) return;
+      creditedPeople.add(name);
+      add(name, { boxes, scrapKg, finishedKg });
+    });
     totalBoxes += boxes;
     totalScrapKg += scrapKg;
     totalFinishedKg += finishedKg;
