@@ -48,6 +48,7 @@ const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
 const productionSecondRange = "'Учет продукции 2'!A2:R";
 const productionFirstRange = "'Учет продукции 1'!B4:R";
 let productionCanScrapMigrationPromise = null;
+const productionCreateLocks = new Map();
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -1046,10 +1047,25 @@ async function getProductionSnapshot() {
 }
 
 async function createProductionRecord(input) {
+  const candidate = validateGatewayProductionRecord(input);
+  const key = productionDuplicateKey(candidate);
+  const active = productionCreateLocks.get(key);
+  if (active) return active;
+  const task = createProductionRecordOnce(input, candidate);
+  productionCreateLocks.set(key, task);
+  try {
+    return await task;
+  } finally {
+    if (productionCreateLocks.get(key) === task) productionCreateLocks.delete(key);
+  }
+}
+
+async function createProductionRecordOnce(input, record) {
   await assertProductionCatalogSchema();
-  const record = validateGatewayProductionRecord(input);
   const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const rows = await getProductionShiftRows();
+  const existing = findExistingProductionRecord(rows, record);
+  if (existing) return { ...record, id: productionRecordId(existing.firstRowNumber, existing.secondRowNumber), line: record.machineLine, seniorMechanic: existing.seniorMechanic || leaders.seniorMechanic, mechanic: existing.mechanic || leaders.mechanic };
   let firstRowNumber = nextProductionRowNumber(rows.first, 4, rows.firstSummaries);
   let secondRowNumber = nextProductionRowNumber(rows.second, 2, rows.secondSummaries);
   const accessToken = await getAccessToken();
@@ -1317,11 +1333,11 @@ async function migrateProductionCanScrapColumn() {
   if (!writesEnabled || missingGoogleSettings().length) return { migrated: false, updated: 0 };
   const firstSheetName = "Учет продукции 1";
   const accessToken = await getAccessToken();
+  const sheetId = await getSheetId(productionSpreadsheetId, firstSheetName, accessToken);
   let [header] = await getGoogleSheetRanges(productionSpreadsheetId, [`'${firstSheetName}'!B2:R2`]);
   const hasCanScrap = String(header?.[0]?.[10] || "").toLocaleLowerCase("ru").includes("банок");
   let migrated = false;
   if (!hasCanScrap) {
-    const sheetId = await getSheetId(productionSpreadsheetId, firstSheetName, accessToken);
     await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, [{
       insertDimension: { range: { sheetId, dimension: "COLUMNS", startIndex: 11, endIndex: 12 }, inheritFromBefore: true }
     }], "Не удалось добавить графу «Брак банок» в журнал продукции");
@@ -1330,7 +1346,15 @@ async function migrateProductionCanScrapColumn() {
     }]);
     migrated = true;
   }
+  await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, [{
+    repeatCell: {
+      range: { sheetId, startRowIndex: 3, startColumnIndex: 11, endColumnIndex: 12 },
+      cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "0.###" } } },
+      fields: "userEnteredFormat.numberFormat"
+    }
+  }], "Не удалось установить числовой формат графы «Брак банок»");
   const rows = await getProductionShiftRows();
+  const firstByParallelRow = new Map(rows.first.map(row => [row.rowNumber - 2, row]));
   const secondBySignature = new Map();
   for (const row of rows.second) {
     const key = productionSignature(row);
@@ -1339,9 +1363,12 @@ async function migrateProductionCanScrapColumn() {
     secondBySignature.set(key, list);
   }
   const updates = [];
-  for (const row of rows.first) {
-    const match = (secondBySignature.get(productionSignature(row)) ?? []).shift();
-    if (match) updates.push({ range: `'${firstSheetName}'!L${row.rowNumber}`, values: [[Number(match.canScrapKg || 0)]] });
+  for (const second of rows.second) {
+    const parallel = firstByParallelRow.get(second.rowNumber);
+    const match = parallel && productionPairKey(parallel) === productionPairKey(second)
+      ? parallel
+      : (secondBySignature.get(productionSignature(second)) ?? []).shift();
+    if (match) updates.push({ range: `'${firstSheetName}'!L${match.rowNumber}`, values: [[Number(second.canScrapKg || 0)]] });
   }
   for (let index = 0; index < updates.length; index += 100) {
     await setGoogleSheetRanges(productionSpreadsheetId, accessToken, updates.slice(index, index + 100));
@@ -1514,13 +1541,45 @@ function productionRowFromFirst(row, rowNumber, hasCatalogLine) {
 function productionTimeSignature(value) {
   const source = String(value || "").trim();
   const match = source.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-  return match ? match[1].padStart(2, "0") + ":" + match[2] : source;
+  if (match) return match[1].padStart(2, "0") + ":" + match[2];
+  const serial = Number(source.replace(",", "."));
+  if (Number.isFinite(serial) && serial >= 0 && serial < 1) {
+    const minutes = Math.round(serial * 24 * 60) % (24 * 60);
+    return String(Math.floor(minutes / 60)).padStart(2, "0") + ":" + String(minutes % 60).padStart(2, "0");
+  }
+  return source;
 }
 
 function productionSignature(record) {
   return [record.date, productionTimeSignature(record.startTime), productionTimeSignature(record.time), record.product, record.packer, record.operator, record.line || record.machineLine]
     .map(value => String(value || "").trim().toLocaleLowerCase("ru"))
     .join("\u001f");
+}
+
+function productionDuplicateKey(record) {
+  return [record.date, productionTimeSignature(record.startTime), productionTimeSignature(record.time), record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, record.canScrapKg, record.packer, record.operator, record.line || record.machineLine, record.shift, record.note]
+    .map(value => typeof value === "number" ? String(value) : String(value || "").trim().toLocaleLowerCase("ru"))
+    .join("\u001f");
+}
+
+function productionPairKey(record) {
+  return [record.date, productionTimeSignature(record.startTime), productionTimeSignature(record.time), record.catalogLine, record.product, record.strength, record.quantity, record.scrapKg, record.packer, record.operator, record.line || record.machineLine, record.shift]
+    .map(value => typeof value === "number" ? String(value) : String(value || "").trim().toLocaleLowerCase("ru"))
+    .join("\u001f");
+}
+
+function findExistingProductionRecord(rows, record) {
+  const second = rows.second.find(item => productionDuplicateKey(item) === productionDuplicateKey(record));
+  if (!second) return null;
+  const firstBySignature = new Map();
+  for (const item of rows.first) {
+    const key = productionSignature(item);
+    const values = firstBySignature.get(key) ?? [];
+    values.push(item);
+    firstBySignature.set(key, values);
+  }
+  const first = (firstBySignature.get(productionSignature(second)) ?? []).shift();
+  return first ? { firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber, seniorMechanic: second.seniorMechanic, mechanic: second.mechanic } : null;
 }
 
 function validateGatewayProductionRecord(input) {
