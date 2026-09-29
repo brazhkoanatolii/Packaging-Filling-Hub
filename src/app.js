@@ -2028,6 +2028,9 @@ function openProductionDialog(record = null) {
     form.elements.operator.value = existingOperators[0] || "";
     form.elements.operatorSecond.value = existingOperators[1] || "";
   }
+  // A failed HTTP response does not mean that Google rejected the write. Keep
+  // one request id for the whole production dialog so a retry is idempotent.
+  const createRequestId = record ? "" : `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   form.addEventListener("submit", async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
@@ -2037,7 +2040,7 @@ function openProductionDialog(record = null) {
       const people = { packers: packerNames, operators: operatorNames };
       const leadership = activeShiftLeadership();
       if (record) await productionService.update(record.id, { ...data, leadership }, people);
-      else await productionService.create({ ...data, leadership, requestId: `production-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }, people);
+      else await productionService.create({ ...data, leadership, requestId: createRequestId }, people);
       dialog.close(); await refreshProduction(); render(); toast(record ? "Исправления сохранены в обоих листах журнала." : "Запись сохранена в оба листа журнала.", "success");
     } catch (error) { showFormError(form, error); submit.disabled = false; }
   });

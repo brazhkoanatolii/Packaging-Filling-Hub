@@ -1052,15 +1052,17 @@ async function getProductionSnapshot() {
 
 async function createProductionRecord(input) {
   const candidate = validateGatewayProductionRecord(input);
-  const key = productionDuplicateKey(candidate);
-  const active = productionCreateLocks.get(key);
+  // Coalesce both an identical production record and a retry of the same
+  // browser request while this gateway is still processing it.
+  const keys = [productionDuplicateKey(candidate), `request:${candidate.requestId}`];
+  const active = keys.map(key => productionCreateLocks.get(key)).find(Boolean);
   if (active) return active;
   const task = createProductionRecordOnce(input, candidate);
-  productionCreateLocks.set(key, task);
+  keys.forEach(key => productionCreateLocks.set(key, task));
   try {
     return await task;
   } finally {
-    if (productionCreateLocks.get(key) === task) productionCreateLocks.delete(key);
+    keys.forEach(key => { if (productionCreateLocks.get(key) === task) productionCreateLocks.delete(key); });
   }
 }
 
@@ -1612,7 +1614,10 @@ function validateGatewayProductionRecord(input) {
   if (!Object.hasOwn(productionMachineColumns, machineLine)) throw new Error("Выберите линию из рабочего списка");
   const shift = text("shift", "Смена", 2).toUpperCase();
   if (!['A', 'B'].includes(shift)) throw new Error("Смена должна быть определена из табеля");
+  const requestId = text("requestId", "Идентификатор запроса", 160);
+  if (!/^[a-zA-Z0-9_-]{8,160}$/.test(requestId)) throw new Error("Некорректный идентификатор запроса");
   return {
+    requestId,
     date, startTime, time, catalogLine: text("catalogLine", "Линейка продукта", 180), product: text("product", "Продукт", 180),
     strength: decimal("strength", "Крепость", true), quantity: decimal("quantity", "Количество готовой продукции", true),
     scrapKg: decimal("scrapKg", "Брак продукции"), canScrapKg: decimal("canScrapKg", "Вес бракованных банок"),
