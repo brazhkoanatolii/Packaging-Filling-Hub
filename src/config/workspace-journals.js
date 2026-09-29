@@ -9,4 +9,4 @@ export const WORKSPACE_JOURNALS = Object.freeze({
   packagingWarehouse: { title: "Склад упаковки", id: "1mv7W6IcetxpSNMlTvQclPMIs15ZWZw7Q3ZE_g_NXVok" },
   cyclones: { title: "Очистка циклонов", id: "1jEpmScclwvmIhhiHnBi0EE5kRBGNLtfmP4zepkAMQDU" }
 });
-export const WORKFORCE_YEARS = Object.freeze([2025, 2026, 2027, 2028, 2029]);
+export const WORKFORCE_YEARS = Object.freeze([2026, 2027, 2028, 2029]);

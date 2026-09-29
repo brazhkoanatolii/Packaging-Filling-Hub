@@ -2819,37 +2819,10 @@ function openVacationDialog(id = null) {
   dialog.showModal();
 }
 
-function withWorkforceActor(action, allowedNames = employeeNames()) {
+function withWorkforceActor(action) {
   if (!workforceRepository) return action();
-  return chooseWorkforceActor(allowedNames).then(async performer => {
-    workforceActor = { performer };
-    return action();
-  });
-}
-
-function chooseWorkforceActor(allowedNames = employeeNames()) {
-  const names = [...new Set(allowedNames)].filter(Boolean).sort((a, b) => a.localeCompare(b, "ru"));
-  if (!names.length) return Promise.reject(new Error("Сначала добавьте сотрудника в журнал «Персонал»"));
-  return new Promise((resolve, reject) => {
-    const dialog = createDialog(`
-      <form class="dialog-card small-dialog" data-performer-form>
-        <div class="dialog-heading"><div><p class="eyebrow">Автор записи</p><h2>Кто вносит данные?</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div>
-        <p class="dialog-lead">Имя будет записано в Google Sheets вместе с изменением.</p>
-        ${formField("workforce-performer", "Имя и фамилия", `<select id="workforce-performer" name="performer" required><option value="">Выберите себя</option>${names.map(name => `<option ${name === workforceActor.performer ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>`)}
-        <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Продолжить</button></div>
-      </form>`);
-    let completed = false;
-    dialog.addEventListener("close", () => { if (!completed) reject(new Error("Не выбран автор записи")); });
-    dialog.querySelector("form").addEventListener("submit", event => {
-      event.preventDefault();
-      const performer = String(new FormData(event.currentTarget).get("performer") || "");
-      if (!performer) return;
-      completed = true;
-      dialog.close();
-      resolve(performer);
-    });
-    dialog.showModal();
-  });
+  workforceActor = { performer: "Anatolii Brazhko" };
+  return action();
 }
 
 function createDialog(content) {

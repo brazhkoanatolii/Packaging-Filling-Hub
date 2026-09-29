@@ -5,6 +5,7 @@ const PERSONNEL_SOURCE_VERSION_KEY = "workforcePersonnelSourceVersion";
 const PERSONNEL_SOURCE_VERSION = 3;
 const TEAMS_KEY = "workforceShiftTeams";
 const ATTENDANCE_KEY = "workforceAttendance";
+const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 export class WorkforceService {
   constructor(store, repository = null) {
@@ -32,7 +33,7 @@ export class WorkforceService {
       shiftTeams: await this.store.preference(TEAMS_KEY, clone(SHIFT_TEAMS)),
       attendance: await this.store.preference(ATTENDANCE_KEY, []),
       vacations: await this.store.preference("workforceVacations", []),
-      years: [2025, 2026, 2027, 2028, 2029]
+      years: [2026, 2027, 2028, 2029]
     };
   }
 
@@ -44,7 +45,7 @@ export class WorkforceService {
     const now = new Date().toISOString();
     const currentIndex = personnel.findIndex(item => item.id === input.id);
     const employee = {
-      id: currentIndex >= 0 ? personnel[currentIndex].id : `employee-${crypto.randomUUID()}`,
+      id: currentIndex >= 0 ? personnel[currentIndex].id : `employee-${createId()}`,
       fullName,
       role: String(input.role),
       shiftTeamId: String(input.shiftTeamId || "office"),
@@ -127,14 +128,14 @@ export class WorkforceService {
   async saveVacation(input) {
     const snapshot = await this.snapshot();
     const year = Number(input.year);
-    if (!snapshot.years.includes(year)) throw new Error("Выберите год 2025–2029");
+    if (!snapshot.years.includes(year)) throw new Error("Выберите год 2026–2029");
     const employee = snapshot.personnel.find(person => person.id === input.employeeId);
     if (!employee || employee.shiftTeamId === "office" || isSubstituteOnly(employee)) throw new Error("Для графика отпусков можно выбрать только сотрудника участка из постоянного состава.");
     const startDate = String(input.startDate || ""), endDate = String(input.endDate || "");
     if (!startDate || !endDate || startDate > endDate || Number(startDate.slice(0, 4)) !== year || Number(endDate.slice(0, 4)) !== year) throw new Error("Укажите начало и окончание в пределах выбранного года");
     if (!["Запланирован", "Согласован", "Использован", "Аннулирован"].includes(input.status)) throw new Error("Выберите статус отпуска");
     if (input.status === "Аннулирован" && !String(input.note || "").trim()) throw new Error("Укажите причину аннулирования");
-    const record = { id: input.id || `vacation:${crypto.randomUUID()}`, employeeId: input.employeeId, year, startDate, endDate, status: input.status, note: String(input.note || ""), days: Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 };
+    const record = { id: input.id || `vacation:${createId()}`, employeeId: input.employeeId, year, startDate, endDate, status: input.status, note: String(input.note || ""), days: Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 };
     if (!Number.isFinite(record.days)) throw new Error("Проверьте даты");
     if (this.repository) await this.repository.save("vacations", record);
     else {

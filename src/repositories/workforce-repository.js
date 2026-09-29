@@ -1,5 +1,6 @@
 const KEY = "googleWorkforceV1";
 const empty = () => ({ personnel: [], shiftTeams: [], attendance: [], vacations: [], years: [], ready: false });
+const createRequestId = () => globalThis.crypto?.randomUUID?.() ?? `request-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 export class WorkforceRepository {
   constructor(store, provider, actor = () => ({})) {
     this.store = store; this.provider = provider; this.actor = actor; this.serial = Promise.resolve(); this.syncRunning = null; this.refreshRunning = null; this.lastError = null;
@@ -29,7 +30,7 @@ export class WorkforceRepository {
       const prior = data.pending.find(o => o.kind === kind && o.record.id === record.id);
       if (prior?.attempted || (prior && prior.status !== "pending")) throw new Error("Для этой записи уже есть отправка или конфликт. Сначала выполните синхронизацию.");
       if (prior) prior.record = record;
-      else data.pending.push({ requestId: crypto.randomUUID(), kind, record, expectedRevision: data.confirmed[kind].find(x => x.id === record.id)?.revision ?? "empty", actor, status: "pending", attempted: false });
+      else data.pending.push({ requestId: createRequestId(), kind, record, expectedRevision: data.confirmed[kind].find(x => x.id === record.id)?.revision ?? "empty", actor, status: "pending", attempted: false });
       await this.store.setPreference(KEY, data);
       return record;
     });
