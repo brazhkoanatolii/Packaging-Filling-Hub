@@ -1056,7 +1056,7 @@ async function createProductionRecord(input) {
   await preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber);
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDayByLine(accessToken, record.date);
-  const stored = productionStoredRecord(sorted, record);
+  const stored = await productionStoredRecord(sorted, record);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
@@ -1070,7 +1070,7 @@ async function updateProductionRecord(input) {
   const accessToken = await getAccessToken();
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
-  const stored = productionStoredRecord(sorted, record);
+  const stored = await productionStoredRecord(sorted, record);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
@@ -1121,12 +1121,22 @@ function productionSortValue(record) {
   return String(record.line || record.machineLine || "").trim().toLocaleUpperCase("en");
 }
 
-function productionStoredRecord(rows, record) {
+async function productionStoredRecord(rows, record) {
   const signature = productionSignature({ ...record, line: record.machineLine });
-  const first = rows.first.find(row => productionSignature(row) === signature);
-  const second = rows.second.find(row => productionSignature(row) === signature);
-  if (!first || !second) throw new Error("Не удалось определить строку после сортировки журнала продукции");
-  return { firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber };
+  // Google Sheets can return the preceding snapshot immediately after a batch
+  // update. The write has already completed, so retry only the read instead of
+  // asking the operator to submit the production record again.
+  let snapshot = rows;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const first = snapshot.first.find(row => productionSignature(row) === signature);
+    const second = snapshot.second.find(row => productionSignature(row) === signature);
+    if (first && second) return { firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber };
+    if (attempt < 3) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      snapshot = await getProductionShiftRows();
+    }
+  }
+  throw new Error("Запись продукции сохранена, но не удалось сразу обновить её положение после сортировки. Обновите журнал, не создавая запись повторно.");
 }
 
 async function sortProductionDayByLine(accessToken, date) {
