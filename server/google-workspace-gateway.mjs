@@ -413,6 +413,7 @@ createServer(async (request, response) => {
       console.log("Суточный перенос итогов отключён: фактические записи остаются в рабочих журналах.");
     }
     runBackgroundTask("заполнение старшего механика и механика в журнале продукции", backfillProductionLeaders);
+    runBackgroundTask("production shift summaries", rebuildProductionShiftSummaries);
   }
   if (process.platform === "win32") {
     console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
@@ -1045,8 +1046,8 @@ async function createProductionRecord(input) {
   const record = validateGatewayProductionRecord(input);
   const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const rows = await getProductionShiftRows();
-  let firstRowNumber = nextProductionRowNumber(rows.first, 4);
-  let secondRowNumber = nextProductionRowNumber(rows.second, 2);
+  let firstRowNumber = nextProductionRowNumber(rows.first, 4, rows.firstSummaries);
+  let secondRowNumber = nextProductionRowNumber(rows.second, 2, rows.secondSummaries);
   const accessToken = await getAccessToken();
   if (needsDateSeparator(rows.first, record.date) || needsDateSeparator(rows.second, record.date)) {
     await insertProductionDateSeparators(accessToken, firstRowNumber, secondRowNumber);
@@ -1143,35 +1144,138 @@ async function sortProductionDayByLine(accessToken, date) {
   return sortProductionDaysByLine(accessToken, [date]);
 }
 
+async function rebuildProductionShiftSummaries() {
+  if (!writesEnabled || missingGoogleSettings().length) return { updated: 0 };
+  const accessToken = await getAccessToken();
+  let rows = await getProductionShiftRows();
+  const dates = [...new Set([...rows.first, ...rows.second].map(row => row.date).filter(Boolean))];
+  const [firstSheetId, secondSheetId] = await Promise.all([
+    getSheetId(productionSpreadsheetId, "\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1", accessToken),
+    getSheetId(productionSpreadsheetId, "\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2", accessToken)
+  ]);
+  const missing = dates.filter(date => !rows.firstSummaries.some(summary => summary.date === date) || !rows.secondSummaries.some(summary => summary.date === date));
+  for (const date of missing.sort((left, right) => right.localeCompare(left))) {
+    rows = await getProductionShiftRows();
+    const first = rows.first.filter(row => row.date === date);
+    const second = rows.second.filter(row => row.date === date);
+    const requests = [];
+    if (first.length && !rows.firstSummaries.some(summary => summary.date === date)) {
+      requests.push({ insertDimension: { range: { sheetId: firstSheetId, dimension: "ROWS", startIndex: Math.max(...first.map(row => row.rowNumber)), endIndex: Math.max(...first.map(row => row.rowNumber)) + 1 }, inheritFromBefore: true } });
+    }
+    if (second.length && !rows.secondSummaries.some(summary => summary.date === date)) {
+      requests.push({ insertDimension: { range: { sheetId: secondSheetId, dimension: "ROWS", startIndex: Math.max(...second.map(row => row.rowNumber)), endIndex: Math.max(...second.map(row => row.rowNumber)) + 1 }, inheritFromBefore: true } });
+    }
+    if (requests.length) await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, requests, "Could not add production summary row");
+  }
+  const snapshot = await sortProductionDaysByLine(accessToken, dates);
+  return { updated: dates.length, records: snapshot.first.length + snapshot.second.length };
+}
+
 async function sortProductionDaysByLine(accessToken, dates) {
   const targetDates = [...new Set(dates.filter(Boolean))];
   if (!targetDates.length) return getProductionShiftRows();
-  const rows = await getProductionShiftRows();
+  let rows = await getProductionShiftRows();
+  const summaries = [
+    ...rows.firstSummaries.filter(summary => targetDates.includes(summary.date)).map(summary => ({ sheet: "first", rowNumber: summary.rowNumber })),
+    ...rows.secondSummaries.filter(summary => targetDates.includes(summary.date)).map(summary => ({ sheet: "second", rowNumber: summary.rowNumber }))
+  ];
+  if (summaries.length) {
+    const clears = summaries.flatMap(summary => summary.sheet === "first" ? [
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!H${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${summary.rowNumber}:M${summary.rowNumber}`, values: [["", ""]] }
+    ] : [
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!G${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${summary.rowNumber}`, values: [[""]] },
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!M${summary.rowNumber}:N${summary.rowNumber}`, values: [["", ""]] }
+    ]);
+    await setGoogleSheetRanges(productionSpreadsheetId, accessToken, clears);
+    rows = await getProductionShiftRows();
+  }
   const ranges = [];
   for (const date of targetDates) {
     const first = rows.first.filter(row => row.date === date).sort((a, b) => productionSortValue(a).localeCompare(productionSortValue(b), "en"));
     const second = rows.second.filter(row => row.date === date).sort((a, b) => productionSortValue(a).localeCompare(productionSortValue(b), "en"));
     if (first.length) {
+      const start = Math.min(...first.map(row => row.rowNumber));
+      const end = start + first.length - 1;
       ranges.push(
-        { range: `'Учет продукции 1'!B${first[0].rowNumber}:H${first.at(-1).rowNumber}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
-        { range: `'Учет продукции 1'!J${first[0].rowNumber}:J${first.at(-1).rowNumber}`, values: first.map(row => [row.scrapKg]) },
-        { range: `'Учет продукции 1'!L${first[0].rowNumber}:Q${first.at(-1).rowNumber}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${start}:H${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${start}:J${end}`, values: first.map(row => [row.scrapKg]) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${start}:Q${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
       );
     }
     if (second.length) {
+      const start = Math.min(...second.map(row => row.rowNumber));
+      const end = start + second.length - 1;
       ranges.push(
-        { range: `'Учет продукции 2'!A${second[0].rowNumber}:G${second.at(-1).rowNumber}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
-        { range: `'Учет продукции 2'!I${second[0].rowNumber}:I${second.at(-1).rowNumber}`, values: second.map(row => [row.scrapKg]) },
-        { range: `'Учет продукции 2'!K${second[0].rowNumber}:R${second.at(-1).rowNumber}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).afterBoxes) }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${start}:G${end}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${start}:I${end}`, values: second.map(row => [row.scrapKg]) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${start}:R${end}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).afterBoxes) }
       );
     }
   }
   if (ranges.length) await setGoogleSheetRanges(productionSpreadsheetId, accessToken, ranges);
+  rows = await getProductionShiftRows();
+  const summaryWrites = productionShiftSummaryWrites(rows, targetDates);
+  if (summaryWrites.length) await setGoogleSheetRanges(productionSpreadsheetId, accessToken, summaryWrites);
   return getProductionShiftRows();
 }
 
-function nextProductionRowNumber(rows, firstDataRow) {
-  return Math.max(firstDataRow, ...rows.map(row => row.rowNumber + 1));
+function productionShiftSummaryWrites(rows, dates) {
+  const writes = [];
+  for (const date of dates) {
+    const first = rows.first.filter(row => row.date === date);
+    const second = rows.second.filter(row => row.date === date);
+    const source = second.length ? second : first;
+    if (!source.length) continue;
+    const summary = productionShiftSummary(source);
+    const label = productionSummaryLabel(date);
+    const percent = productionSummaryPercentLabel(summary.percent);
+    const cans = Number(summary.canScrapKg || 0);
+    if (first.length) {
+      const rowNumber = Math.max(...first.map(row => row.rowNumber)) + 1;
+      writes.push(
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${rowNumber}`, values: [[label]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!H${rowNumber}`, values: [[summary.quantity]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${rowNumber}`, values: [[summary.scrapKg]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${rowNumber}:M${rowNumber}`, values: [[percent, `\u0411\u0440\u0430\u043a \u0431\u0430\u043d\u043e\u043a, \u043a\u0433: ${cans}`]] }
+      );
+    }
+    if (second.length) {
+      const rowNumber = Math.max(...second.map(row => row.rowNumber)) + 1;
+      writes.push(
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${rowNumber}`, values: [[label]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!G${rowNumber}`, values: [[summary.quantity]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${rowNumber}`, values: [[summary.scrapKg]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${rowNumber}`, values: [[percent]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!M${rowNumber}:N${rowNumber}`, values: [["\u0411\u0440\u0430\u043a \u0431\u0430\u043d\u043e\u043a, \u043a\u0433", cans]] }
+      );
+    }
+  }
+  return writes;
+}
+
+function productionShiftSummary(records) {
+  const quantity = records.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const scrapKg = records.reduce((sum, record) => sum + Number(record.scrapKg || 0), 0);
+  const canScrapKg = records.reduce((sum, record) => sum + Number(record.canScrapKg || 0), 0);
+  const equivalent = records.reduce((sum, record) => {
+    const percent = Number(record.scrapPercent);
+    const quantity = Number(record.quantity || 0);
+    return Number.isFinite(percent) && percent >= 0 && percent < 1 ? sum + quantity * percent / (1 - percent) : sum;
+  }, 0);
+  return { quantity, scrapKg, canScrapKg, percent: quantity + equivalent > 0 ? equivalent / (quantity + equivalent) : null };
+}
+
+function productionSummaryLabel(date) { return "\u0418\u0422\u041e\u0413\u041e \u0421\u041c\u0415\u041d\u042b \u00b7 " + date; }
+function productionSummaryPercentLabel(value) { return Number.isFinite(value) ? "\u041f\u0440\u043e\u0446\u0435\u043d\u0442 \u0431\u0440\u0430\u043a\u0430: " + (value * 100).toFixed(1).replace(".", ",") + "%" : "\u041f\u0440\u043e\u0446\u0435\u043d\u0442 \u0431\u0440\u0430\u043a\u0430: -"; }
+
+function nextProductionRowNumber(rows, firstDataRow, summaries = []) {
+  return Math.max(firstDataRow, ...rows.map(row => row.rowNumber + 1), ...summaries.map(row => row.rowNumber + 1));
 }
 
 function needsDateSeparator(rows, date) {
@@ -1309,12 +1413,23 @@ async function backfillProductionLeaders() {
 }
 
 async function getProductionShiftRows() {
-  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:R1", "'Учет продукции 1'!B2:Q2", productionSecondRange, productionFirstRange]);
-  const hasCatalogLine = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
+  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A1:R1", "'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B2:Q2", productionSecondRange, productionFirstRange]);
+  const hasCatalogLine = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("\u043b\u0438\u043d\u0435\u0439\u043a\u0430") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
   return {
     second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2, hasCatalogLine)).filter(Boolean),
-    first: (firstRows ?? []).map((row, index) => productionRowFromFirst(row, index + 4, hasCatalogLine)).filter(Boolean)
+    first: (firstRows ?? []).map((row, index) => productionRowFromFirst(row, index + 4, hasCatalogLine)).filter(Boolean),
+    secondSummaries: productionSummaryRows(secondRows, 2),
+    firstSummaries: productionSummaryRows(firstRows, 4)
   };
+}
+
+function productionSummaryRows(rows, startRow) {
+  const prefix = "\u0418\u0422\u041e\u0413\u041e \u0421\u041c\u0415\u041d\u042b";
+  return (rows ?? []).map((row, index) => {
+    const label = String(row?.[0] || "").trim();
+    const match = label.match(/(\d{4}-\d{2}-\d{2})/);
+    return label.startsWith(prefix) && match ? { rowNumber: startRow + index, date: match[1] } : null;
+  }).filter(Boolean);
 }
 
 function productionRowFromSecond(row, rowNumber, hasCatalogLine) {
