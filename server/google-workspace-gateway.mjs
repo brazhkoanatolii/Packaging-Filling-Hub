@@ -1339,8 +1339,14 @@ function productionRowFromFirst(row, rowNumber, hasCatalogLine) {
   return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: googleNumber(row[5]) || 0, quantity: googleNumber(row[6]) || 0, scrapKg: googleNumber(row[8]) || 0, packer: String(row[10] || "").trim(), operator: String(row[11] || "").trim(), line: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
 }
 
+function productionTimeSignature(value) {
+  const source = String(value || "").trim();
+  const match = source.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  return match ? match[1].padStart(2, "0") + ":" + match[2] : source;
+}
+
 function productionSignature(record) {
-  return [record.date, record.startTime, record.time, record.product, record.packer, record.operator, record.line || record.machineLine]
+  return [record.date, productionTimeSignature(record.startTime), productionTimeSignature(record.time), record.product, record.packer, record.operator, record.line || record.machineLine]
     .map(value => String(value || "").trim().toLocaleLowerCase("ru"))
     .join("\u001f");
 }
