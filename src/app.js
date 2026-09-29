@@ -834,6 +834,13 @@ async function handleClick(event) {
       await workforceRepository?.acceptRemote(id);
       state.workforce = await workforceService.snapshot(); render(); return;
     }
+    if (action === "workforce-overwrite-vacation") {
+      await workforceRepository?.overwriteVacationConflict(id);
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast("Версия программы отправлена в Google.", "success");
+      return;
+    }
     if (action === "workforce-retry-missing-attendance") {
       await workforceRepository?.retryMissingAttendance(id);
       state.workforce = await workforceService.snapshot();
@@ -2781,7 +2788,9 @@ function renderWorkforceOperation(operation) {
   const labels = { personnel: "Персонал", shiftTeams: "Смены", attendance: "Табель", vacations: "График отпусков" };
   const retry = operation.kind === "attendance" && conflict
     ? `<button class="small-button" data-action="workforce-retry-missing-attendance" data-id="${attribute(operation.requestId)}">Отправить, если в Google пусто</button>` : "";
-  return `<div class="queue-item"><span class="queue-icon ${conflict ? "conflict" : "pending"}">${conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(labels[operation.kind] || "Журнал")}</strong><small>${escapeHtml(operation.actor?.performer || "Автор не указан")} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}</small></span><span class="status-pill ${conflict ? "danger" : "warning"}">${conflict ? "Конфликт" : "В очереди"}</span>${conflict ? `<span class="queue-actions">${retry}<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(operation.requestId)}">Оставить версию Google</button></span>` : ""}</div>`;
+  const overwrite = operation.kind === "vacations" && conflict
+    ? `<button class="small-button" data-action="workforce-overwrite-vacation" data-id="${attribute(operation.requestId)}">Отправить мою версию</button>` : "";
+  return `<div class="queue-item"><span class="queue-icon ${conflict ? "conflict" : "pending"}">${conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(labels[operation.kind] || "Журнал")}</strong><small>${escapeHtml(operation.actor?.performer || "Автор не указан")} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}</small></span><span class="status-pill ${conflict ? "danger" : "warning"}">${conflict ? "Конфликт" : "В очереди"}</span>${conflict ? `<span class="queue-actions">${retry}${overwrite}<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(operation.requestId)}">Оставить версию Google</button></span>` : ""}</div>`;
 }
 
 function openVacationDialog(id = null) {

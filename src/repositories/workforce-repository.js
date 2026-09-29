@@ -115,6 +115,39 @@ export class WorkforceRepository {
       await this.store.setPreference(KEY, data);
     });
   }
+  async overwriteVacationConflict(requestId) {
+    return this.exclusive(async () => {
+      const data = await this.load();
+      const item = data.pending.find(operation => operation.requestId === requestId);
+      if (!item || item.kind !== "vacations" || !["conflict", "error"].includes(item.status)) throw new Error("Для этой записи отправка версии программы недоступна");
+      const remote = await this.provider.snapshot();
+      const current = remote.vacations?.find(record => record.id === item.record.id);
+      if (!current?.revision) throw new Error("Не удалось получить актуальную версию записи из Google");
+      item.expectedRevision = current.revision;
+      item.status = "pending";
+      item.attempted = false;
+      delete item.error;
+      data.confirmed = { ...remote, ready: true };
+      data.lastSync = new Date().toISOString();
+      await this.store.setPreference(KEY, data);
+      try {
+        const result = await this.provider.write(item);
+        const index = data.confirmed.vacations.findIndex(record => record.id === result.record.id);
+        if (index < 0) data.confirmed.vacations.push(result.record); else data.confirmed.vacations[index] = result.record;
+        data.pending = data.pending.filter(operation => operation.requestId !== requestId);
+        this.lastError = null;
+        await this.store.setPreference(KEY, data);
+        return result.record;
+      } catch (error) {
+        item.status = error.conflict || error.status === 409 ? "conflict" : "error";
+        item.attempted = true;
+        item.error = error.message;
+        this.lastError = error.message;
+        await this.store.setPreference(KEY, data);
+        throw error;
+      }
+    });
+  }
   async retryMissingAttendance(requestId) {
     return this.exclusive(async () => {
       const data = await this.load();

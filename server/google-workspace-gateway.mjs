@@ -1786,8 +1786,12 @@ function workforceVacations(rows, year) {
   return rows.filter(row => row[7]).map(row => ({
     id: String(row[7]), employeeId: String(row[8] || ""), year, startDate: googleDate(row[2]), endDate: googleDate(row[3]),
     days: Number.isFinite(googleNumber(row[4])) ? googleNumber(row[4]) : null, status: String(row[5] || ""), note: String(row[6] || ""),
-    revision: workforceRevision(row), updatedAt: googleDate(row[10]), updatedBy: String(row[11] || "")
+    revision: workforceVacationRevision(row), updatedAt: googleDate(row[10]), updatedBy: String(row[11] || "")
   }));
+}
+
+function workforceVacationRevision(row) {
+  return workforceRevision([row[0], row[1], googleDate(row[2]), googleDate(row[3]), row[5], row[6], row[7], row[8], row[9]]);
 }
 
 function workforceRole(value) {
