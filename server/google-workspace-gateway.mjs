@@ -46,7 +46,8 @@ const cansSheetName = "Банки";
 const cansRange = PACKAGING_TARGET_RANGES.cans;
 const productionSpreadsheetId = "1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA";
 const productionSecondRange = "'Учет продукции 2'!A2:R";
-const productionFirstRange = "'Учет продукции 1'!B4:Q";
+const productionFirstRange = "'Учет продукции 1'!B4:R";
+let productionCanScrapMigrationPromise = null;
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -412,8 +413,11 @@ createServer(async (request, response) => {
     } else {
       console.log("Суточный перенос итогов отключён: фактические записи остаются в рабочих журналах.");
     }
-    runBackgroundTask("заполнение старшего механика и механика в журнале продукции", backfillProductionLeaders);
-    runBackgroundTask("production shift summaries", rebuildProductionShiftSummaries);
+    runBackgroundTask("подготовка журнала продукции", async () => {
+      await ensureProductionCanScrapColumn();
+      await backfillProductionLeaders();
+      await rebuildProductionShiftSummaries();
+    });
   }
   if (process.platform === "win32") {
     console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
@@ -1082,7 +1086,8 @@ async function deleteProductionRecord(input) {
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [Array(7).fill("")] },
     { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[""]] },
-    { range: `'Учет продукции 1'!L${firstRowNumber}:Q${firstRowNumber}`, values: [Array(6).fill("")] },
+    { range: `'Учет продукции 1'!L${firstRowNumber}:L${firstRowNumber}`, values: [[""]] },
+    { range: `'Учет продукции 1'!M${firstRowNumber}:R${firstRowNumber}`, values: [Array(6).fill("")] },
     { range: `'Учет продукции 2'!A${secondRowNumber}:G${secondRowNumber}`, values: [Array(7).fill("")] },
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[""]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [Array(8).fill("")] }
@@ -1095,7 +1100,8 @@ async function writeProductionRecord(accessToken, record, leaders, firstRowNumbe
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [first.beforeBoxes] },
     { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[first.scrapKg]] },
-    { range: `'Учет продукции 1'!L${firstRowNumber}:Q${firstRowNumber}`, values: [first.afterBoxes] },
+    { range: `'Учет продукции 1'!L${firstRowNumber}:L${firstRowNumber}`, values: [[first.canScrapKg]] },
+    { range: `'Учет продукции 1'!M${firstRowNumber}:R${firstRowNumber}`, values: [first.afterBoxes] },
     { range: `'Учет продукции 2'!A${secondRowNumber}:G${secondRowNumber}`, values: [second.beforeBoxes] },
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[second.scrapKg]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [second.afterBoxes] }
@@ -1106,6 +1112,7 @@ function productionFirstValues(record, leaders) {
   return {
     beforeBoxes: [displayDate(record.date), record.startTime, record.time, record.catalogLine, record.product, record.strength, record.quantity],
     scrapKg: record.scrapKg,
+    canScrapKg: record.canScrapKg,
     afterBoxes: [record.packer, record.operator, record.machineLine, record.shift, leaders.seniorMechanic, leaders.mechanic]
   };
 }
@@ -1205,7 +1212,8 @@ async function sortProductionDaysByLine(accessToken, dates) {
       ranges.push(
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${start}:H${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${start}:J${end}`, values: first.map(row => [row.scrapKg]) },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${start}:Q${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${start}:L${end}`, values: first.map(row => [row.canScrapKg]) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!M${start}:R${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
       );
     }
     if (second.length) {
@@ -1242,7 +1250,8 @@ function productionShiftSummaryWrites(rows, dates) {
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${rowNumber}`, values: [[label]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!H${rowNumber}`, values: [[summary.quantity]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${rowNumber}`, values: [[summary.scrapKg]] },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${rowNumber}:M${rowNumber}`, values: [[percent, `\u0411\u0440\u0430\u043a \u0431\u0430\u043d\u043e\u043a, \u043a\u0433: ${cans}`]] }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${rowNumber}`, values: [[cans]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!M${rowNumber}`, values: [[percent]] }
       );
     }
     if (second.length) {
@@ -1294,10 +1303,58 @@ async function insertProductionDateSeparators(accessToken, firstRowNumber, secon
   ], "Не удалось добавить разделитель между днями продукции");
 }
 
+async function ensureProductionCanScrapColumn() {
+  if (!productionCanScrapMigrationPromise) {
+    productionCanScrapMigrationPromise = migrateProductionCanScrapColumn().catch(error => {
+      productionCanScrapMigrationPromise = null;
+      throw error;
+    });
+  }
+  return productionCanScrapMigrationPromise;
+}
+
+async function migrateProductionCanScrapColumn() {
+  if (!writesEnabled || missingGoogleSettings().length) return { migrated: false, updated: 0 };
+  const firstSheetName = "Учет продукции 1";
+  const accessToken = await getAccessToken();
+  let [header] = await getGoogleSheetRanges(productionSpreadsheetId, [`'${firstSheetName}'!B2:R2`]);
+  const hasCanScrap = String(header?.[0]?.[10] || "").toLocaleLowerCase("ru").includes("банок");
+  let migrated = false;
+  if (!hasCanScrap) {
+    const sheetId = await getSheetId(productionSpreadsheetId, firstSheetName, accessToken);
+    await batchGoogleSheetRequests(productionSpreadsheetId, accessToken, [{
+      insertDimension: { range: { sheetId, dimension: "COLUMNS", startIndex: 11, endIndex: 12 }, inheritFromBefore: true }
+    }], "Не удалось добавить графу «Брак банок» в журнал продукции");
+    await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [{
+      range: `'${firstSheetName}'!L2`, values: [["Брак банок, кг"]]
+    }]);
+    migrated = true;
+  }
+  const rows = await getProductionShiftRows();
+  const secondBySignature = new Map();
+  for (const row of rows.second) {
+    const key = productionSignature(row);
+    const list = secondBySignature.get(key) ?? [];
+    list.push(row);
+    secondBySignature.set(key, list);
+  }
+  const updates = [];
+  for (const row of rows.first) {
+    const match = (secondBySignature.get(productionSignature(row)) ?? []).shift();
+    if (match) updates.push({ range: `'${firstSheetName}'!L${row.rowNumber}`, values: [[Number(match.canScrapKg || 0)]] });
+  }
+  for (let index = 0; index < updates.length; index += 100) {
+    await setGoogleSheetRanges(productionSpreadsheetId, accessToken, updates.slice(index, index + 100));
+  }
+  if (migrated || updates.length) console.log(`Графа брака банок подготовлена: ${updates.length} записей сверено.`);
+  return { migrated, updated: updates.length };
+}
+
 async function assertProductionCatalogSchema() {
-  const [secondHeader, firstHeader] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:R1", "'Учет продукции 1'!B2:Q2"]);
-  const ready = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin") && String(secondHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(firstHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(secondHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент") && String(firstHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент");
-  if (!ready) throw new Error("Журнал продукции ещё не подготовлен для граф «Линейка продукта», «Коробки» и «Процент брака». Обновите таблицу через центральный сервер.");
+  await ensureProductionCanScrapColumn();
+  const [secondHeader, firstHeader] = await getGoogleSheetRanges(productionSpreadsheetId, ["'Учет продукции 2'!A1:R1", "'Учет продукции 1'!B2:R2"]);
+  const ready = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("линейка") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin") && String(secondHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(firstHeader?.[0]?.[7] || "").toLocaleLowerCase("ru").includes("короб") && String(secondHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент") && String(firstHeader?.[0]?.[9] || "").toLocaleLowerCase("ru").includes("процент") && String(firstHeader?.[0]?.[10] || "").toLocaleLowerCase("ru").includes("банок");
+  if (!ready) throw new Error("Журнал продукции ещё не подготовлен для граф «Линейка продукта», «Коробки», «Процент брака» и «Брак банок». Обновите таблицу через центральный сервер.");
 }
 
 function productionRecordId(firstRowNumber, secondRowNumber) { return `production:${firstRowNumber}:${secondRowNumber}`; }
@@ -1316,8 +1373,8 @@ async function preserveProductionRowFormatting(accessToken, firstRowNumber, seco
   const requests = [];
   if (firstRowNumber > 4) {
     requests.push({ copyPaste: {
-      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 17 },
-      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 17 },
+      source: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 2, endRowIndex: firstRowNumber - 1, startColumnIndex: 1, endColumnIndex: 18 },
+      destination: { sheetId: firstSheetId, startRowIndex: firstRowNumber - 1, endRowIndex: firstRowNumber, startColumnIndex: 1, endColumnIndex: 18 },
       pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
     } });
   }
@@ -1402,7 +1459,7 @@ async function backfillProductionLeaders() {
     if (!leaders.seniorMechanic && !leaders.mechanic) continue;
     const firstValues = [first.seniorMechanic || leaders.seniorMechanic, first.mechanic || leaders.mechanic];
     const secondValues = [second.seniorMechanic || leaders.seniorMechanic, second.mechanic || leaders.mechanic];
-    if (!first.seniorMechanic || !first.mechanic) updates.push({ range: `'Учет продукции 1'!P${firstRowNumber}:Q${firstRowNumber}`, values: [firstValues] });
+    if (!first.seniorMechanic || !first.mechanic) updates.push({ range: `'Учет продукции 1'!Q${firstRowNumber}:R${firstRowNumber}`, values: [firstValues] });
     if (!second.seniorMechanic || !second.mechanic) updates.push({ range: `'Учет продукции 2'!Q${secondRowNumber}:R${secondRowNumber}`, values: [secondValues] });
   }
   for (let index = 0; index < updates.length; index += 100) {
@@ -1413,7 +1470,7 @@ async function backfillProductionLeaders() {
 }
 
 async function getProductionShiftRows() {
-  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A1:R1", "'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B2:Q2", productionSecondRange, productionFirstRange]);
+  const [secondHeader, firstHeader, secondRows, firstRows] = await getGoogleSheetRanges(productionSpreadsheetId, ["'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A1:R1", "'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B2:R2", productionSecondRange, productionFirstRange]);
   const hasCatalogLine = String(secondHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("\u043b\u0438\u043d\u0435\u0439\u043a\u0430") && String(firstHeader?.[0]?.[3] || "").toLocaleLowerCase("ru").includes("lin");
   return {
     second: (secondRows ?? []).map((row, index) => productionRowFromSecond(row, index + 2, hasCatalogLine)).filter(Boolean),
@@ -1451,7 +1508,7 @@ function productionRowFromFirst(row, rowNumber, hasCatalogLine) {
   const date = googleSheetDate(row?.[0]);
   if (!date || !String(row?.[hasCatalogLine ? 4 : 3] || "").trim()) return null;
   if (!hasCatalogLine) return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: "", product: String(row[3] || "").trim(), strength: googleNumber(row[4]) || 0, quantity: googleNumber(row[5]) || 0, scrapKg: googleNumber(row[6]) || 0, packer: String(row[8] || "").trim(), operator: String(row[9] || "").trim(), line: String(row[10] || "").trim(), shift: String(row[11] || "").trim().toUpperCase(), seniorMechanic: String(row[12] || "").trim(), mechanic: String(row[13] || "").trim() };
-  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: googleNumber(row[5]) || 0, quantity: googleNumber(row[6]) || 0, scrapKg: googleNumber(row[8]) || 0, packer: String(row[10] || "").trim(), operator: String(row[11] || "").trim(), line: String(row[12] || "").trim(), shift: String(row[13] || "").trim().toUpperCase(), seniorMechanic: String(row[14] || "").trim(), mechanic: String(row[15] || "").trim() };
+  return { rowNumber, date, startTime: String(row[1] || "").trim(), time: String(row[2] || "").trim(), catalogLine: String(row[3] || "").trim(), product: String(row[4] || "").trim(), strength: googleNumber(row[5]) || 0, quantity: googleNumber(row[6]) || 0, scrapKg: googleNumber(row[8]) || 0, scrapPercent: productionScrapPercent(row[9]), canScrapKg: googleNumber(row[10]) || 0, packer: String(row[11] || "").trim(), operator: String(row[12] || "").trim(), line: String(row[13] || "").trim(), shift: String(row[14] || "").trim().toUpperCase(), seniorMechanic: String(row[15] || "").trim(), mechanic: String(row[16] || "").trim() };
 }
 
 function productionTimeSignature(value) {
