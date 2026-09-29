@@ -1180,6 +1180,7 @@ function setBusy(value) {
 }
 
 function render() {
+  const navigationScrollTop = root.querySelector(".main-nav")?.scrollTop ?? 0;
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.lang = state.language;
   document.title = state.account
@@ -1187,6 +1188,8 @@ function render() {
     : APP_CONFIG.name;
   root.innerHTML = state.account ? renderApplication() : renderLogin();
   localizeElement(root, state.language);
+  const navigation = root.querySelector(".main-nav");
+  if (navigation) navigation.scrollTop = navigationScrollTop;
 }
 
 function renderLogin() {
