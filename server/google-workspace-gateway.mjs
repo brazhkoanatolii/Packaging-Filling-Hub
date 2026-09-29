@@ -53,8 +53,11 @@ const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
 const productionScrapRange = "'Брак'!A7:V500";
-const productionOperatorRange = "'Механики-операторы'!A7:V500";
-const productionLeaderRange = "'Старшие механики и механики'!A7:V500";
+const productionMassRange = "'Масса'!A7:M500";
+const productionMechanicsSheetName = "Механики";
+const productionMechanicsLegacySheetName = "Механики-операторы";
+const productionMechanicsRange = "'Механики'!A7:BN500";
+const productionReportedMasses = Object.freeze([11.8, 13.5, 15.4, 11, 14, 10]);
 const productionMachineColumns = Object.freeze({ A: 2, B: 3, D: 4, F: 5, H: 6, K: 7, L: 8, M: 9 });
 const nonconformitySpreadsheetId = "1ovuf2QW5KC4_CI1wAEUcufhZXfLreeJhN2PNVPtjlrk";
 const nonconformitySheetName = "Журнал";
@@ -418,6 +421,7 @@ createServer(async (request, response) => {
       await ensureProductionCanScrapColumn();
       await backfillProductionLeaders();
       await rebuildProductionShiftSummaries();
+      await synchronizeAllProductionReports();
     });
   }
   if (process.platform === "win32") {
@@ -1078,6 +1082,7 @@ async function createProductionRecordOnce(input, record) {
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDayByLine(accessToken, record.date);
   const stored = await productionStoredRecord(sorted, record);
+  await syncProductionReportDates([record.date]);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
@@ -1092,12 +1097,15 @@ async function updateProductionRecord(input) {
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
   const stored = await productionStoredRecord(sorted, record);
+  await syncProductionReportDates([previousDate, record.date]);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
 async function deleteProductionRecord(input) {
   await assertProductionCatalogSchema();
   const { firstRowNumber, secondRowNumber } = parseProductionRecordId(input?.id);
+  const before = await getProductionShiftRows();
+  const previousDate = before.first.find(row => row.rowNumber === firstRowNumber)?.date ?? before.second.find(row => row.rowNumber === secondRowNumber)?.date;
   const accessToken = await getAccessToken();
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [Array(7).fill("")] },
@@ -1108,6 +1116,7 @@ async function deleteProductionRecord(input) {
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[""]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [Array(8).fill("")] }
   ]);
+  await syncProductionReportDates([previousDate]);
 }
 
 async function writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber) {
@@ -1614,62 +1623,59 @@ function validateGatewayProductionRecord(input) {
 
 async function exportProductionDaily(input) {
   const date = String(input?.date || "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= vilniusDate()) throw new Error("Передавать можно только завершённый день");
+  const today = vilniusDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today || (date === today && !input?.allowCurrentDay)) throw new Error("Передавать можно только завершённый день");
   const records = (await getProductionSnapshot()).records.filter(record => record.date === date);
-  if (!records.length) return { ok: true, date, empty: true };
-  if (records.some(record => !["A", "B"].includes(String(record.shift)))) throw new Error(`В продукции за ${displayDate(date)} есть записи без смены`);
   const accessToken = await getAccessToken();
-  await ensureProductionDailyReportRows(date, accessToken);
-  const [machineRows, packerRows, scrapRows, operatorRows, leaderRows, packerHeaders, scrapHeaders, operatorHeaders, leaderHeaders, workforce] = await Promise.all([
+  const mechanics = await ensureProductionMechanicsReportLayout(accessToken, records);
+  const [machineRows, packerRows, scrapRows, massRows, mechanicsRows, packerHeaders, scrapHeaders, specifications] = await Promise.all([
     getGoogleSheetRanges(productionReportSpreadsheetId, [productionMachineRange]),
     getGoogleSheetRanges(productionReportSpreadsheetId, [productionPackerRange]),
     getGoogleSheetRanges(productionReportSpreadsheetId, [productionScrapRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionOperatorRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionLeaderRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionMassRange]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, [productionMechanicsRange]),
     getGoogleSheetRanges(productionReportSpreadsheetId, ["'Упаковщики'!A6:V6"]),
     getGoogleSheetRanges(productionReportSpreadsheetId, ["'Брак'!A6:V6"]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, ["'Механики-операторы'!A6:V6"]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, ["'Старшие механики и механики'!A6:V6"]),
-    getWorkforceSnapshot()
-  ]);
-  const [machineSheetId, packerSheetId, scrapSheetId, operatorSheetId, leaderSheetId] = await Promise.all([
-    getSheetId(productionReportSpreadsheetId, "Станки", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Упаковщики", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Брак", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Механики-операторы", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Старшие механики и механики", accessToken)
+    records.length ? runAppsScript("listProductSpecifications") : Promise.resolve([])
   ]);
   const machine = machineRows[0] ?? [];
   const packers = packerRows[0] ?? [];
   const scrap = scrapRows[0] ?? [];
-  const operators = operatorRows[0] ?? [];
-  const leaders = leaderRows[0] ?? [];
+  const mass = massRows[0] ?? [];
+  const mechanicRows = mechanicsRows[0] ?? [];
   const packerHeader = packerHeaders[0]?.[0] ?? [];
   const scrapHeader = scrapHeaders[0]?.[0] ?? [];
-  const operatorHeader = operatorHeaders[0]?.[0] ?? [];
-  const leaderHeader = leaderHeaders[0]?.[0] ?? [];
-  const writes = [];
-  for (const shift of ["A", "B"]) {
-    const target = findDailyShiftRow(machine, date, shift, 7, "Станки");
-    const values = Array(8).fill(0);
-    records.filter(record => record.shift === shift).forEach(record => {
-      const column = productionMachineColumns[String(record.line || "").toUpperCase()];
-      if (column !== undefined) values[column - 2] += Number(record.quantity || 0) / 240;
-    });
-    writes.push(updateSheetCells(productionReportSpreadsheetId, accessToken, { sheetId: machineSheetId, rowIndex: target.rowNumber - 1, columnIndex: 2 }, values));
-  }
+  const mechanicsHeader = mechanicRows.length ? await getGoogleSheetRanges(productionReportSpreadsheetId, ["'Механики'!A6:BN6"]).then(rows => rows[0]?.[0] ?? []) : [];
+  const machineTarget = getDailyTargetRowFromRows(machine, date, 7, "Станки");
   const packerTarget = getDailyTargetRowFromRows(packers, date, 7, "Упаковщики");
   const scrapTarget = getDailyTargetRowFromRows(scrap, date, 7, "Брак");
-  const operatorTarget = getDailyTargetRowFromRows(operators, date, 7, "Механики-операторы");
-  const leaderTarget = getDailyTargetRowFromRows(leaders, date, 7, "Старшие механики и механики");
-  writes.push(
-    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, packerSheetId, packerTarget.rowNumber, packerHeader, records, record => Number(record.quantity || 0) / 240),
-    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, scrapSheetId, scrapTarget.rowNumber, scrapHeader, records, record => Number(record.scrapKg || 0)),
-    updateDailyOperatorValues(productionReportSpreadsheetId, accessToken, operatorSheetId, operatorTarget.rowNumber, operatorHeader, records),
-    updateDailyLeaderValues(productionReportSpreadsheetId, accessToken, leaderSheetId, leaderTarget.rowNumber, leaderHeader, records, workforce, date)
-  );
+  const massTarget = getDailyTargetRowFromRows(mass, date, 7, "Масса");
+  const mechanicsTarget = getDailyTargetRowFromRows(mechanicRows, date, 7, "Механики");
+  const machineValues = Array(8).fill(0);
+  records.forEach(record => {
+    const column = productionMachineColumns[String(record.line || "").toUpperCase()];
+    if (column !== undefined) machineValues[column - 2] += Number(record.quantity || 0) / 240;
+  });
+  const writes = [
+    setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, [{ range: `'Станки'!C${machineTarget.rowNumber}:J${machineTarget.rowNumber}`, values: [records.length ? machineValues : Array(8).fill("")] }]),
+    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, "Упаковщики", packerTarget.rowNumber, packerHeader, records, record => Number(record.quantity || 0) / 240),
+    updateDailyPeopleValues(productionReportSpreadsheetId, accessToken, "Брак", scrapTarget.rowNumber, scrapHeader, records, record => Number(record.scrapKg || 0)),
+    setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, [{ range: `'Масса'!B${massTarget.rowNumber}:G${massTarget.rowNumber}`, values: [productionMassValues(records, specifications)] }]),
+    updateDailyMechanicsValues(accessToken, mechanicsTarget.rowNumber, mechanicsHeader, records, specifications)
+  ];
   await Promise.all(writes);
   return { ok: true, date, records: records.length };
+}
+
+async function syncProductionReportDates(dates) {
+  const uniqueDates = [...new Set(dates.filter(date => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))];
+  for (const date of uniqueDates) await exportProductionDaily({ date, allowCurrentDay: true });
+}
+
+async function synchronizeAllProductionReports() {
+  const dates = [...new Set((await getProductionSnapshot()).records.map(record => record.date).filter(Boolean))].sort();
+  await syncProductionReportDates(dates);
+  console.log(`Синхронизированы дневные итоги продукции: ${dates.length} дн.`);
 }
 
 function reportRowHasValues(row) {
@@ -1686,89 +1692,141 @@ function nextAvailableReportRow(rows, startRow, occupied) {
   return rowNumber;
 }
 
-async function ensureProductionDailyReportRows(date, accessToken) {
-  const [machineRows, packerRows, scrapRows, operatorRows, leaderRows] = await Promise.all([
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionMachineRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionPackerRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionScrapRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionOperatorRange]),
-    getGoogleSheetRanges(productionReportSpreadsheetId, [productionLeaderRange])
-  ]);
-  const [machineSheetId, packerSheetId, scrapSheetId, operatorSheetId, leaderSheetId] = await Promise.all([
-    getSheetId(productionReportSpreadsheetId, "Станки", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Упаковщики", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Брак", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Механики-операторы", accessToken),
-    getSheetId(productionReportSpreadsheetId, "Старшие механики и механики", accessToken)
-  ]);
-  const formatRequests = [];
-  const values = [];
-  const addRow = (sheetName, sheetId, rows, startRow, occupied, rowValues, width) => {
-    const rowNumber = nextAvailableReportRow(rows, startRow, occupied);
-    occupied.add(rowNumber);
-    if (rowNumber > startRow) {
-      formatRequests.push({ copyPaste: {
-        source: { sheetId, startRowIndex: rowNumber - 2, endRowIndex: rowNumber - 1, startColumnIndex: 0, endColumnIndex: width },
-        destination: { sheetId, startRowIndex: rowNumber - 1, endRowIndex: rowNumber, startColumnIndex: 0, endColumnIndex: width },
-        pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL"
-      } });
-    }
-    const endColumn = rowValues.length === 2 ? "B" : "A";
-    values.push({ range: `'${sheetName}'!A${rowNumber}:${endColumn}${rowNumber}`, values: [rowValues] });
-  };
-  const machine = machineRows[0] ?? [];
-  const machineOccupied = new Set();
-  for (const shift of ["A", "B"]) {
-    if (!machine.some(row => googleSheetDate(row[0]) === date && String(row[1] || "").trim().toUpperCase() === shift)) {
-      addRow("Станки", machineSheetId, machine, 7, machineOccupied, [displayDate(date), shift], 13);
-    }
-  }
-  const peopleSheets = [
-    ["Упаковщики", packerSheetId, packerRows[0] ?? []], ["Брак", scrapSheetId, scrapRows[0] ?? []],
-    ["Механики-операторы", operatorSheetId, operatorRows[0] ?? []], ["Старшие механики и механики", leaderSheetId, leaderRows[0] ?? []]
-  ];
-  for (const [sheetName, sheetId, rows] of peopleSheets) {
-    if (!rows.some(row => googleSheetDate(row[0]) === date)) addRow(sheetName, sheetId, rows, 7, new Set(), [displayDate(date)], 22);
-  }
-  if (formatRequests.length) await batchGoogleSheetRequests(productionReportSpreadsheetId, accessToken, formatRequests, "Не удалось оформить новые строки сводки продукции");
-  if (values.length) await setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, values);
-}
-
-async function updateDailyPeopleValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, records, valueFor) {
+async function updateDailyPeopleValues(spreadsheetId, accessToken, sheetName, rowNumber, headers, records, valueFor) {
   const totals = new Map();
   records.forEach(record => totals.set(record.packer, (totals.get(record.packer) || 0) + valueFor(record)));
-  return updateDailyHeaderValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, totals);
+  return updateDailyHeaderValues(spreadsheetId, accessToken, sheetName, rowNumber, headers, totals);
 }
 
-function updateDailyOperatorValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, records) {
-  const totals = new Map();
-  records.forEach(record => {
-    const operators = splitProductionParticipants(record.operator);
-    const share = operators.length ? Number(record.quantity || 0) / 240 / operators.length : 0;
-    operators.forEach(name => totals.set(name, (totals.get(name) || 0) + share));
-  });
-  return updateDailyHeaderValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, totals);
-}
-
-function updateDailyLeaderValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, records, workforce, date) {
-  const attendance = Array.isArray(workforce?.attendance) ? workforce.attendance : [];
-  const personnelById = new Map((workforce?.personnel ?? []).map(person => [person.id, person]));
-  const totals = new Map();
-  attendance.filter(item => item.date === date && item.value === "K").forEach(item => {
-    const person = personnelById.get(item.employeeId);
-    if (!["senior-mechanic", "mechanic"].includes(person?.role)) return;
-    const shift = item.shiftTeamId === "shift-team-a" ? "A" : item.shiftTeamId === "shift-team-b" ? "B" : "";
-    const output = records.filter(record => record.shift === shift).reduce((sum, record) => sum + Number(record.quantity || 0) / 240, 0);
-    totals.set(person.fullName, output);
-  });
-  return updateDailyHeaderValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, totals);
-}
-
-function updateDailyHeaderValues(spreadsheetId, accessToken, sheetId, rowNumber, headers, totals) {
+function updateDailyHeaderValues(spreadsheetId, accessToken, sheetName, rowNumber, headers, totals) {
   const totalIndex = headers.findIndex(value => String(value).trim().startsWith("Всего,"));
   if (totalIndex < 2) throw new Error("Изменилась структура дневной сводки по сотрудникам");
   const people = headers.slice(1, totalIndex);
-  return updateSheetCells(spreadsheetId, accessToken, { sheetId, rowIndex: rowNumber - 1, columnIndex: 1 }, people.map(name => totals.get(String(name).trim()) || 0));
+  return setGoogleSheetRanges(spreadsheetId, accessToken, [{
+    range: `'${sheetName}'!B${rowNumber}:${columnLetter(totalIndex - 1)}${rowNumber}`,
+    values: [people.map(name => totals.get(String(name).trim()) ?? "")]
+  }]);
+}
+
+async function ensureProductionMechanicsReportLayout(accessToken, records) {
+  let sheetId;
+  let sourceName = productionMechanicsSheetName;
+  try {
+    sheetId = await getSheetId(productionReportSpreadsheetId, productionMechanicsSheetName, accessToken);
+  } catch {
+    sourceName = productionMechanicsLegacySheetName;
+    sheetId = await getSheetId(productionReportSpreadsheetId, productionMechanicsLegacySheetName, accessToken);
+  }
+  const [mechanicsHeaderRows, leadersHeaderRows] = await Promise.all([
+    getGoogleSheetRanges(productionReportSpreadsheetId, [`'${sourceName}'!A6:V6`]),
+    getGoogleSheetRanges(productionReportSpreadsheetId, ["'Старшие механики и механики'!A6:V6"])
+  ]);
+  const namesFromHeader = header => {
+    const totalIndex = header.findIndex(value => String(value).trim().startsWith("Всего,"));
+    return header.slice(1, totalIndex < 0 ? header.length : totalIndex).map(value => String(value || "").trim()).filter(name => name && !/^Резерв\s*\d*$/i.test(name));
+  };
+  const namesFromRecords = records.flatMap(record => [
+    ...splitProductionParticipants(record.operator), String(record.seniorMechanic || "").trim(), String(record.mechanic || "").trim()
+  ]).filter(Boolean);
+  const people = [...new Set([...namesFromHeader(mechanicsHeaderRows[0]?.[0] ?? []), ...namesFromHeader(leadersHeaderRows[0]?.[0] ?? []), ...namesFromRecords])];
+  if (people.length > 18) throw new Error("В листе «Механики» предусмотрено максимум 18 сотрудников; добавьте место в структуре отчёта");
+  const columns = [...people, ...Array.from({ length: 18 - people.length }, (_, index) => `Резерв ${index + 1}`)];
+  const header = [
+    "Дата", ...columns, "Всего, кор.", "Состояние записи", "Примечание",
+    "", ...columns, "Всего брака, кг", "Состояние записи", "Примечание",
+    "", ...columns, "Средний процент брака", "Состояние записи", "Примечание"
+  ];
+  if (header.length !== 66) throw new Error("Некорректная структура листа «Механики»");
+  const requests = [];
+  if (sourceName !== productionMechanicsSheetName) requests.push({ updateSheetProperties: { properties: { sheetId, title: productionMechanicsSheetName, gridProperties: { columnCount: 66 } }, fields: "title,gridProperties.columnCount" } });
+  if (sourceName !== productionMechanicsSheetName) requests.push(
+    { copyPaste: { source: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 0, endColumnIndex: 22 }, destination: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 22, endColumnIndex: 44 }, pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL" } },
+    { copyPaste: { source: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 0, endColumnIndex: 22 }, destination: { sheetId, startRowIndex: 4, endRowIndex: 1515, startColumnIndex: 44, endColumnIndex: 66 }, pasteType: "PASTE_FORMAT", pasteOrientation: "NORMAL" } }
+  );
+  if (requests.length) await batchGoogleSheetRequests(productionReportSpreadsheetId, accessToken, requests, "Не удалось подготовить лист «Механики»");
+  await setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, [
+    { range: "'Механики'!A5:A5", values: [["Выпуск, кор."]] },
+    { range: "'Механики'!W5:W5", values: [["Брак, кг"]] },
+    { range: "'Механики'!AS5:AS5", values: [["Процент брака, %"]] },
+    { range: "'Механики'!A6:BN6", values: [header] }
+  ]);
+  return { sheetId, people: columns };
+}
+
+function productionMassValues(records, specifications) {
+  const totals = new Map(productionReportedMasses.map(value => [String(value), 0]));
+  records.forEach(record => {
+    const mass = productionRecordMass(record, specifications);
+    if (!mass) return;
+    const key = String(mass.grams);
+    if (totals.has(key)) totals.set(key, totals.get(key) + mass.kg);
+  });
+  return productionReportedMasses.map(value => totals.get(String(value)) || "");
+}
+
+function productionRecordMass(record, specifications) {
+  const specification = (Array.isArray(specifications) ? specifications : []).find(item =>
+    String(item?.line || "").trim() === String(record.catalogLine || "").trim()
+    && String(item?.product || "").trim() === String(record.product || "").trim()
+    && Number(item?.variant) === Number(record.strength)
+  );
+  const wetMass = Number(specification?.wetMass);
+  const dryMass = Number(specification?.dryMass);
+  const grams = wetMass > 0 ? wetMass : dryMass > 0 ? dryMass : 0;
+  if (!grams && Number(record.quantity || 0) > 0) throw new Error(`Не найден вес банки для «${record.product}», ${record.strength}`);
+  return grams ? { grams, kg: Number(record.quantity || 0) * grams / 1000 } : null;
+}
+
+async function updateDailyMechanicsValues(accessToken, rowNumber, headers, records, specifications) {
+  const people = headers.slice(1, 19).map(value => String(value || "").trim());
+  if (headers.length !== 66 || people.length !== 18 || headers[0] !== "Дата") throw new Error("Изменилась структура листа «Механики»");
+  const totals = new Map();
+  const add = (name, share) => {
+    if (!name || !people.includes(name)) return;
+    const current = totals.get(name) ?? { boxes: 0, scrapKg: 0, finishedKg: 0 };
+    current.boxes += share.boxes;
+    current.scrapKg += share.scrapKg;
+    current.finishedKg += share.finishedKg;
+    totals.set(name, current);
+  };
+  let totalBoxes = 0;
+  let totalScrapKg = 0;
+  let totalFinishedKg = 0;
+  records.forEach(record => {
+    const finishedKg = productionRecordMass(record, specifications)?.kg || 0;
+    const boxes = Number(record.quantity || 0) / 240;
+    const scrapKg = Number(record.scrapKg || 0);
+    const operators = splitProductionParticipants(record.operator);
+    const operatorShare = operators.length ? { boxes: boxes / operators.length, scrapKg: scrapKg / operators.length, finishedKg: finishedKg / operators.length } : null;
+    operators.forEach(name => add(name, operatorShare));
+    [record.seniorMechanic, record.mechanic].map(value => String(value || "").trim()).filter(Boolean).forEach(name => add(name, { boxes, scrapKg, finishedKg }));
+    totalBoxes += boxes;
+    totalScrapKg += scrapKg;
+    totalFinishedKg += finishedKg;
+  });
+  const values = name => totals.get(name);
+  const display = (name, key) => values(name) ? values(name)[key] : "";
+  const percent = name => {
+    const value = values(name);
+    return value && value.finishedKg + value.scrapKg > 0 ? value.scrapKg / (value.finishedKg + value.scrapKg) : "";
+  };
+  const status = records.length ? "Учтено" : "Нет записи";
+  const totalPercent = totalFinishedKg + totalScrapKg > 0 ? totalScrapKg / (totalFinishedKg + totalScrapKg) : "";
+  await setGoogleSheetRanges(productionReportSpreadsheetId, accessToken, [
+    { range: `'Механики'!B${rowNumber}:S${rowNumber}`, values: [people.map(name => display(name, "boxes"))] },
+    { range: `'Механики'!T${rowNumber}:V${rowNumber}`, values: [[records.length ? totalBoxes : "", status, ""]] },
+    { range: `'Механики'!X${rowNumber}:AO${rowNumber}`, values: [people.map(name => display(name, "scrapKg"))] },
+    { range: `'Механики'!AP${rowNumber}:AR${rowNumber}`, values: [[records.length ? totalScrapKg : "", status, ""]] },
+    { range: `'Механики'!AT${rowNumber}:BK${rowNumber}`, values: [people.map(percent)] },
+    { range: `'Механики'!BL${rowNumber}:BN${rowNumber}`, values: [[totalPercent, status, ""]] }
+  ]);
+}
+
+function columnLetter(index) {
+  let value = index + 1;
+  let text = "";
+  while (value) { const remainder = (value - 1) % 26; text = String.fromCharCode(65 + remainder) + text; value = Math.floor((value - 1) / 26); }
+  return text;
 }
 
 function splitProductionParticipants(value) {
