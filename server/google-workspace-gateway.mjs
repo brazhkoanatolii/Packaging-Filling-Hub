@@ -793,7 +793,7 @@ async function getWorkforceSnapshot() {
   const [masterRanges, attendanceRanges, vacationRanges] = await Promise.all([
     getGoogleSheetRanges(workforceSpreadsheetIds.personnel, ["'Смены'!A6:H", "'Персонал'!A6:P"]),
     getGoogleSheetRanges(workforceSpreadsheetIds.attendance, [`'${year}'!A6:AR`]),
-    getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:L`])
+    getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:M`])
   ]);
   const teams = (masterRanges[0] ?? []).filter(row => row[6]).map(workforceTeam);
   const personnel = (masterRanges[1] ?? []).filter(row => row[7]).map(row => workforcePerson(row, teams));
@@ -2206,15 +2206,19 @@ function workforceAttendance(rows, personnel, teams, year) {
 }
 
 function workforceVacations(rows, year) {
-  return rows.filter(row => row[7]).map(row => ({
-    id: String(row[7]), employeeId: String(row[8] || ""), year, startDate: googleDate(row[2]), endDate: googleDate(row[3]),
-    days: Number.isFinite(googleNumber(row[4])) ? googleNumber(row[4]) : null, status: String(row[5] || ""), note: String(row[6] || ""),
-    revision: workforceVacationRevision(row), updatedAt: googleDate(row[10]), updatedBy: String(row[11] || "")
-  }));
+  return rows.map(row => {
+    const legacy = String(row[7] || "").startsWith("vacation:") && !String(row[8] || "").startsWith("vacation:");
+    const offset = legacy ? -1 : 0;
+    return {
+      id: String(row[8 + offset] || ""), employeeId: String(row[9 + offset] || ""), year, startDate: googleDate(row[3 + offset]), endDate: googleDate(row[4 + offset]),
+      days: Number.isFinite(googleNumber(row[5 + offset])) ? googleNumber(row[5 + offset]) : null, status: String(row[6 + offset] || ""), note: String(row[7 + offset] || ""),
+      revision: workforceVacationRevision(row, offset), updatedAt: googleDate(row[11 + offset]), updatedBy: String(row[12 + offset] || "")
+    };
+  }).filter(row => row.id && row.startDate && row.endDate);
 }
 
-function workforceVacationRevision(row) {
-  return workforceRevision([row[0], row[1], googleDate(row[2]), googleDate(row[3]), row[5], row[6], row[7], row[8], row[9]]);
+function workforceVacationRevision(row, offset = 0) {
+  return workforceRevision([row[0], row[1 + offset], row[2 + offset], googleDate(row[3 + offset]), googleDate(row[4 + offset]), row[6 + offset], row[7 + offset], row[8 + offset], row[9 + offset], row[10 + offset]]);
 }
 
 function workforceRole(value) {

@@ -142,6 +142,26 @@ export class WorkforceService {
     }
     return record;
   }
+
+  async cancelVacation(vacation) {
+    const record = { ...vacation, status: "Аннулирован" };
+    if (this.repository) await this.repository.save("vacations", record);
+    else {
+      const snapshot = await this.snapshot();
+      await this.store.setPreference("workforceVacations", [...snapshot.vacations.filter(item => item.id !== record.id), record]);
+    }
+    return record;
+  }
+
+  async deleteVacation(vacation) {
+    const record = { ...vacation, deleted: true };
+    if (this.repository) await this.repository.save("vacations", record);
+    else {
+      const snapshot = await this.snapshot();
+      await this.store.setPreference("workforceVacations", snapshot.vacations.filter(item => item.id !== vacation.id));
+    }
+    return record;
+  }
 }
 
 export function getScheduleDay(team, value) {

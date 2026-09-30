@@ -71,3 +71,20 @@ test("конфликт отпуска отправляет локальную в
   assert.equal(snapshot.pending.length, 0);
   assert.equal(snapshot.vacations[0].startDate, "2026-09-19");
 });
+
+test("удаление отпуска скрывает его сразу и удаляет после ответа Google", async () => {
+  const vacation = { id: "vacation-1", employeeId: "employee-0002", revision: "1" };
+  const provider = {
+    writesEnabled: true,
+    async snapshot() { return { personnel: [], shiftTeams: [], attendance: [], vacations: [], years: [2026] }; },
+    async write(operation) { assert.equal(operation.record.deleted, true); return { record: { id: operation.record.id, deleted: true } }; }
+  };
+  const repository = new WorkforceRepository(createStore({
+    confirmed: { personnel: [], shiftTeams: [], attendance: [], vacations: [vacation], years: [2026], ready: true }, pending: [], lastSync: null
+  }), provider, () => ({ performer: "Anatolii Brazhko" }));
+
+  await repository.save("vacations", { ...vacation, deleted: true });
+  assert.equal((await repository.snapshot()).vacations.length, 0);
+  await repository.sync();
+  assert.equal((await repository.snapshot()).vacations.length, 0);
+});

@@ -860,6 +860,20 @@ async function handleClick(event) {
       if (state.account.role !== "manager") { toast("График отпусков доступен для редактирования только начальнику участка.", "error"); return; }
       openVacationDialog(action === "edit-vacation" ? id : null); return;
     }
+    if (action === "cancel-vacation" || action === "delete-vacation") {
+      if (state.account.role !== "manager") { toast("График отпусков доступен для редактирования только начальнику участка.", "error"); return; }
+      const vacation = (state.workforce.vacations || []).find(item => item.id === id);
+      if (!vacation) { toast("Период отпуска не найден.", "error"); return; }
+      const remove = action === "delete-vacation";
+      const question = remove ? "Удалить этот период из программы и Google?" : "Отменить этот период? Он останется в журнале со статусом «Аннулирован».";
+      if (!globalThis.confirm(question)) return;
+      await withWorkforceActor(() => remove ? workforceService.deleteVacation(vacation) : workforceService.cancelVacation(vacation));
+      state.workforce = await workforceService.snapshot();
+      render();
+      toast(remove ? "Период отпуска удалён." : "Период отпуска отменён.", "success");
+      sendWorkforceInBackground();
+      return;
+    }
     if (action === "cycle-language") {
       const index = LANGUAGES.findIndex(language => language.code === state.language);
       state.language = LANGUAGES[(index + 1) % LANGUAGES.length].code;
@@ -1863,15 +1877,21 @@ function formatPersonnelDate(value) {
 
 function renderVacationsPage() {
   const year = WORKFORCE_YEARS.includes(state.vacationYear) ? state.vacationYear : WORKFORCE_YEARS[0];
-  const rows = [...(state.workforce.vacations || [])].filter(vacation => Number(vacation.year) === year && isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId)));
+  const allRows = [...(state.workforce.vacations || [])].filter(vacation => Number(vacation.year) === year && isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId)));
+  const rows = allRows.filter(vacation => vacation.status !== "Аннулирован");
   const canEdit = state.account.role === "manager";
   const byEmployee = new Map();
   rows.forEach(vacation => byEmployee.set(vacation.employeeId, [...(byEmployee.get(vacation.employeeId) || []), vacation]));
   const teams = teamsWithCurrentShiftFirst().filter(team => ["shift-team-a", "shift-team-b"].includes(team.id));
-  return `<section class="card module-header vacation-header"><div><h2>График отпусков</h2><p>${canEdit ? "Добавьте период — даты начала и окончания сразу появятся в нужных месяцах. Дни считаются календарно." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div><div class="vacation-header-actions"><label>Год<select data-vacation-year>${WORKFORCE_YEARS.map(item => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select></label>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</div></section><section class="card vacation-schedule"><div class="vacation-grid vacation-grid-head"><div class="vacation-person-heading">Сотрудник</div><div class="vacation-months">${vacationMonths().map(month => `<div class="vacation-month"><strong>${month}</strong><span>с</span><span>по</span></div>`).join("")}</div></div>${teams.map(team => renderVacationTeam(team, byEmployee, year, canEdit)).join("")}</section>`;
+  return `<section class="card module-header vacation-header"><div><h2>График отпусков</h2><p>${canEdit ? "Добавьте период — он сразу появится на шкале. Его можно изменить, отменить или удалить ниже. Дни считаются календарно." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div><div class="vacation-header-actions"><label>Год<select data-vacation-year>${WORKFORCE_YEARS.map(item => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select></label>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</div></section>${renderVacationPeriodList(allRows, canEdit)}<section class="card vacation-calendar-header"><div class="vacation-grid vacation-grid-head"><div class="vacation-person-heading">Сотрудник</div><div class="vacation-months">${vacationMonths().map(month => `<div class="vacation-month"><strong>${month}</strong><span>с</span><span>по</span></div>`).join("")}</div></div></section><section class="card vacation-schedule">${teams.map(team => renderVacationTeam(team, byEmployee, year, canEdit)).join("")}</section>`;
 }
 
-function vacationMonths() { return ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]; }
+function vacationMonths() { return ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]; }
+function renderVacationPeriodList(rows, canEdit) {
+  const listed = [...rows].sort((left, right) => String(left.startDate).localeCompare(String(right.startDate)) || String(left.id).localeCompare(String(right.id)));
+  if (!listed.length) return '<section class="card vacation-periods"><div class="section-heading"><div><p class="eyebrow">Периоды выбранного года</p><h3>Пока нет периодов</h3></div></div></section>';
+  return `<section class="card vacation-periods"><div class="section-heading"><div><p class="eyebrow">Периоды выбранного года</p><h3>Управление отпусками</h3></div></div><div class="vacation-period-list">${listed.map(vacation => { const employee = personnel().find(person => person.id === vacation.employeeId); const team = state.workforce.shiftTeams.find(item => item.id === employee?.shiftTeamId); const cancelled = vacation.status === "Аннулирован"; return `<article class="vacation-period ${cancelled ? "cancelled" : ""}"><div><strong>${escapeHtml(employee?.fullName || "Сотрудник не найден")}</strong><small>${escapeHtml(employee ? `${roleLabel(employee.role)} · ${team?.name || "Смена не указана"}` : "")}</small></div><div><strong>${escapeHtml(formatPersonnelDate(vacation.startDate))} — ${escapeHtml(formatPersonnelDate(vacation.endDate))}</strong><small>${escapeHtml(String(vacation.days || "—"))} календарных дней · ${escapeHtml(vacation.status || "Запланирован")}</small></div>${canEdit ? `<div class="vacation-period-actions"><button class="small-button" data-action="edit-vacation" data-id="${attribute(vacation.id)}">Изменить</button>${cancelled ? "" : `<button class="small-button" data-action="cancel-vacation" data-id="${attribute(vacation.id)}">Отменить</button>`}<button class="small-button danger-button" data-action="delete-vacation" data-id="${attribute(vacation.id)}">Удалить</button></div>` : ""}</article>`; }).join("")}</div></section>`;
+}
 function renderVacationTeam(team, byEmployee, year, canEdit) {
   const roles = ["senior-mechanic", "mechanic", "mechanic-operator", "packer"];
   const members = regularAreaPersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);

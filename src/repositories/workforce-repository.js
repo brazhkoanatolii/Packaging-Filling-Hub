@@ -14,6 +14,7 @@ export class WorkforceRepository {
     const data = await this.load(), view = structuredClone(data.confirmed);
     for (const op of data.pending) {
       const list = view[op.kind], index = list.findIndex(x => x.id === op.record.id);
+      if (op.record.deleted) { if (index >= 0) list.splice(index, 1); continue; }
       const value = { ...op.record, syncStatus: op.status };
       if (index >= 0) list[index] = value; else list.push(value);
     }
@@ -83,7 +84,8 @@ export class WorkforceRepository {
           const current = data.pending.find(item => item.requestId === operation.requestId);
           if (!current) return;
           const index = data.confirmed[current.kind].findIndex(item => item.id === result.record.id);
-          if (index < 0) data.confirmed[current.kind].push(result.record); else data.confirmed[current.kind][index] = result.record;
+          if (result.record.deleted) { if (index >= 0) data.confirmed[current.kind].splice(index, 1); }
+          else if (index < 0) data.confirmed[current.kind].push(result.record); else data.confirmed[current.kind][index] = result.record;
           data.pending = data.pending.filter(item => item.requestId !== operation.requestId);
           await this.store.setPreference(KEY, data);
         });
