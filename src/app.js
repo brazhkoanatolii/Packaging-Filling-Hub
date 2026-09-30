@@ -2839,8 +2839,21 @@ function openVacationDialog(id = null) {
 
 function withWorkforceActor(action) {
   if (!workforceRepository) return action();
-  workforceActor = { performer: "Anatolii Brazhko" };
+  workforceActor = { performer: workforceActorName() };
   return action();
+}
+
+function workforceActorName() {
+  // The manager account represents the area manager. A senior account has no
+  // personal name of its own, so audit attendance with the senior mechanic of
+  // the selected/current team instead of the manager's name.
+  if (state.account?.role === "manager") return "Anatolii Brazhko";
+  const teamId = state.shift?.shiftTeamId ?? state.selectedShiftTeamId ?? scheduledTeam()?.id;
+  return activePersonnel().find(person => person.shiftTeamId === teamId && person.role === "senior-mechanic")?.fullName
+    || state.shift?.seniorMechanic
+    || state.shift?.supervisor
+    || state.account?.title
+    || "";
 }
 
 function createDialog(content) {
