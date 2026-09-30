@@ -421,7 +421,6 @@ createServer(async (request, response) => {
       await ensureProductionCanScrapColumn();
       await backfillProductionLeaders();
       await rebuildProductionShiftSummaries();
-      await synchronizeAllProductionReports();
     });
   }
   if (process.platform === "win32") {
