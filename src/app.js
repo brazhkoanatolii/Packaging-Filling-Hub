@@ -312,6 +312,7 @@ function handleInput(event) {
     if (search) { search.focus(); search.setSelectionRange(cursor, cursor); }
   }
   if (event.target.matches("[data-attendance-status]")) {
+    updateAttendanceStatusTone(event.target);
     updateAttendanceCounter(event.target.form);
     updateShiftLeadershipOptions(event.target.form);
   }
@@ -319,6 +320,7 @@ function handleInput(event) {
 
 async function handleChange(event) {
   if (event.target.matches("[data-attendance-status]")) {
+    updateAttendanceStatusTone(event.target);
     updateAttendanceCounter(event.target.form);
     updateShiftLeadershipOptions(event.target.form);
     return;
@@ -1339,7 +1341,7 @@ function renderProductionPage() {
     ${state.productionLoading ? '<p class="module-note" role="status">Получаем данные из Google Sheets. Это может занять до 30 секунд.</p>' : ""}
     ${state.production.error ? `<p class="form-error">${escapeHtml(state.production.error)}</p>` : ""}
     <div class="dashboard-grid production-metrics"><article class="metric-card"><span>Готовая продукция</span><strong>${formatNumber(totalQuantity)} <small>шт.</small></strong><small>${formatBoxes(totalQuantity / 240)} кор. за сегодня · 240 шт. в коробке</small></article><article class="metric-card"><span>Брак продукции</span><strong>${formatNumber(totalScrap)}</strong><small>кг за сегодня</small></article><article class="metric-card"><span>Брак банок</span><strong>${formatNumber(totalCanScrap)}</strong><small>кг за сегодня</small></article></div>
-    <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · 240 шт. = 1 кор.</span></div><div class="table-scroll"><table><thead><tr><th>Смена</th><th>Начало</th><th>Окончание</th><th>Линейка продукта</th><th>Продукт</th><th>Линия</th><th>mg/g</th><th>Готово, шт</th><th>Коробки<br><small>240 шт.</small></th><th>Брак продукции, кг</th><th>Процент брака</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор(ы)</th><th>Старший механик</th><th>Механик</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td>${escapeHtml(record.catalogLine || "—")}</td><td>${escapeHtml(record.product)}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatBoxes(record.quantity / 240)}</td><td>${formatNumber(record.scrapKg)}</td><td>${record.scrapPercent === null ? "—" : `${formatPercent(record.scrapPercent * 100)}%`}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.seniorMechanic || "—")}</td><td>${escapeHtml(record.mechanic || "—")}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 18 : 17}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>
+    <section class="card table-card"><div class="table-toolbar"><strong>Сегодня · ${formatDate(today())}</strong><span>${records.length} ${plural(records.length, "запись", "записи", "записей")} · 240 шт. = 1 кор.</span></div><div class="table-scroll"><table><thead><tr><th>Смена</th><th>Начало</th><th>Окончание</th><th>Линейка продукта</th><th>Продукт</th><th>Линия</th><th>mg/g</th><th>Готово, шт</th><th>Коробки<br><small>240 шт.</small></th><th>Брак продукции, кг</th><th>Процент брака</th><th>Брак банок, кг</th><th>Упаковщик</th><th>Механик-оператор(ы)</th><th>Старший механик</th><th>Механик</th><th>Примечание</th>${canAdd ? "<th></th>" : ""}</tr></thead><tbody>${records.length ? records.map(record => `<tr><td><strong>${escapeHtml(record.shift || "—")}</strong></td><td>${escapeHtml(record.startTime || "—")}</td><td>${escapeHtml(record.time || "—")}</td><td>${escapeHtml(record.catalogLine || "—")}</td><td>${escapeHtml(record.product)}</td><td><strong>${escapeHtml(record.line)}</strong></td><td>${formatNumber(record.strength)}</td><td>${formatNumber(record.quantity)}</td><td>${formatBoxes(record.quantity / 240)}</td><td>${formatNumber(record.scrapKg)}</td><td>${record.scrapPercent === null ? "—" : scrapPercentLabel(record.scrapPercent * 100)}</td><td>${formatNumber(record.canScrapKg)}</td><td>${escapeHtml(record.packer)}</td><td>${escapeHtml(record.operator)}</td><td>${escapeHtml(record.seniorMechanic || "—")}</td><td>${escapeHtml(record.mechanic || "—")}</td><td>${escapeHtml(record.note || "—")}</td>${canAdd ? `<td><div class="row-actions"><button class="small-button" data-action="edit-production" data-id="${attribute(record.id)}">Исправить</button><button class="more-button" data-action="delete-production" data-id="${attribute(record.id)}" title="Удалить">×</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canAdd ? 18 : 17}">За сегодня записей пока нет.</td></tr>`}</tbody></table></div></section>
     ${renderProductionPeopleSummary(records)}`;
 }
 
@@ -1361,7 +1363,7 @@ function renderProductionPeopleSummary(records) {
     assigned.forEach(name => add(operators, name, record, 1 / assigned.length));
   });
   const leaderEntries = productionLeaderEntries(records);
-  const rows = (title, entries, suffix = "") => entries.length ? `<article><h3>${title}</h3><table><thead><tr><th>Сотрудник</th><th>% брака</th><th>Брак, кг</th><th>Выпуск, шт</th><th>Коробки<br><small>240 шт.</small></th></tr></thead><tbody>${entries.map(([name, values]) => { const scrapPercent = values.grossProductMassKg > 0 ? values.scrapKg / values.grossProductMassKg * 100 : null; return `<tr><td>${escapeHtml(name)}${suffix}</td><td class="production-scrap-percent">${scrapPercent === null ? "—" : `${formatPercent(scrapPercent)}%`}</td><td>${formatNumber(values.scrapKg + values.canScrapKg)}</td><td>${formatNumber(values.quantity)}</td><td>${formatBoxes(values.quantity / 240)}</td></tr>`; }).join("")}</tbody></table></article>` : "";
+  const rows = (title, entries, suffix = "") => entries.length ? `<article><h3>${title}</h3><table><thead><tr><th>Сотрудник</th><th>% брака</th><th>Брак, кг</th><th>Выпуск, шт</th><th>Коробки<br><small>240 шт.</small></th></tr></thead><tbody>${entries.map(([name, values]) => { const scrapPercent = values.grossProductMassKg > 0 ? values.scrapKg / values.grossProductMassKg * 100 : null; return `<tr><td>${escapeHtml(name)}${suffix}</td><td class="production-scrap-percent">${scrapPercent === null ? "—" : scrapPercentLabel(scrapPercent)}</td><td>${formatNumber(values.scrapKg + values.canScrapKg)}</td><td>${formatNumber(values.quantity)}</td><td>${formatBoxes(values.quantity / 240)}</td></tr>`; }).join("")}</tbody></table></article>` : "";
   // Выпуск и брак продукции смены засчитываются руководителям, указанным
   // в самих записях. Это исключает привязку сегодняшней смены к старой смене.
   // Брак банок остаётся отдельным показателем журнала и сюда не включается.
@@ -1476,7 +1478,7 @@ function renderDashboard() {
       <article class="card dashboard-summary-card scrap-summary">
         <p class="eyebrow">Сегодня · ${formatDate(today())}</p>
         <h2>Брак продукции</h2>
-        <strong>${formatNumber(productScrap)} <small>кг</small> / ${scrapPercent === null ? "—" : formatPercent(scrapPercent)} <small>%</small></strong>
+        <strong>${formatNumber(productScrap)} <small>кг</small> / ${scrapPercent === null ? "—" : scrapPercentLabel(scrapPercent)}</strong>
         <p>${finishedMassKg ? `Расчёт от ${formatNumber(finishedMassKg)} кг готового продукта` : "Процент появится после записи готовой продукции"}</p>
       </article>
       <article class="card dashboard-summary-card shift-summary">
@@ -1664,7 +1666,7 @@ function renderShiftStartView() {
           const status = attendanceCode(savedAttendance.get(employee.id));
           const substitution = employee.isSubstitute ? `<small class="substitute-badge">Подмена · ${escapeHtml(employee.substitutionReason)}</small>` : "";
           const remove = employee.isSubstitute && !state.shift?.active ? `<button type="button" class="remove-shift-guest" data-action="remove-shift-guest" data-id="${attribute(employee.id)}" aria-label="Убрать ${attribute(employee.fullName)}">×</button>` : "";
-          return `<label class="shift-person-row ${employee.isSubstitute ? "is-substitute" : ""}"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substitution}</span><select name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select>${remove}</label>`;
+          return `<label class="shift-person-row ${employee.isSubstitute ? "is-substitute" : ""}"><span class="employee-avatar">${initials(employee.fullName)}</span><span class="shift-person-name"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substitution}</span><select class="attendance-status-select attendance-status-${attendanceTone(status)}" name="attendance-${employee.id}" data-attendance-status aria-label="Статус: ${attribute(employee.fullName)}">${attendanceStatusOptions(status)}</select>${remove}</label>`;
         }).join("")}
       </div>
       <div class="shift-guest-actions"><button type="button" class="secondary-button" data-action="add-shift-guest">+ Добавить сотрудника другой смены</button><small>Выберите причину: подработка или производственная необходимость.</small></div>
@@ -3224,11 +3226,12 @@ function dayHeader(day) {
   return `<th class="${day.isToday ? "today" : ""}"><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small></th>`;
 }
 
-function attendanceTone(value, expectedHours = 11) {
-  const configured = ATTENDANCE_CODES.find(item => item.value === String(value));
-  if (configured) return configured.tone;
-  const hours = Number(value);
-  return Number.isFinite(hours) && hours < Number(expectedHours) ? "partial" : "worked";
+function attendanceTone(value) {
+  const code = String(value ?? "").trim();
+  if (!code) return "empty";
+  if (code === "11") return "worked";
+  if (code === "A") return "vacation";
+  return "other";
 }
 
 function timesheetOptions(selected, expectedHours = 11) {
@@ -3307,6 +3310,11 @@ function updateAttendanceCounter(form) {
   const counter = form.querySelector("[data-attendance-present]");
   if (!counter) return;
   counter.textContent = String([...form.querySelectorAll("[data-attendance-status]")].filter(select => select.value === "11").length);
+}
+
+function updateAttendanceStatusTone(select) {
+  select.classList.remove("attendance-status-worked", "attendance-status-vacation", "attendance-status-other", "attendance-status-empty");
+  select.classList.add(`attendance-status-${attendanceTone(select.value)}`);
 }
 
 function attendanceCode(value) {
@@ -3528,6 +3536,18 @@ function openPackagingEditDialog(record) {
 
 function formatPercent(value) {
   return new Intl.NumberFormat(localeCode(), { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(Number(value));
+}
+
+function scrapPercentTone(value) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return "neutral";
+  if (percent < 3) return "good";
+  if (percent < 5) return "warning";
+  return "danger";
+}
+
+function scrapPercentLabel(value) {
+  return `<span class="scrap-percent scrap-percent--${scrapPercentTone(value)}">${formatPercent(value)}%</span>`;
 }
 
 function signedNumber(value) {
