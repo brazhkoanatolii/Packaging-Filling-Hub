@@ -1145,7 +1145,8 @@ async function createProductionRecordOnce(input, record) {
   await preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber);
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   writeProductionCreateReceipt(record.requestId, { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders });
-  const sorted = await sortProductionDayByLine(accessToken, record.date);
+  let sorted = await sortProductionDayByLine(accessToken, record.date);
+  if (await removeDuplicateProductionRecords(accessToken, sorted)) sorted = await sortProductionDayByLine(accessToken, record.date);
   const stored = await productionStoredRecord(sorted, record);
   scheduleProductionReportSync([record.date]);
   const saved = { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
@@ -1162,7 +1163,8 @@ async function updateProductionRecord(input) {
   const previousDate = before.first.find(row => row.rowNumber === firstRowNumber)?.date ?? before.second.find(row => row.rowNumber === secondRowNumber)?.date;
   const accessToken = await getAccessToken();
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
-  const sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
+  let sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
+  if (await removeDuplicateProductionRecords(accessToken, sorted)) sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
   const stored = await productionStoredRecord(sorted, record);
   scheduleProductionReportSync([previousDate, record.date]);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
@@ -1174,7 +1176,41 @@ async function deleteProductionRecord(input) {
   const before = await getProductionShiftRows();
   const previousDate = before.first.find(row => row.rowNumber === firstRowNumber)?.date ?? before.second.find(row => row.rowNumber === secondRowNumber)?.date;
   const accessToken = await getAccessToken();
-  await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
+  await clearProductionRecordPairs(accessToken, [{ firstRowNumber, secondRowNumber }]);
+  scheduleProductionReportSync([previousDate]);
+}
+
+async function removeDuplicateProductionRecords(accessToken, rows = null) {
+  const snapshot = rows ?? await getProductionShiftRows();
+  const duplicates = duplicateProductionPairs(snapshot);
+  if (!duplicates.length) return 0;
+  await clearProductionRecordPairs(accessToken, duplicates);
+  console.warn(`Удалены дублирующие записи продукции: ${duplicates.length}.`);
+  return duplicates.length;
+}
+
+function duplicateProductionPairs(rows) {
+  const firstByPair = new Map();
+  for (const first of rows.first) {
+    const key = productionPairKey(first);
+    const entries = firstByPair.get(key) ?? [];
+    entries.push(first);
+    firstByPair.set(key, entries);
+  }
+  const seen = new Set();
+  const duplicates = [];
+  for (const second of rows.second) {
+    const first = firstByPair.get(productionPairKey(second))?.shift();
+    if (!first) continue;
+    const key = productionDuplicateKey(second);
+    if (seen.has(key)) duplicates.push({ firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber });
+    else seen.add(key);
+  }
+  return duplicates;
+}
+
+async function clearProductionRecordPairs(accessToken, pairs) {
+  const ranges = pairs.flatMap(({ firstRowNumber, secondRowNumber }) => [
     { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [Array(7).fill("")] },
     { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[""]] },
     { range: `'Учет продукции 1'!L${firstRowNumber}:L${firstRowNumber}`, values: [[""]] },
@@ -1183,7 +1219,9 @@ async function deleteProductionRecord(input) {
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[""]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [Array(8).fill("")] }
   ]);
-  scheduleProductionReportSync([previousDate]);
+  for (let index = 0; index < ranges.length; index += 100) {
+    await setGoogleSheetRanges(productionSpreadsheetId, accessToken, ranges.slice(index, index + 100));
+  }
 }
 
 async function writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber) {
@@ -1247,6 +1285,7 @@ async function rebuildProductionShiftSummaries() {
   if (!writesEnabled || missingGoogleSettings().length) return { updated: 0 };
   const accessToken = await getAccessToken();
   let rows = await getProductionShiftRows();
+  if (await removeDuplicateProductionRecords(accessToken, rows)) rows = await getProductionShiftRows();
   const dates = [...new Set([...rows.first, ...rows.second].map(row => row.date).filter(Boolean))];
   const [firstSheetId, secondSheetId] = await Promise.all([
     getSheetId(productionSpreadsheetId, "\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1", accessToken),
