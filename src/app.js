@@ -81,6 +81,7 @@ const state = {
   incidents: [],
   update: { checked: false, available: false, installing: false, version: null, message: null },
   cycloneYear: Number(today().slice(0, 4)),
+  vacationYear: Number(today().slice(0, 4)),
   specificationSelection: { line: "", product: "", variant: "" },
   specificationSearch: "",
   workforce: { personnel: [], shiftTeams: [], attendance: [] },
@@ -339,6 +340,11 @@ async function handleChange(event) {
 
   if (event.target.matches("[data-cyclone-year]")) {
     state.cycloneYear = Number(event.target.value);
+    render();
+    return;
+  }
+  if (event.target.matches("[data-vacation-year]")) {
+    state.vacationYear = Number(event.target.value);
     render();
     return;
   }
@@ -1856,11 +1862,26 @@ function formatPersonnelDate(value) {
 }
 
 function renderVacationsPage() {
-  const rows = [...(state.workforce.vacations || [])].filter(vacation => isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId))).sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
+  const year = WORKFORCE_YEARS.includes(state.vacationYear) ? state.vacationYear : WORKFORCE_YEARS[0];
+  const rows = [...(state.workforce.vacations || [])].filter(vacation => Number(vacation.year) === year && isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId)));
   const canEdit = state.account.role === "manager";
-  return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
-    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 6 : 5}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
+  const byEmployee = new Map();
+  rows.forEach(vacation => byEmployee.set(vacation.employeeId, [...(byEmployee.get(vacation.employeeId) || []), vacation]));
+  const teams = teamsWithCurrentShiftFirst().filter(team => ["shift-team-a", "shift-team-b"].includes(team.id));
+  return `<section class="card module-header vacation-header"><div><h2>График отпусков</h2><p>${canEdit ? "Добавьте период — он сразу появится на годовой шкале. Дни считаются календарно." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div><div class="vacation-header-actions"><label>Год<select data-vacation-year>${WORKFORCE_YEARS.map(item => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select></label>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</div></section><section class="card vacation-schedule"><div class="vacation-grid vacation-grid-head"><div class="vacation-person-heading">Сотрудник</div><div class="vacation-months">${vacationMonths().map(month => `<span>${month}</span>`).join("")}</div></div>${teams.map(team => renderVacationTeam(team, byEmployee, year, canEdit)).join("")}</section>`;
 }
+
+function vacationMonths() { return ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]; }
+function renderVacationTeam(team, byEmployee, year, canEdit) {
+  const roles = ["senior-mechanic", "mechanic", "mechanic-operator", "packer"];
+  const members = regularAreaPersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);
+  return `<section class="vacation-team"><header><span>${escapeHtml(team.name)}</span><small>${members.length} сотрудников</small></header>${roles.map(role => { const people = members.filter(employee => employee.role === role); return people.length ? `<div class="vacation-role"><div class="vacation-role-title">${escapeHtml(roleLabel(role))}</div>${people.map(employee => renderVacationPerson(employee, byEmployee.get(employee.id) || [], year, canEdit)).join("")}</div>` : ""; }).join("")}</section>`;
+}
+function renderVacationPerson(employee, vacations, year, canEdit) {
+  const bars = vacations.map(vacation => { const label = `${formatPersonnelDate(vacation.startDate)} — ${formatPersonnelDate(vacation.endDate)} · ${vacation.days} дн.`; return `<button class="vacation-bar" style="--start:${vacationYearPercent(vacation.startDate, year)}%;--end:${vacationYearPercent(vacation.endDate, year)}%" title="${attribute(label)}" ${canEdit ? `data-action="edit-vacation" data-id="${attribute(vacation.id)}"` : "disabled"}><span>${escapeHtml(label)}</span></button>`; }).join("");
+  return `<div class="vacation-grid vacation-person-row"><div class="vacation-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></div><div class="vacation-track">${bars || '<span class="vacation-empty">—</span>'}</div></div>`;
+}
+function vacationYearPercent(value, year) { const date = Date.parse(`${value}T00:00:00Z`), start = Date.parse(`${year}-01-01T00:00:00Z`), end = Date.parse(`${year + 1}-01-01T00:00:00Z`); return Math.max(0, Math.min(100, ((date - start) / (end - start)) * 100)); }
 
 function renderPackagingPage() {
   const { records, operations, lastReadAt, error } = state.packaging;
