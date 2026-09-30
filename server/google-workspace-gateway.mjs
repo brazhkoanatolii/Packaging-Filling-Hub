@@ -1084,7 +1084,7 @@ async function createProductionRecordOnce(input, record) {
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDayByLine(accessToken, record.date);
   const stored = await productionStoredRecord(sorted, record);
-  await syncProductionReportDates([record.date]);
+  scheduleProductionReportSync([record.date]);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
@@ -1099,7 +1099,7 @@ async function updateProductionRecord(input) {
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
   const sorted = await sortProductionDaysByLine(accessToken, [previousDate, record.date]);
   const stored = await productionStoredRecord(sorted, record);
-  await syncProductionReportDates([previousDate, record.date]);
+  scheduleProductionReportSync([previousDate, record.date]);
   return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
 }
 
@@ -1118,7 +1118,7 @@ async function deleteProductionRecord(input) {
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[""]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [Array(8).fill("")] }
   ]);
-  await syncProductionReportDates([previousDate]);
+  scheduleProductionReportSync([previousDate]);
 }
 
 async function writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber) {
@@ -1675,6 +1675,11 @@ async function exportProductionDaily(input) {
 async function syncProductionReportDates(dates) {
   const uniqueDates = [...new Set(dates.filter(date => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))];
   for (const date of uniqueDates) await exportProductionDaily({ date, allowCurrentDay: true });
+}
+
+function scheduleProductionReportSync(dates) {
+  const uniqueDates = [...new Set(dates.filter(date => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))];
+  if (uniqueDates.length) runBackgroundTask(`сводка продукции: ${uniqueDates.join(", ")}`, () => syncProductionReportDates(uniqueDates));
 }
 
 async function synchronizeAllProductionReports() {
