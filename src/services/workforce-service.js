@@ -133,9 +133,7 @@ export class WorkforceService {
     if (!employee || employee.shiftTeamId === "office" || isSubstituteOnly(employee)) throw new Error("Для графика отпусков можно выбрать только сотрудника участка из постоянного состава.");
     const startDate = String(input.startDate || ""), endDate = String(input.endDate || "");
     if (!startDate || !endDate || startDate > endDate || Number(startDate.slice(0, 4)) !== year || Number(endDate.slice(0, 4)) !== year) throw new Error("Укажите начало и окончание в пределах выбранного года");
-    if (!["Запланирован", "Согласован", "Использован", "Аннулирован"].includes(input.status)) throw new Error("Выберите статус отпуска");
-    if (input.status === "Аннулирован" && !String(input.note || "").trim()) throw new Error("Укажите причину аннулирования");
-    const record = { id: input.id || `vacation:${createId()}`, employeeId: input.employeeId, year, startDate, endDate, status: input.status, note: String(input.note || ""), days: Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 };
+    const record = { id: input.id || `vacation:${createId()}`, employeeId: input.employeeId, year, startDate, endDate, status: "Запланирован", note: String(input.note || ""), days: Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 };
     if (!Number.isFinite(record.days)) throw new Error("Проверьте даты");
     if (this.repository) await this.repository.save("vacations", record);
     else {

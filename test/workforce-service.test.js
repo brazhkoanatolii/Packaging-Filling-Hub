@@ -87,6 +87,19 @@ test("администрация не попадает в табель и гра
   );
 });
 
+test("отпуск всегда сохраняется как запланированный без выбора статуса", async () => {
+  const service = new WorkforceService(createStore());
+  await service.initialize();
+
+  const record = await service.saveVacation({
+    employeeId: "employee-0002", year: 2026, startDate: "2026-07-01", endDate: "2026-07-14",
+    status: "Использован", note: "Ежегодный отпуск"
+  });
+
+  assert.equal(record.status, "Запланирован");
+  assert.equal(record.days, 14);
+});
+
 test("литовские коды отсутствия сохраняются в табеле", async () => {
   const service = new WorkforceService(createStore());
   await service.initialize();

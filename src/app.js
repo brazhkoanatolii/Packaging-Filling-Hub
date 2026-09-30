@@ -1859,7 +1859,7 @@ function renderVacationsPage() {
   const rows = [...(state.workforce.vacations || [])].filter(vacation => isRegularAreaEmployee(personnel().find(employee => employee.id === vacation.employeeId))).sort((a, b) => a.year - b.year || String(a.startDate).localeCompare(String(b.startDate)));
   const canEdit = state.account.role === "manager";
   return `<section class="card module-header"><div><h2>График отпусков</h2><p>${canEdit ? "Одна запись — один период. Итоги считаются в календарных днях." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</section>
-    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th><th>Статус</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td><td>${escapeHtml(v.status)}${v.syncStatus ? " · ожидает отправки" : ""}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 7 : 6}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
+    <section class="card settings-table-wrap"><table class="settings-data-table"><thead><tr><th>Год</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Дней</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(v => `<tr><td>${v.year}</td><td>${escapeHtml(personnel().find(p => p.id === v.employeeId)?.fullName || v.employeeId)}</td><td>${escapeHtml(v.startDate || "—")}</td><td>${escapeHtml(v.endDate || "—")}</td><td>${v.days ?? "—"}</td>${canEdit ? `<td><button class="small-button" data-action="edit-vacation" data-id="${attribute(v.id)}">Изменить</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${canEdit ? 6 : 5}">Периоды пока не загружены.</td></tr>`}</tbody></table></section>`;
 }
 
 function renderPackagingPage() {
@@ -2814,8 +2814,7 @@ function openVacationDialog(id = null) {
         ${formField("vacation-person", "Сотрудник", `<select id="vacation-person" name="employeeId" required><option value="">Выберите сотрудника</option>${personnel().filter(isRegularAreaEmployee).sort(comparePersonnel).map(employee => `<option value="${attribute(employee.id)}" ${vacation?.employeeId === employee.id ? "selected" : ""}>${escapeHtml(employee.fullName)}</option>`).join("")}</select>`, "Можно выбрать сотрудника из архива для старой записи", "full")}
         ${formField("vacation-start", "Начало", `<input id="vacation-start" name="startDate" type="date" value="${attribute(vacation?.startDate || "")}" required>`)}
         ${formField("vacation-end", "Окончание", `<input id="vacation-end" name="endDate" type="date" value="${attribute(vacation?.endDate || "")}" required>`)}
-        ${formField("vacation-status", "Статус", `<select id="vacation-status" name="status" required>${["Запланирован", "Согласован", "Использован", "Аннулирован"].map(status => `<option ${vacation?.status === status ? "selected" : ""}>${status}</option>`).join("")}</select>`)}
-        ${formField("vacation-note", "Примечание / причина", `<textarea id="vacation-note" name="note" rows="2" placeholder="Для аннулирования причина обязательна">${escapeHtml(vacation?.note || "")}</textarea>`, "Необязательно, кроме аннулирования", "full")}
+        ${formField("vacation-note", "Примечание", `<textarea id="vacation-note" name="note" rows="2">${escapeHtml(vacation?.note || "")}</textarea>`, "Необязательно", "full")}
       </div>
       <div class="dialog-actions"><button type="button" class="secondary-button" data-action="close-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></div>
     </form>`);
@@ -2825,7 +2824,7 @@ function openVacationDialog(id = null) {
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     try {
-      await withWorkforceActor(() => workforceService.saveVacation({ ...Object.fromEntries(new FormData(form)), id: vacation?.id }));
+      await withWorkforceActor(() => workforceService.saveVacation({ ...Object.fromEntries(new FormData(form)), id: vacation?.id, status: "Запланирован" }));
       state.workforce = await workforceService.snapshot();
       dialog.close();
       render();

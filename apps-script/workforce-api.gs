@@ -124,17 +124,17 @@ function wfSaveAttendance_(people,teams,op) {
 }
 function wfSaveVacation_(people,teams,op) {
  const p=op.record,year=Number(p.year),person=people.find(e=>e.id===p.employeeId);
- if(!WF_YEARS.includes(year)||!person||!WF_STATUSES.includes(p.status))throw new Error('Проверьте сотрудника, год и статус');
+ const status='Запланирован';
+ if(!WF_YEARS.includes(year)||!person)throw new Error('Проверьте сотрудника и год');
  if(person.shiftTeamId==='office')throw new Error('Для графика отпусков можно выбрать только сотрудника участка.');
  const start=p.startDate?wfDate_(p.startDate):'',end=p.endDate?wfDate_(p.endDate):'';
  if((start&&!end)||(!start&&end)||start>end)throw new Error('Укажите корректное начало и окончание отпуска');
  if(start&&(String(p.startDate).slice(0,4)!==String(year)||String(p.endDate).slice(0,4)!==String(year)))throw new Error('Период должен находиться в выбранном году. Переходящий отпуск разделите на две записи.');
- if(['Запланирован','Согласован','Использован'].includes(p.status)&&!start)throw new Error('Укажите даты отпуска');
- if(p.status==='Аннулирован'&&!String(p.note||'').trim())throw new Error('Укажите причину аннулирования');
+ if(!start)throw new Error('Укажите даты отпуска');
  const s=SpreadsheetApp.openById(WF_BOOKS.vacations).getSheetByName(String(year)),found=wfRows_(s,12).find(r=>String(r.values[7])===p.id);
  const current=found?wfVacation_(found.values,year):null;if(!wfMatches_(current,op))return wfConflict_();
  const row=found?found.row:Math.max(6,s.getLastRow()+1),days=start&&end?Math.round((end-start)/86400000)+1:'';
- const values=[person.fullName,teams.find(t=>t.id===person.shiftTeamId)?.name||'',start,end,days,p.status,wfText_(p.note||''),p.id,p.employeeId,(Number(found?.values[9])||0)+1,new Date(),op.actor.performer];
+ const values=[person.fullName,teams.find(t=>t.id===person.shiftTeamId)?.name||'',start,end,days,status,wfText_(p.note||''),p.id,p.employeeId,(Number(found?.values[9])||0)+1,new Date(),op.actor.performer];
  s.getRange(row,1,1,12).setValues([values]);s.getRange(row,3,1,2).setNumberFormat('dd.MM.yyyy');
  s.getRange(row,5).setFormula('=IF(AND(ISNUMBER(C'+row+'),ISNUMBER(D'+row+')),IF(D'+row+'>=C'+row+',D'+row+'-C'+row+'+1,"Проверьте даты"),"")');
  return {ok:true,record:wfVacation_(values,year)};
