@@ -5,7 +5,12 @@ const CACHE_KEY = "productionJournalCache";
 const PARTICIPANT_SEPARATOR = " + ";
 
 export class ProductionService {
-  constructor(store, repository) { this.store = store; this.repository = repository; }
+  constructor(store, repository) {
+    this.store = store;
+    this.repository = repository;
+    this.pendingCreates = new Map();
+    this.completedCreates = new Map();
+  }
 
   async snapshot() {
     const cached = await this.store.preference(CACHE_KEY, null);
@@ -26,6 +31,22 @@ export class ProductionService {
 
   async create(input, { packers = [], operators = [] } = {}) {
     const record = validateProductionRecord(input, { packers, operators });
+    const requestId = record.requestId;
+    if (this.completedCreates.has(requestId)) return this.completedCreates.get(requestId);
+    if (this.pendingCreates.has(requestId)) return this.pendingCreates.get(requestId);
+    const task = this.createOnce(record);
+    this.pendingCreates.set(requestId, task);
+    try {
+      const saved = await task;
+      this.completedCreates.set(requestId, saved);
+      while (this.completedCreates.size > 100) this.completedCreates.delete(this.completedCreates.keys().next().value);
+      return saved;
+    } finally {
+      this.pendingCreates.delete(requestId);
+    }
+  }
+
+  async createOnce(record) {
     const saved = normalizeRecord(await this.repository.create(record));
     const current = await this.snapshot();
     const records = [saved, ...current.records.filter(item => item.id !== saved.id)];

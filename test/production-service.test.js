@@ -13,6 +13,15 @@ class MemoryRepository {
   async create(record) { return { ...record, id: "production-1" }; }
 }
 
+class CountingRepository extends MemoryRepository {
+  constructor() { super(); this.createCalls = 0; }
+  async create(record) {
+    this.createCalls += 1;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return super.create(record);
+  }
+}
+
 const people = {
   packers: ["Упаковщик 1"],
   operators: ["Оператор 1", "Оператор 2"]
@@ -46,6 +55,18 @@ test("механик необязателен, но выбранный стар�
   const saved = await service.create(record({ leadership: { seniorMechanic: "Механик стал старшим", mechanic: "" } }), people);
   assert.equal(saved.seniorMechanic, "Механик стал старшим");
   assert.equal(saved.mechanic, "");
+});
+
+test("повторная отправка одного запроса продукции не создаёт дубликат локально", async () => {
+  const repository = new CountingRepository();
+  const service = new ProductionService(new MemoryStore(), repository);
+  const input = record({ requestId: "same-production-request" });
+  const [first, second] = await Promise.all([service.create(input, people), service.create(input, people)]);
+  const third = await service.create(input, people);
+  assert.equal(repository.createCalls, 1);
+  assert.equal(first.id, "production-1");
+  assert.equal(second.id, "production-1");
+  assert.equal(third.id, "production-1");
 });
 
 test("масса готовой продукции использует вес одной банки без повторного умножения на подушки", () => {

@@ -50,6 +50,10 @@ const productionSecondRange = "'Учет продукции 2'!A2:R";
 const productionFirstRange = "'Учет продукции 1'!B4:R";
 let productionCanScrapMigrationPromise = null;
 const productionCreateLocks = new Map();
+const productionCreateReceiptPath = process.env.PRODUCTION_CREATE_RECEIPT_PATH
+  ? resolve(process.env.PRODUCTION_CREATE_RECEIPT_PATH)
+  : join(projectRoot, ".runtime", "production-create-receipts.json");
+let productionWriteTail = Promise.resolve();
 const productionReportSpreadsheetId = "1_BTwm21m1edVoNew6m5GJirPdUsxnJYE_Xv9qB32c5c";
 const productionMachineRange = "'Станки'!A7:M500";
 const productionPackerRange = "'Упаковщики'!A7:V500";
@@ -1050,14 +1054,68 @@ async function getProductionSnapshot() {
   };
 }
 
+async function withProductionWriteLock(task) {
+  const previous = productionWriteTail;
+  let release;
+  productionWriteTail = new Promise(resolve => { release = resolve; });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+function readProductionCreateReceipt(requestId) {
+  if (!requestId || !existsSync(productionCreateReceiptPath)) return null;
+  try {
+    const receipts = JSON.parse(readFileSync(productionCreateReceiptPath, "utf8"));
+    const receipt = receipts?.[requestId];
+    return receipt?.record && typeof receipt.record === "object" ? receipt.record : null;
+  } catch {
+    // A local non-secret receipt cache must never block production records.
+    return null;
+  }
+}
+
+function writeProductionCreateReceipt(requestId, record) {
+  if (!requestId || !record?.id) return;
+  let receipts = {};
+  try {
+    const value = existsSync(productionCreateReceiptPath)
+      ? JSON.parse(readFileSync(productionCreateReceiptPath, "utf8"))
+      : {};
+    if (value && typeof value === "object" && !Array.isArray(value)) receipts = value;
+  } catch {
+    // Replace a damaged receipt cache with the current successful receipt.
+  }
+  receipts[requestId] = { savedAt: new Date().toISOString(), record };
+  const retained = Object.entries(receipts)
+    .sort((left, right) => String(right[1]?.savedAt || "").localeCompare(String(left[1]?.savedAt || "")))
+    .slice(0, 500);
+  const directory = dirname(productionCreateReceiptPath);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${productionCreateReceiptPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(Object.fromEntries(retained), null, 2)}\n`, "utf8");
+  renameSync(temporary, productionCreateReceiptPath);
+}
+
 async function createProductionRecord(input) {
   const candidate = validateGatewayProductionRecord(input);
+  const completed = readProductionCreateReceipt(candidate.requestId);
+  if (completed) return completed;
   // Coalesce both an identical production record and a retry of the same
-  // browser request while this gateway is still processing it.
+  // browser request while this gateway is still processing it. The receipt
+  // above also covers a retry after the original Google write succeeded but
+  // its HTTP response did not reach the workstation.
   const keys = [productionDuplicateKey(candidate), `request:${candidate.requestId}`];
   const active = keys.map(key => productionCreateLocks.get(key)).find(Boolean);
   if (active) return active;
-  const task = createProductionRecordOnce(input, candidate);
+  const task = withProductionWriteLock(async () => {
+    const receipt = readProductionCreateReceipt(candidate.requestId);
+    if (receipt) return receipt;
+    return createProductionRecordOnce(input, candidate);
+  });
   keys.forEach(key => productionCreateLocks.set(key, task));
   try {
     return await task;
@@ -1071,7 +1129,11 @@ async function createProductionRecordOnce(input, record) {
   const leaders = await productionShiftLeaders(record.date, record.shift, input.leadership);
   const rows = await getProductionShiftRows();
   const existing = findExistingProductionRecord(rows, record);
-  if (existing) return { ...record, id: productionRecordId(existing.firstRowNumber, existing.secondRowNumber), line: record.machineLine, seniorMechanic: existing.seniorMechanic || leaders.seniorMechanic, mechanic: existing.mechanic || leaders.mechanic };
+  if (existing) {
+    const saved = { ...record, id: productionRecordId(existing.firstRowNumber, existing.secondRowNumber), line: record.machineLine, seniorMechanic: existing.seniorMechanic || leaders.seniorMechanic, mechanic: existing.mechanic || leaders.mechanic };
+    writeProductionCreateReceipt(record.requestId, saved);
+    return saved;
+  }
   let firstRowNumber = nextProductionRowNumber(rows.first, 4, rows.firstSummaries);
   let secondRowNumber = nextProductionRowNumber(rows.second, 2, rows.secondSummaries);
   const accessToken = await getAccessToken();
@@ -1082,10 +1144,13 @@ async function createProductionRecordOnce(input, record) {
   }
   await preserveProductionRowFormatting(accessToken, firstRowNumber, secondRowNumber);
   await writeProductionRecord(accessToken, record, leaders, firstRowNumber, secondRowNumber);
+  writeProductionCreateReceipt(record.requestId, { ...record, id: productionRecordId(firstRowNumber, secondRowNumber), line: record.machineLine, ...leaders });
   const sorted = await sortProductionDayByLine(accessToken, record.date);
   const stored = await productionStoredRecord(sorted, record);
   scheduleProductionReportSync([record.date]);
-  return { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
+  const saved = { ...record, id: productionRecordId(stored.firstRowNumber, stored.secondRowNumber), line: record.machineLine, ...leaders };
+  writeProductionCreateReceipt(record.requestId, saved);
+  return saved;
 }
 
 async function updateProductionRecord(input) {
@@ -1580,16 +1645,11 @@ function productionPairKey(record) {
 }
 
 function findExistingProductionRecord(rows, record) {
-  const second = rows.second.find(item => productionDuplicateKey(item) === productionDuplicateKey(record));
+  const duplicateKey = productionDuplicateKey(record);
+  const pairKey = productionPairKey(record);
+  const second = rows.second.find(item => productionDuplicateKey(item) === duplicateKey || productionPairKey(item) === pairKey);
   if (!second) return null;
-  const firstBySignature = new Map();
-  for (const item of rows.first) {
-    const key = productionSignature(item);
-    const values = firstBySignature.get(key) ?? [];
-    values.push(item);
-    firstBySignature.set(key, values);
-  }
-  const first = (firstBySignature.get(productionSignature(second)) ?? []).shift();
+  const first = rows.first.find(item => productionPairKey(item) === productionPairKey(second));
   return first ? { firstRowNumber: first.rowNumber, secondRowNumber: second.rowNumber, seniorMechanic: second.seniorMechanic, mechanic: second.mechanic } : null;
 }
 
