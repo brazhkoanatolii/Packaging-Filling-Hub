@@ -1868,7 +1868,7 @@ function renderVacationsPage() {
   const byEmployee = new Map();
   rows.forEach(vacation => byEmployee.set(vacation.employeeId, [...(byEmployee.get(vacation.employeeId) || []), vacation]));
   const teams = teamsWithCurrentShiftFirst().filter(team => ["shift-team-a", "shift-team-b"].includes(team.id));
-  return `<section class="card module-header vacation-header"><div><h2>График отпусков</h2><p>${canEdit ? "Добавьте период — он сразу появится на годовой шкале. Дни считаются календарно." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div><div class="vacation-header-actions"><label>Год<select data-vacation-year>${WORKFORCE_YEARS.map(item => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select></label>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</div></section><section class="card vacation-schedule"><div class="vacation-grid vacation-grid-head"><div class="vacation-person-heading">Сотрудник</div><div class="vacation-months">${vacationMonths().map(month => `<span>${month}</span>`).join("")}</div></div>${teams.map(team => renderVacationTeam(team, byEmployee, year, canEdit)).join("")}</section>`;
+  return `<section class="card module-header vacation-header"><div><h2>График отпусков</h2><p>${canEdit ? "Добавьте период — даты начала и окончания сразу появятся в нужных месяцах. Дни считаются календарно." : "Только просмотр. Изменять график отпусков может начальник участка."}</p></div><div class="vacation-header-actions"><label>Год<select data-vacation-year>${WORKFORCE_YEARS.map(item => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select></label>${canEdit ? `<button class="primary-button" data-action="add-vacation">+ Добавить период</button>${journalLink("vacations")}` : '<span class="status-pill muted">Только просмотр</span>'}</div></section><section class="card vacation-schedule"><div class="vacation-grid vacation-grid-head"><div class="vacation-person-heading">Сотрудник</div><div class="vacation-months">${vacationMonths().map(month => `<div class="vacation-month"><strong>${month}</strong><span>с</span><span>по</span></div>`).join("")}</div></div>${teams.map(team => renderVacationTeam(team, byEmployee, year, canEdit)).join("")}</section>`;
 }
 
 function vacationMonths() { return ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]; }
@@ -1878,10 +1878,17 @@ function renderVacationTeam(team, byEmployee, year, canEdit) {
   return `<section class="vacation-team"><header><span>${escapeHtml(team.name)}</span><small>${members.length} сотрудников</small></header>${roles.map(role => { const people = members.filter(employee => employee.role === role); return people.length ? `<div class="vacation-role"><div class="vacation-role-title">${escapeHtml(roleLabel(role))}</div>${people.map(employee => renderVacationPerson(employee, byEmployee.get(employee.id) || [], year, canEdit)).join("")}</div>` : ""; }).join("")}</section>`;
 }
 function renderVacationPerson(employee, vacations, year, canEdit) {
-  const bars = vacations.map(vacation => { const label = `${formatPersonnelDate(vacation.startDate)} — ${formatPersonnelDate(vacation.endDate)} · ${vacation.days} дн.`; return `<button class="vacation-bar" style="--start:${vacationYearPercent(vacation.startDate, year)}%;--end:${vacationYearPercent(vacation.endDate, year)}%" title="${attribute(label)}" ${canEdit ? `data-action="edit-vacation" data-id="${attribute(vacation.id)}"` : "disabled"}><span>${escapeHtml(label)}</span></button>`; }).join("");
-  return `<div class="vacation-grid vacation-person-row"><div class="vacation-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></div><div class="vacation-track">${bars || '<span class="vacation-empty">—</span>'}</div></div>`;
+  const cells = Array.from({ length: 24 }, () => []);
+  vacations.forEach(vacation => {
+    const label = `${formatPersonnelDate(vacation.startDate)} — ${formatPersonnelDate(vacation.endDate)} · ${vacation.days} дн.`;
+    const startMonth = Number(String(vacation.startDate).slice(5, 7)) - 1;
+    const endMonth = Number(String(vacation.endDate).slice(5, 7)) - 1;
+    const button = (date, edge) => `<button class="vacation-date vacation-date-${edge}" title="${attribute(label)}" aria-label="${attribute(label)}" ${canEdit ? `data-action="edit-vacation" data-id="${attribute(vacation.id)}"` : "disabled"}>${escapeHtml(String(date).slice(8, 10))}</button>`;
+    if (startMonth >= 0 && startMonth < 12) cells[startMonth * 2].push(button(vacation.startDate, "start"));
+    if (endMonth >= 0 && endMonth < 12) cells[endMonth * 2 + 1].push(button(vacation.endDate, "end"));
+  });
+  return `<div class="vacation-grid vacation-person-row"><div class="vacation-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></div><div class="vacation-track">${cells.map(items => `<div class="vacation-date-cell">${items.join("")}</div>`).join("")}</div></div>`;
 }
-function vacationYearPercent(value, year) { const date = Date.parse(`${value}T00:00:00Z`), start = Date.parse(`${year}-01-01T00:00:00Z`), end = Date.parse(`${year + 1}-01-01T00:00:00Z`); return Math.max(0, Math.min(100, ((date - start) / (end - start)) * 100)); }
 
 function renderPackagingPage() {
   const { records, operations, lastReadAt, error } = state.packaging;
