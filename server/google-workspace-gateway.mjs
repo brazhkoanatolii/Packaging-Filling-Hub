@@ -1470,13 +1470,12 @@ async function sortProductionDaysByLine(accessToken, dates) {
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${summary.rowNumber}`, values: [[""]] },
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!H${summary.rowNumber}`, values: [[""]] },
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${summary.rowNumber}`, values: [[""]] },
-      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${summary.rowNumber}:M${summary.rowNumber}`, values: [["", ""]] }
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!K${summary.rowNumber}:N${summary.rowNumber}`, values: [["", "", "", ""]] }
     ] : [
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${summary.rowNumber}`, values: [[""]] },
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!G${summary.rowNumber}`, values: [[""]] },
       { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${summary.rowNumber}`, values: [[""]] },
-      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${summary.rowNumber}`, values: [[""]] },
-      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!M${summary.rowNumber}:N${summary.rowNumber}`, values: [["", ""]] }
+      { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!J${summary.rowNumber}:N${summary.rowNumber}`, values: [["", "", "", "", ""]] }
     ]);
     await setGoogleSheetRanges(productionSpreadsheetId, accessToken, clears);
     rows = await getProductionShiftRows();
@@ -1529,8 +1528,8 @@ function productionShiftSummaryWrites(rows, dates) {
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${rowNumber}`, values: [[label]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!H${rowNumber}`, values: [[summary.quantity]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${rowNumber}`, values: [[summary.scrapKg]] },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${rowNumber}`, values: [[cans]] },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!M${rowNumber}`, values: [[percent]] }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!K${rowNumber}`, values: [[percent]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${rowNumber}`, values: [[cans]] }
       );
     }
     if (second.length) {
@@ -1539,8 +1538,8 @@ function productionShiftSummaryWrites(rows, dates) {
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${rowNumber}`, values: [[label]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!G${rowNumber}`, values: [[summary.quantity]] },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${rowNumber}`, values: [[summary.scrapKg]] },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${rowNumber}`, values: [[percent]] },
-        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!M${rowNumber}:N${rowNumber}`, values: [["\u0411\u0440\u0430\u043a \u0431\u0430\u043d\u043e\u043a, \u043a\u0433", cans]] }
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!J${rowNumber}`, values: [[percent]] },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!N${rowNumber}`, values: [[cans]] }
       );
     }
   }
