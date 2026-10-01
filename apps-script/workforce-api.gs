@@ -49,13 +49,37 @@ function wfSetCurrentAttendanceViewV2_(book) {
   return wfSetCurrentAttendanceView_(book);
 }
 
+// Имя сохранено для уже созданного триггера Google Apps Script.
+function wfRefreshTimesheetViewV3() {
+  return wfRefreshTimesheetView();
+}
+
+function wfSetCurrentAttendanceViewV3_(book) {
+  return wfSetCurrentAttendanceView_(book);
+}
+
 function wfSetCurrentAttendanceView_(book) {
   const now = wfTodayParts_();
   const sheet = book.getSheetByName(String(now.year));
   if (!sheet) return { ok: false, message: 'Лист текущего года не найден.' };
   const row = wfAttendanceMonthFirstRow_(sheet, now.month) || 6;
-  const depth = sheet.getRowGroupDepth(row);
-  if (depth) sheet.getRowGroup(row, depth).expand();
+  // Сворачиваем все месяцы, кроме текущего. Заголовки месяцев остаются
+  // видимыми с кнопкой "+", а текущий месяц сразу показывает сотрудников.
+  const lastRow = sheet.getLastRow();
+  for (let groupRow = 6; groupRow <= lastRow;) {
+    const group = sheet.getRowGroup(groupRow, 1);
+    if (!group) {
+      groupRow += 1;
+      continue;
+    }
+    const groupRange = group.getRange();
+    const firstRow = groupRange.getRow();
+    const lastGroupRow = groupRange.getLastRow();
+    if (row < firstRow || row > lastGroupRow) group.collapse();
+    groupRow = Math.max(groupRow + 1, lastGroupRow + 1);
+  }
+  const currentMonthGroup = sheet.getRowGroup(row, 1);
+  if (currentMonthGroup) currentMonthGroup.expand();
   const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
   sheet.getRange(4, 1).setValue(`${monthNames[now.month - 1]} ${now.year}`);
   wfApplyTimesheetTodayFormatting_(book);
@@ -71,7 +95,7 @@ function wfApplyTimesheetTodayFormatting_(book) {
   const firstDayColumn = 4, lastDayColumn = 34;
   const dataRange = sheet.getRange(6, firstDayColumn, Math.max(1, sheet.getMaxRows() - 5), lastDayColumn - firstDayColumn + 1);
   const headerRange = sheet.getRange(5, firstDayColumn, 1, lastDayColumn - firstDayColumn + 1);
-  const dataFormula = '=AND($A6=MONTH(TODAY()),VALUE(D$5)=DAY(TODAY()))';
+  const dataFormula = '=AND(VALUE($A6)=MONTH(TODAY()),VALUE(D$5)=DAY(TODAY()))';
   const headerFormula = '=VALUE(D$5)=DAY(TODAY())';
   const isTimesheetTodayRule = rule => {
     const condition = rule.getBooleanCondition();
@@ -79,6 +103,7 @@ function wfApplyTimesheetTodayFormatting_(book) {
     const formula = String(condition.getCriteriaValues()[0] || '');
     return [
       '=AND($A6=MONTH(TODAY()),D$5=DAY(TODAY()))',
+       '=AND($A6=MONTH(TODAY()),VALUE(D$5)=DAY(TODAY()))',
       '=D$5=DAY(TODAY())',
       dataFormula,
       headerFormula
