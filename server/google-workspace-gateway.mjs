@@ -2339,7 +2339,11 @@ function workforceAttendance(rows, personnel, teams, year) {
     const overtimeDays = new Set(String(row[42] || "").split(",").filter(Boolean));
     return Array.from({ length: new Date(year, month, 0).getDate() }, (_, index) => {
       const day = index + 1;
-      const value = String(row[day + 2] || "");
+      const rawValue = String(row[day + 2] || "");
+      // Google returns formatted decimals with a comma in the Lithuanian locale.
+      // Keep the internal value canonical so 9,5 selects 9.5 rather than the
+      // first option in the browser control after a refresh.
+      const value = normalizeWorkforceAttendanceValue(rawValue) || rawValue;
       if (!value || value === "—") return null;
       const substitute = workforceSubstitute(row[37], day);
       return {

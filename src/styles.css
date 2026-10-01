@@ -818,7 +818,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .attendance-code-strip b { display: grid; min-width: 25px; height: 25px; place-items: center; border-radius: 8px; background: var(--green-100); color: var(--green-600); }
 .autosave-note { color: var(--green-600); font-size: .7rem; font-weight: 750; }
 .timesheet-cell { padding: 4px !important; }
-.timesheet-cell select { width: 38px; height: 34px; padding: 0 2px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; font-size: .68rem; font-weight: 800; text-align: center; appearance: none; }
+.timesheet-cell select { width: 54px; height: 34px; padding: 0 2px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; font-size: .68rem; font-weight: 800; text-align: center; appearance: none; }
 .timesheet-cell select:focus { border-color: var(--green-600); outline: 3px solid color-mix(in srgb,var(--green-600) 14%,transparent); }
 .tone-worked { background: color-mix(in srgb,var(--status-good) 20%,var(--surface)); color: var(--status-good); }
 .tone-vacation { background: color-mix(in srgb,var(--status-warning) 20%,var(--surface)); color: var(--status-warning); }

@@ -1157,7 +1157,7 @@ async function syncRecords({ silent = false } = {}) {
   }
   state.syncing = true;
   state.syncTransfer = { active: true, source: "Контроль весов, табель и персонал, расход упаковки, очистка циклонов" };
-  render();
+  if (!(silent && isEditingField())) render();
   try {
     const checks = await Promise.allSettled([repository.sync(), syncWorkforce(), packagingService?.sync(), cycloneService?.sync()]);
     const result = checks[0].status === "fulfilled" ? checks[0].value : { sent: 0, conflicts: 0 };
@@ -1166,7 +1166,7 @@ async function syncRecords({ silent = false } = {}) {
     const failed = checks.find(item => item.status === "rejected");
     await reloadLocalState();
     state.lastRefresh = new Date().toISOString();
-    render();
+    if (!(silent && isEditingField())) render();
     if (!silent) {
       if (failed) toast(failed.reason.message, "warning");
       else if (result.conflicts) toast(`Обнаружено конфликтов: ${result.conflicts}.`, "warning");
@@ -1176,7 +1176,7 @@ async function syncRecords({ silent = false } = {}) {
   } finally {
     state.syncing = false;
     state.syncTransfer = { active: false, source: "" };
-    render();
+    if (!(silent && isEditingField())) render();
   }
 }
 
@@ -1191,9 +1191,19 @@ function startAutomaticRefresh() {
   clearInterval(refreshTimer);
   refreshTimer = setInterval(async () => {
     if (!state.account || document.hidden || !navigator.onLine) return;
-    try { await synchronizeMachineStatuses(); render(); } catch {}
+    try {
+      await synchronizeMachineStatuses();
+      // Replacing the whole application while a native select is open returns
+      // its option list to the top.  Keep the user's current picker intact.
+      if (!isEditingField()) render();
+    } catch {}
     syncInBackground();
   }, APP_CONFIG.refreshIntervalMs);
+}
+
+function isEditingField() {
+  return document.activeElement instanceof HTMLElement
+    && document.activeElement.matches("input, select, textarea, [contenteditable='true']");
 }
 
 function setBusy(value) {
@@ -3294,10 +3304,18 @@ function attendanceTone(value) {
 }
 
 function timesheetOptions(selected, expectedHours = 11) {
-  const current = String(selected ?? expectedHours);
+  const current = normalizeAttendanceDisplayValue(selected, expectedHours);
   const hours = Array.from({ length: 48 }, (_, index) => (index + 1) / 2).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${String(value).replace(".", ",")}</option>`).join("");
   const reasons = ATTENDANCE_CODES.filter(item => !item.isWork).map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value}</option>`).join("");
   return `<optgroup label="Часы">${hours}</optgroup><optgroup label="Причины отсутствия">${reasons}</optgroup>`;
+}
+
+function normalizeAttendanceDisplayValue(value, fallback = 11) {
+  const source = String(value ?? "").trim();
+  const hours = Number(source.replace(",", "."));
+  return Number.isFinite(hours) && hours >= .5 && hours <= 24 && Math.round(hours * 2) === hours * 2
+    ? String(hours)
+    : (source || String(fallback));
 }
 
 function vacationForDay(employeeId, date) {
