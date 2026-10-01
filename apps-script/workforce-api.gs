@@ -24,7 +24,7 @@ function wfInstallTimesheetOpenTrigger() {
     .filter(trigger => trigger.getHandlerFunction() === 'wfOnTimesheetOpen')
     .forEach(trigger => ScriptApp.deleteTrigger(trigger));
   ScriptApp.newTrigger('wfOnTimesheetOpen').forSpreadsheet(book).onOpen().create();
-  wfApplyTimesheetTodayFormatting_(book);
+  wfSetCurrentAttendanceView_(book);
   return { ok: true, message: 'Триггер табеля установлен. При открытии будет показан текущий месяц и день.' };
 }
 
@@ -32,13 +32,36 @@ function wfInstallTimesheetOpenTrigger() {
 function wfOnTimesheetOpen(event) {
   const book = event && event.source;
   if (!book || book.getId() !== WF_BOOKS.attendance) return;
-  wfApplyTimesheetTodayFormatting_(book);
+  wfSetCurrentAttendanceView_(book);
+}
+
+/** Ручная проверка того же поведения без изменения записей табеля. */
+function wfRefreshTimesheetView() {
+  return wfSetCurrentAttendanceView_(SpreadsheetApp.openById(WF_BOOKS.attendance));
+}
+
+// Имя сохранено для уже созданного триггера Google Apps Script.
+function wfRefreshTimesheetViewV2() {
+  return wfRefreshTimesheetView();
+}
+
+function wfSetCurrentAttendanceViewV2_(book) {
+  return wfSetCurrentAttendanceView_(book);
+}
+
+function wfSetCurrentAttendanceView_(book) {
   const now = wfTodayParts_();
   const sheet = book.getSheetByName(String(now.year));
-  if (!sheet) return;
+  if (!sheet) return { ok: false, message: 'Лист текущего года не найден.' };
   const row = wfAttendanceMonthFirstRow_(sheet, now.month) || 6;
+  const depth = sheet.getRowGroupDepth(row);
+  if (depth) sheet.getRowGroup(row, depth).expand();
+  const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  sheet.getRange(4, 1).setValue(`${monthNames[now.month - 1]} ${now.year}`);
+  wfApplyTimesheetTodayFormatting_(book);
   book.setActiveSheet(sheet);
   book.setActiveRange(sheet.getRange(row, now.day + 3));
+  return { ok: true, month: now.month, day: now.day, row };
 }
 
 function wfApplyTimesheetTodayFormatting_(book) {
@@ -48,25 +71,31 @@ function wfApplyTimesheetTodayFormatting_(book) {
   const firstDayColumn = 4, lastDayColumn = 34;
   const dataRange = sheet.getRange(6, firstDayColumn, Math.max(1, sheet.getMaxRows() - 5), lastDayColumn - firstDayColumn + 1);
   const headerRange = sheet.getRange(5, firstDayColumn, 1, lastDayColumn - firstDayColumn + 1);
-  const dataFormula = '=AND($A6=MONTH(TODAY()),D$5=DAY(TODAY()))';
-  const headerFormula = '=D$5=DAY(TODAY())';
+  const dataFormula = '=AND($A6=MONTH(TODAY()),VALUE(D$5)=DAY(TODAY()))';
+  const headerFormula = '=VALUE(D$5)=DAY(TODAY())';
   const isTimesheetTodayRule = rule => {
     const condition = rule.getBooleanCondition();
     if (!condition || condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) return false;
     const formula = String(condition.getCriteriaValues()[0] || '');
-    return formula === dataFormula || formula === headerFormula;
+    return [
+      '=AND($A6=MONTH(TODAY()),D$5=DAY(TODAY()))',
+      '=D$5=DAY(TODAY())',
+      dataFormula,
+      headerFormula
+    ].includes(formula);
   };
   const rules = sheet.getConditionalFormatRules().filter(rule => !isTimesheetTodayRule(rule));
   rules.push(
     SpreadsheetApp.newConditionalFormatRule()
       .whenFormulaSatisfied(dataFormula)
-      .setBackground('#D9EAD3')
-      .setFontColor('#0B5E20')
+      .setBackground('#E6F7ED')
+      .setFontColor('#075B32')
+      .setBold(true)
       .setRanges([dataRange])
       .build(),
     SpreadsheetApp.newConditionalFormatRule()
       .whenFormulaSatisfied(headerFormula)
-      .setBackground('#188038')
+      .setBackground('#00A86B')
       .setFontColor('#FFFFFF')
       .setBold(true)
       .setRanges([headerRange])
