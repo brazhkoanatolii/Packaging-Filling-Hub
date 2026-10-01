@@ -102,12 +102,13 @@ function wfSaveAttendance_(people,teams,op) {
  if(employee.shiftTeamId==='office')throw new Error('В табель фасовочного участка можно вносить только сотрудников смен.');
  if(!teams.some(t=>t.id===p.shiftTeamId))throw new Error('Смена не найдена');
  if(p.id!==date+':'+p.shiftTeamId+':'+p.employeeId)throw new Error('Некорректный ID табеля');
- const value=String(p.value||'');if(!/^(?:[1-9]|1[0-9]|2[0-4])$/.test(value)&&!WF_ATTENDANCE_CODES.includes(value))throw new Error('Недопустимое значение табеля');
+ const value=wfAttendanceValue_(p.value);if(!value)throw new Error('Недопустимое значение табеля');
  const s=SpreadsheetApp.openById(WF_BOOKS.attendance).getSheetByName(String(year));
  const found=wfRows_(s,44).find(r=>String(r.values[38])===p.employeeId&&Number(r.values[0])===month&&(String(r.values[43]||'')===p.shiftTeamId||String(r.values[2]||'')===teams.find(t=>t.id===p.shiftTeamId)?.name));
  const currentValue=found?String(found.values[day+2]||''):'', currentOvertime=found?String(found.values[42]).split(',').includes(String(day)):false;
  const currentSubstitute=found?wfSubstituteForDay_(found.values[37],day):null;
  const revision=currentValue&&currentValue!=='—'?wfToken_([currentValue,currentOvertime,currentSubstitute?.reason||'',currentSubstitute?.homeShiftTeamId||'']):'empty';
+ if(currentValue===value&&currentOvertime===Boolean(p.overtime)&&String(currentSubstitute?.reason||'')===String(p.substitutionReason||'')&&String(currentSubstitute?.homeShiftTeamId||'')===String(p.homeShiftTeamId||''))return {ok:true,record:{...p,value,overtime:p.overtime===true,substitutionReason:String(p.substitutionReason||''),homeShiftTeamId:String(p.homeShiftTeamId||''),revision,updatedBy:String(found?.values[41]||''),updatedAt:wfIso_(found?.values[40])}};
  if(revision!==op.expectedRevision)return wfConflict_();
  const row=found?found.row:Math.max(6,s.getLastRow()+1);
  if(!found){
@@ -138,7 +139,19 @@ function wfSaveVacation_(people,teams,op) {
  const values=[person.fullName,WF_ROLES[person.role]||'',teams.find(t=>t.id===person.shiftTeamId)?.name||'',start,end,days,status,wfText_(p.note||''),p.id,p.employeeId,(Number(found?.values[10])||0)+1,new Date(),op.actor.performer];
  s.getRange(row,1,1,13).setValues([values]);s.getRange(row,4,1,2).setNumberFormat('dd.MM.yyyy');
  s.getRange(row,6).setFormula('=IF(AND(ISNUMBER(D'+row+'),ISNUMBER(E'+row+')),IF(E'+row+'>=D'+row+',E'+row+'-D'+row+'+1,"Проверьте даты"),"")');
+ wfApplyVacationToAttendance_(person,teams.find(t=>t.id===person.shiftTeamId),p.startDate,p.endDate);
  return {ok:true,record:wfVacation_(values,year)};
+}
+function wfAttendanceValue_(value){const text=String(value||'').trim();if(WF_ATTENDANCE_CODES.indexOf(text)>=0)return text;const hours=Number(text.replace(',','.'));return isFinite(hours)&&hours>=0.5&&hours<=24&&Math.round(hours*2)===hours*2?String(hours):'';}
+function wfApplyVacationToAttendance_(person,team,startDate,endDate){
+ const book=SpreadsheetApp.openById(WF_BOOKS.attendance),from=new Date(String(startDate)+'T12:00:00Z'),to=new Date(String(endDate)+'T12:00:00Z');
+ for(let cursor=new Date(from);cursor<=to;cursor.setUTCDate(cursor.getUTCDate()+1)){
+  const year=cursor.getUTCFullYear(),month=cursor.getUTCMonth()+1,day=cursor.getUTCDate(),sheet=book.getSheetByName(String(year));if(!sheet)continue;
+  const found=wfRows_(sheet,44).find(r=>String(r.values[38])===person.id&&Number(r.values[0])===month&&(String(r.values[43]||'')===team.id||String(r.values[2]||'')===team.name));
+  const row=found?found.row:Math.max(6,sheet.getLastRow()+1),current=found?String(found.values[day+2]||''):'';
+  if(!found){const values=Array(44).fill('');values[0]=month;values[1]=person.fullName;values[2]=team.name;values[38]=person.id;values[43]=team.id;for(let index=new Date(year,month,0).getDate()+1;index<=31;index++)values[index+2]='—';values[day+2]='A';sheet.getRange(row,1,1,44).setValues([values]);}
+  else if(!current||current==='—')sheet.getRange(row,day+3).setValue('A');
+ }
 }
 function wfSubstituteForDay_(note,day){
  const match=String(note||'').match(/Подменный выход \(штатная смена ([AB])\):\s*([^\n]+)/);

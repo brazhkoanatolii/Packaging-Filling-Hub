@@ -95,9 +95,8 @@ export class WorkforceService {
   }
 
   async saveAttendance(input) {
-    const value = String(input?.value ?? "").trim();
-    const fullHours = Array.from({ length: 24 }, (_, index) => String(index + 1));
-    if (![...ATTENDANCE_CODES.map(item => item.value), ...fullHours].includes(value)) throw new Error("Недопустимое значение табеля");
+    const value = normalizeAttendanceValue(input?.value);
+    if (!value) throw new Error("Недопустимое значение табеля");
     const snapshot = await this.snapshot();
     const employee = snapshot.personnel.find(person => person.id === input.employeeId);
     if (!employee || (employee.shiftTeamId === "office" && !input.substitutionReason)) throw new Error("В табель фасовочного участка можно вносить только сотрудников смен или подмену из другого отдела.");
@@ -162,6 +161,14 @@ export class WorkforceService {
     }
     return record;
   }
+}
+
+export function normalizeAttendanceValue(value) {
+  const source = String(value ?? "").trim();
+  if (ATTENDANCE_CODES.some(item => item.value === source)) return source;
+  const hours = Number(source.replace(",", "."));
+  if (!Number.isFinite(hours) || hours < 0.5 || hours > 24 || Math.round(hours * 2) !== hours * 2) return "";
+  return String(hours);
 }
 
 export function getScheduleDay(team, value) {

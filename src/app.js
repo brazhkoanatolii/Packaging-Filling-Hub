@@ -1795,9 +1795,17 @@ function renderTimesheetTeam(team, days) {
   const substituteMembers = activePersonnel().filter(employee => (employee.shiftTeamId !== team.id || isSubstituteOnly(employee)) && [...records.values()].some(record => record.employeeId === employee.id && record.substitutionReason));
   const members = [...regularMembers, ...substituteMembers].sort(comparePersonnel);
   return `<section class="card schedule-team-card timesheet-team-card">
-    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>Фактические часы и причины отсутствия</small></span></div><span class="autosave-note">Сохраняется автоматически</span></header>
+    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>Фактические часы и причины отсутствия</small></span></div>${renderTimesheetSaveState(team.id)}</header>
     <div class="attendance-scroll"><table class="attendance-table timesheet-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Часы</th></tr></thead><tbody>${members.map(employee => renderTimesheetRow(employee, team, days, schedule, records)).join("")}</tbody></table></div>
   </section>`;
+}
+
+function renderTimesheetSaveState(teamId) {
+  const pending = (state.workforce.pending || []).filter(item => item.kind === "attendance" && item.record?.shiftTeamId === teamId);
+  if (pending.some(item => item.status === "conflict" || item.status === "error")) return '<span class="status-pill danger">Требуется проверка</span>';
+  if (pending.length || state.syncTransfer?.active) return '<span class="status-pill warning">Отправляется в Google</span>';
+  if (state.workforce.syncError) return '<span class="status-pill danger">Ошибка синхронизации</span>';
+  return `<span class="status-pill success">Сохранено в Google${state.workforce.lastSync ? ` · ${escapeHtml(formatDateTime(state.workforce.lastSync))}` : ""}</span>`;
 }
 
 function renderTimesheetRow(employee, team, days, schedule, records) {
@@ -1811,7 +1819,11 @@ function renderTimesheetRow(employee, team, days, schedule, records) {
     const scheduled = schedule.get(day.date)?.scheduled;
     const future = day.date > today();
     if (!record && (!scheduled || future)) return `<td class="${day.isToday ? "today" : ""} ${future ? "is-future" : "is-rest"}">·</td>`;
-    const value = record?.value ?? (workforceRepository ? "" : String(team.accountingHours));
+    const vacation = vacationForDay(employee.id, day.date);
+    // An approved vacation fills the timesheet automatically.  A real
+    // attendance record always wins, so an early return to work remains a
+    // normal manual correction.
+    const value = record?.value ?? (vacation ? "A" : (workforceRepository ? "" : String(team.accountingHours)));
     const hours = Number(value);
     if (Number.isFinite(hours)) total += hours;
     const canEdit = canEditTimesheetDate(day.date);
@@ -3276,16 +3288,21 @@ function dayHeader(day) {
 function attendanceTone(value) {
   const code = String(value ?? "").trim();
   if (!code) return "empty";
-  if (code === "11") return "worked";
+  if (Number.isFinite(Number(code.replace(",", ".")))) return "worked";
   if (code === "A") return "vacation";
   return "other";
 }
 
 function timesheetOptions(selected, expectedHours = 11) {
   const current = String(selected ?? expectedHours);
-  const hours = Array.from({ length: 24 }, (_, index) => index + 1).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${value}</option>`).join("");
+  const hours = Array.from({ length: 48 }, (_, index) => (index + 1) / 2).map(value => `<option value="${value}" ${current === String(value) ? "selected" : ""}>${String(value).replace(".", ",")}</option>`).join("");
   const reasons = ATTENDANCE_CODES.filter(item => !item.isWork).map(item => `<option value="${item.value}" ${current === item.value ? "selected" : ""}>${item.value}</option>`).join("");
   return `<optgroup label="Часы">${hours}</optgroup><optgroup label="Причины отсутствия">${reasons}</optgroup>`;
+}
+
+function vacationForDay(employeeId, date) {
+  return (state.workforce.vacations || []).some(vacation => vacation.employeeId === employeeId
+    && vacation.status !== "Аннулирован" && vacation.startDate <= date && vacation.endDate >= date);
 }
 
 function filterPersonnelCards() {

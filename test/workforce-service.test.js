@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SHIFT_TEAMS, WORKFORCE_PERSONNEL } from "../src/config/workforce-config.js";
-import { WorkforceService, getScheduleDay, getScheduleMonth } from "../src/services/workforce-service.js";
+import { WorkforceService, getScheduleDay, getScheduleMonth, normalizeAttendanceValue } from "../src/services/workforce-service.js";
 
 function createStore(initial = {}) {
   const preferences = new Map(Object.entries(initial));
@@ -105,6 +105,13 @@ test("литовские коды отсутствия сохраняются в
   await service.initialize();
   const record = await service.saveAttendance({ date: "2026-09-19", shiftTeamId: "shift-team-a", employeeId: "employee-0002", value: "NS" });
   assert.equal(record.value, "NS");
+});
+
+test("табель принимает часы с шагом полчаса", () => {
+  assert.equal(normalizeAttendanceValue("9,5"), "9.5");
+  assert.equal(normalizeAttendanceValue("10.5"), "10.5");
+  assert.equal(normalizeAttendanceValue("9.25"), "");
+  assert.equal(normalizeAttendanceValue("0"), "");
 });
 
 test("подменный выход сохраняется в табеле отдельной записью целевой смены", async () => {

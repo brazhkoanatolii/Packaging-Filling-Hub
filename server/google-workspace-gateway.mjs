@@ -265,7 +265,9 @@ createServer(async (request, response) => {
       if (!writesEnabled) return sendJson(response, 403, { ok: false, message: "Запись в Google выключена" });
       const payload = await readJsonBody(request);
       const actor = requireActor(request, payload.kind === "attendance" ? ["manager", "senior"] : ["manager"]);
-      const result = await runAppsScript("writeWorkforceOperation", [{ ...payload, role: actor.role }]);
+      const result = payload.kind === "attendance"
+        ? await saveWorkforceAttendance(payload, actor)
+        : await runAppsScript("writeWorkforceOperation", [{ ...payload, role: actor.role }]);
       return sendJson(response, result?.ok === false ? (result.status || 400) : 200, result);
     }
 
@@ -427,6 +429,7 @@ createServer(async (request, response) => {
       await backfillProductionLeaders();
       await rebuildProductionShiftSummaries();
     });
+    runBackgroundTask("приведение табеля и графика отпусков", repairWorkforceGoogleLayouts);
   }
   if (process.platform === "win32") {
     console.log("Автообновление: проверка каждую минуту; подтверждённая версия устанавливается автоматически.");
@@ -804,6 +807,139 @@ async function getWorkforceSnapshot() {
     officeSchedule: teams.find(team => team.id === "office") ?? null, attendance, vacations,
     years: [year], timeZone: "Europe/Vilnius"
   };
+}
+
+async function repairWorkforceGoogleLayouts() {
+  if (!writesEnabled || missingGoogleSettings().length) return { migratedVacations: 0, removedGroups: 0 };
+  const accessToken = await getAccessToken();
+  const [personnelRows, vacationMetadata, attendanceMetadata] = await Promise.all([
+    getGoogleSheetRanges(workforceSpreadsheetIds.personnel, ["'Персонал'!A6:P"]).then(rows => rows[0] ?? []),
+    getGoogleSheetStructure(workforceSpreadsheetIds.vacations, accessToken),
+    getGoogleSheetStructure(workforceSpreadsheetIds.attendance, accessToken)
+  ]);
+  const roleByEmployee = new Map(personnelRows.map(row => [String(row[7] || ""), String(row[1] || "")]));
+  let migratedVacations = 0;
+  for (const year of [2025, 2026, 2027, 2028, 2029]) {
+    const rows = (await getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:M`]))[0] ?? [];
+    const writes = [];
+    rows.forEach((row, index) => {
+      // Legacy rows have no role column: their record ID is in H rather than I.
+      if (!String(row[7] || "").startsWith("vacation:") || String(row[8] || "").startsWith("vacation:")) return;
+      const employeeId = String(row[8] || "");
+      writes.push({ range: `'${year}'!A${index + 6}:M${index + 6}`, values: [[
+        row[0] || "", roleByEmployee.get(employeeId) || "", row[1] || "", row[2] || "", row[3] || "", row[4] || "",
+        row[5] || "", row[6] || "", row[7] || "", employeeId, row[9] || "", row[10] || "", row[11] || ""
+      ]] });
+    });
+    if (writes.length) { await setGoogleSheetRanges(workforceSpreadsheetIds.vacations, accessToken, writes); migratedVacations += writes.length; }
+    await setGoogleSheetRanges(workforceSpreadsheetIds.vacations, accessToken, [{
+      range: `'${year}'!A5:M5`, values: [["ФИО", "Должность", "Смена", "Начало", "Окончание", "Календарных дней", "Статус", "Примечание", "ID записи", "ID сотрудника", "Версия", "Обновлено", "Кем обновлено"]]
+    }]);
+  }
+  const attendanceGroups = attendanceMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).flatMap(sheet => sheet.rowGroups || []);
+  const groupRequests = attendanceGroups.map(group => ({ deleteDimensionGroup: { range: group.range } }));
+  for (let index = 0; index < groupRequests.length; index += 50) {
+    if (groupRequests.slice(index, index + 50).length) await batchGoogleSheetRequests(workforceSpreadsheetIds.attendance, accessToken, groupRequests.slice(index, index + 50), "Не удалось убрать сворачивание месяцев в табеле");
+  }
+  const vacationRequests = vacationMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).flatMap(sheet => [
+    { repeatCell: { range: { sheetId: sheet.sheetId, startRowIndex: 5, startColumnIndex: 3, endColumnIndex: 5 }, cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } }, fields: "userEnteredFormat.numberFormat" } },
+    { repeatCell: { range: { sheetId: sheet.sheetId, startRowIndex: 5, startColumnIndex: 5, endColumnIndex: 6 }, cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "0" } } }, fields: "userEnteredFormat.numberFormat" } }
+  ]);
+  if (vacationRequests.length) await batchGoogleSheetRequests(workforceSpreadsheetIds.vacations, accessToken, vacationRequests, "Не удалось оформить график отпусков");
+  return { migratedVacations, removedGroups: groupRequests.length };
+}
+
+async function getGoogleSheetStructure(spreadsheetId, accessToken) {
+  const fields = "sheets(properties(sheetId,title),rowGroups(range))";
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=${encodeURIComponent(fields)}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12_000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw googleError(response.status, payload?.error?.message || "Не удалось прочитать структуру рабочего журнала");
+  return (payload.sheets || []).map(sheet => ({ sheetId: sheet.properties?.sheetId, title: sheet.properties?.title || "", rowGroups: sheet.rowGroups || [] }));
+}
+
+// Attendance is read from Sheets by this gateway, so it must also be written
+// here.  Sending the write to a separately deployed Apps Script made the
+// optimistic revision depend on two different readers and produced false
+// conflicts for any employee, not only the employee currently displayed.
+async function saveWorkforceAttendance(payload, actor) {
+  const record = payload?.record || {};
+  const date = String(record.date || "");
+  const year = Number(date.slice(0, 4)), month = Number(date.slice(5, 7)), day = Number(date.slice(8, 10));
+  const value = normalizeWorkforceAttendanceValue(record.value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(month) || !Number.isInteger(day) || !value) {
+    return workforceWriteFailure("Проверьте дату и значение табеля");
+  }
+  if (actor.role === "senior" && date !== todayInVilnius()) return workforceWriteFailure("Старший механик может исправлять табель только за текущий день смены.");
+  if (String(record.id || "") !== `${date}:${record.shiftTeamId}:${record.employeeId}`) return workforceWriteFailure("Некорректный ID табеля");
+
+  const workforce = await getWorkforceSnapshot();
+  const employee = workforce.personnel.find(person => person.id === String(record.employeeId || ""));
+  const team = workforce.shiftTeams.find(item => item.id === String(record.shiftTeamId || ""));
+  if (!employee || employee.shiftTeamId === "office" || !team) return workforceWriteFailure("Проверьте сотрудника и смену");
+
+  const desired = {
+    id: String(record.id), date, employeeId: employee.id, shiftTeamId: team.id, value,
+    overtime: record.overtime === true, substitutionReason: String(record.substitutionReason || ""),
+    homeShiftTeamId: String(record.homeShiftTeamId || "")
+  };
+  const current = workforce.attendance.find(item => item.id === desired.id);
+  if (sameWorkforceAttendance(current, desired)) return { ok: true, record: current };
+  if ((current?.revision || "empty") !== String(payload.expectedRevision || "empty")) {
+    return { ok: false, status: 409, conflict: true, message: "Эта строка табеля уже изменилась в Google. Обновите данные и повторите только нужное исправление." };
+  }
+
+  const rows = (await getGoogleSheetRanges(workforceSpreadsheetIds.attendance, [`'${year}'!A6:AR`]))[0] ?? [];
+  const rowIndex = rows.findIndex(row => Number(row[0]) === month && String(row[38] || "") === employee.id
+    && (String(row[43] || "") === team.id || String(row[2] || "") === team.name));
+  const rowNumber = rowIndex < 0 ? Math.max(6, rows.length + 6) : rowIndex + 6;
+  const row = rowIndex < 0 ? Array(44).fill("") : [...rows[rowIndex], ...Array(Math.max(0, 44 - rows[rowIndex].length)).fill("")];
+  if (rowIndex < 0) {
+    row[0] = month; row[1] = employee.fullName; row[2] = team.name; row[38] = employee.id; row[43] = team.id;
+    for (let index = new Date(year, month, 0).getDate() + 1; index <= 31; index += 1) row[index + 2] = "—";
+  }
+  row[day + 2] = numericWorkforceAttendance(value);
+  row[37] = mergeWorkforceSubstituteNote(row[37], day, desired.substitutionReason, desired.homeShiftTeamId);
+  const overtime = new Set(String(row[42] || "").split(",").filter(Boolean));
+  if (desired.overtime) overtime.add(String(day)); else overtime.delete(String(day));
+  row[39] = Number(row[39] || 0) + 1; row[40] = new Date().toISOString(); row[41] = actor.performer || actor.title || actor.id; row[42] = [...overtime].sort((left, right) => Number(left) - Number(right)).join(","); row[43] = team.id;
+  const accessToken = await getAccessToken();
+  if (rowIndex < 0) {
+    await setGoogleSheetRanges(workforceSpreadsheetIds.attendance, accessToken, [{ range: `'${year}'!A${rowNumber}:AR${rowNumber}`, values: [row] }]);
+  } else {
+    await setGoogleSheetRanges(workforceSpreadsheetIds.attendance, accessToken, [
+      { range: `'${year}'!${columnLetter(day + 2)}${rowNumber}:${columnLetter(day + 2)}${rowNumber}`, values: [[row[day + 2]]] },
+      { range: `'${year}'!AL${rowNumber}:AR${rowNumber}`, values: [[row[37], row[38], row[39], row[40], row[41], row[42], row[43]]] }
+    ]);
+  }
+  return { ok: true, record: { ...desired, revision: workforceRevision([value, desired.overtime, desired.substitutionReason, desired.homeShiftTeamId]), updatedAt: new Date().toISOString(), updatedBy: row[41] } };
+}
+
+function workforceWriteFailure(message) { return { ok: false, status: 400, message }; }
+function normalizeWorkforceAttendanceValue(value) {
+  const source = String(value ?? "").trim();
+  if (["A", "L", "NS", "N", "MA", "NA", "PA", "G", "AV", "PV", "M", "TN", "D", "K", "SK", "VV", "PB", "ND", "NP", "NN"].includes(source)) return source;
+  const hours = Number(source.replace(",", "."));
+  return Number.isFinite(hours) && hours >= 0.5 && hours <= 24 && Math.round(hours * 2) === hours * 2 ? String(hours) : "";
+}
+function numericWorkforceAttendance(value) { return /^\d+(?:\.5)?$/.test(value) ? Number(value) : value; }
+function sameWorkforceAttendance(left, right) {
+  return Boolean(left) && normalizeWorkforceAttendanceValue(left.value) === normalizeWorkforceAttendanceValue(right.value)
+    && Boolean(left.overtime) === Boolean(right.overtime)
+    && String(left.substitutionReason || "") === String(right.substitutionReason || "")
+    && String(left.homeShiftTeamId || "") === String(right.homeShiftTeamId || "");
+}
+function mergeWorkforceSubstituteNote(note, day, reason, homeShiftTeamId) {
+  const current = String(note || "");
+  if (!reason) return current;
+  const team = String(homeShiftTeamId || "").endsWith("-b") ? "B" : "A";
+  const matcher = /Подменный выход \(штатная смена ([AB])\):\s*([^\n]+)/;
+  const match = current.match(matcher);
+  const entries = match ? match[2].split(";").map(item => item.trim()).filter(Boolean) : [];
+  const withoutDay = entries.filter(item => !item.startsWith(`${day} — `));
+  withoutDay.push(`${day} — ${reason}`);
+  withoutDay.sort((left, right) => Number(left.split(" ")[0]) - Number(right.split(" ")[0]));
+  const replacement = `Подменный выход (штатная смена ${team}): ${withoutDay.join("; ")}`;
+  return match ? current.replace(match[0], replacement) : `${current}${current ? "\n" : ""}${replacement}`;
 }
 
 async function getPackagingSnapshot() {
