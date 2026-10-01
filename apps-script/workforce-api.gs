@@ -58,6 +58,24 @@ function wfSetCurrentAttendanceViewV3_(book) {
   return wfSetCurrentAttendanceView_(book);
 }
 
+// Имя сохранено для уже созданного триггера Google Apps Script.
+function wfRefreshTimesheetViewV4() {
+  return wfRefreshTimesheetView();
+}
+
+function wfSetCurrentAttendanceViewV4_(book) {
+  return wfSetCurrentAttendanceView_(book);
+}
+
+// Имя сохранено для уже созданного триггера Google Apps Script.
+function wfRefreshTimesheetViewV5() {
+  return wfRefreshTimesheetView();
+}
+
+function wfSetCurrentAttendanceViewV5_(book) {
+  return wfSetCurrentAttendanceView_(book);
+}
+
 function wfSetCurrentAttendanceView_(book) {
   const now = wfTodayParts_();
   const sheet = book.getSheetByName(String(now.year));
@@ -66,19 +84,22 @@ function wfSetCurrentAttendanceView_(book) {
   // Сворачиваем все месяцы, кроме текущего. Заголовки месяцев остаются
   // видимыми с кнопкой "+", а текущий месяц сразу показывает сотрудников.
   const lastRow = sheet.getLastRow();
-  for (let groupRow = 6; groupRow <= lastRow;) {
-    const group = sheet.getRowGroup(groupRow, 1);
-    if (!group) {
-      groupRow += 1;
-      continue;
-    }
-    const groupRange = group.getRange();
-    const firstRow = groupRange.getRow();
-    const lastGroupRow = groupRange.getLastRow();
-    if (row < firstRow || row > lastGroupRow) group.collapse();
-    groupRow = Math.max(groupRow + 1, lastGroupRow + 1);
-  }
-  const currentMonthGroup = sheet.getRowGroup(row, 1);
+  const monthValues = sheet.getRange(6, 1, Math.max(1, lastRow - 5), 1).getValues().flat();
+  const firstRowsByMonth = new Map();
+  monthValues.forEach((value, index) => {
+    const month = Number(value);
+    if (month >= 1 && month <= 12 && !firstRowsByMonth.has(month)) firstRowsByMonth.set(month, index + 6);
+  });
+  firstRowsByMonth.forEach((groupRow, month) => {
+    const depth = sheet.getRowGroupDepth(groupRow);
+    if (!depth) return;
+    const group = sheet.getRowGroup(groupRow, depth);
+    if (!group) return;
+    if (month === now.month) group.expand();
+    else group.collapse();
+  });
+  const currentDepth = sheet.getRowGroupDepth(row);
+  const currentMonthGroup = currentDepth ? sheet.getRowGroup(row, currentDepth) : null;
   if (currentMonthGroup) currentMonthGroup.expand();
   const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
   sheet.getRange(4, 1).setValue(`${monthNames[now.month - 1]} ${now.year}`);
