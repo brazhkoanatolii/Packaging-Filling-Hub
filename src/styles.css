@@ -861,9 +861,8 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .vacation-period.cancelled { opacity: .62; }
 .vacation-period-actions { display: flex !important; grid-auto-flow: column; align-items: center; gap: 7px; }
 .danger-button { border-color: color-mix(in srgb,var(--status-danger) 55%,var(--line)) !important; color: var(--status-danger) !important; }
-.vacation-calendar-header { position: sticky; top: 0; z-index: 6; overflow: hidden; margin-bottom: 0; padding: 0; box-shadow: 0 10px 18px color-mix(in srgb,var(--shadow) 42%,transparent); }
-.vacation-schedule { overflow-x: auto; overflow-y: visible; padding: 0; }
-.vacation-grid { display: grid; grid-template-columns: 235px minmax(1080px,1fr); min-width: 1315px; }
+.vacation-board { overflow-x: auto; overflow-y: visible; padding: 0; }
+.vacation-grid { display: grid; grid-template-columns: 210px minmax(840px,1fr); min-width: 1050px; }
 .vacation-grid-head { border-bottom: 1px solid var(--line); background: var(--panel); }
 .vacation-person-heading { padding: 12px 16px; border-right: 1px solid var(--line); color: var(--ink-500); font-size: .68rem; font-weight: 850; text-transform: uppercase; }
 .vacation-months { display: grid; grid-template-columns: repeat(12,minmax(0,1fr)); }

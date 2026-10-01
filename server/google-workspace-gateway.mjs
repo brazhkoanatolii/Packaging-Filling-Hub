@@ -812,10 +812,9 @@ async function getWorkforceSnapshot() {
 async function repairWorkforceGoogleLayouts() {
   if (!writesEnabled || missingGoogleSettings().length) return { migratedVacations: 0, removedGroups: 0 };
   const accessToken = await getAccessToken();
-  const [personnelRows, vacationMetadata, attendanceMetadata] = await Promise.all([
+  const [personnelRows, vacationMetadata] = await Promise.all([
     getGoogleSheetRanges(workforceSpreadsheetIds.personnel, ["'Персонал'!A6:P"]).then(rows => rows[0] ?? []),
-    getGoogleSheetStructure(workforceSpreadsheetIds.vacations, accessToken),
-    getGoogleSheetStructure(workforceSpreadsheetIds.attendance, accessToken)
+    getGoogleSheetStructure(workforceSpreadsheetIds.vacations, accessToken)
   ]);
   const roleByEmployee = new Map(personnelRows.map(row => [String(row[7] || ""), String(row[1] || "")]));
   let migratedVacations = 0;
@@ -836,10 +835,26 @@ async function repairWorkforceGoogleLayouts() {
       range: `'${year}'!A5:M5`, values: [["ФИО", "Должность", "Смена", "Начало", "Окончание", "Календарных дней", "Статус", "Примечание", "ID записи", "ID сотрудника", "Версия", "Обновлено", "Кем обновлено"]]
     }]);
   }
-  const attendanceGroups = attendanceMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).flatMap(sheet => sheet.rowGroups || []);
-  const groupRequests = attendanceGroups.map(group => ({ deleteDimensionGroup: { range: group.range } }));
-  for (let index = 0; index < groupRequests.length; index += 50) {
-    if (groupRequests.slice(index, index + 50).length) await batchGoogleSheetRequests(workforceSpreadsheetIds.attendance, accessToken, groupRequests.slice(index, index + 50), "Не удалось убрать сворачивание месяцев в табеле");
+  let groupRequests = [];
+  try {
+    const attendanceMetadata = await getGoogleSheetStructure(workforceSpreadsheetIds.attendance, accessToken);
+    const attendanceGroups = attendanceMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).flatMap(sheet => sheet.rowGroups || []);
+    groupRequests = attendanceGroups.map(group => ({ deleteDimensionGroup: { range: group.range } }));
+    for (let index = 0; index < groupRequests.length; index += 50) {
+      if (groupRequests.slice(index, index + 50).length) await batchGoogleSheetRequests(workforceSpreadsheetIds.attendance, accessToken, groupRequests.slice(index, index + 50), "Не удалось убрать сворачивание месяцев в табеле");
+    }
+  } catch (error) {
+    console.warn("[gateway] Не удалось убрать сворачивание месяцев в табеле:", error.message);
+  }
+  const attendanceValues = [...Array.from({ length: 48 }, (_, index) => String((index + 1) / 2)), "A", "L", "NS", "N", "MA", "NA", "PA", "G", "AV", "PV", "M", "TN", "D", "K", "SK", "VV", "PB", "ND", "NP", "NN"];
+  const attendanceValidation = { condition: { type: "ONE_OF_LIST", values: attendanceValues.map(userEnteredValue => ({ userEnteredValue })) }, strict: false, showCustomUi: true };
+  const attendanceValidationRequests = [];
+  try {
+    const attendanceMetadata = await getGoogleSheetStructure(workforceSpreadsheetIds.attendance, accessToken);
+    attendanceMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).forEach(sheet => attendanceValidationRequests.push({ setDataValidation: { range: { sheetId: sheet.sheetId, startRowIndex: 5, endRowIndex: 1500, startColumnIndex: 3, endColumnIndex: 34 }, rule: attendanceValidation } }));
+    if (attendanceValidationRequests.length) await batchGoogleSheetRequests(workforceSpreadsheetIds.attendance, accessToken, attendanceValidationRequests, "Не удалось обновить список часов в табеле");
+  } catch (error) {
+    console.warn("[gateway] Не удалось обновить список часов в табеле:", error.message);
   }
   const vacationRequests = vacationMetadata.filter(sheet => /^20\d\d$/.test(sheet.title)).flatMap(sheet => [
     { repeatCell: { range: { sheetId: sheet.sheetId, startRowIndex: 5, startColumnIndex: 3, endColumnIndex: 5 }, cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern: "dd.MM.yyyy" } } }, fields: "userEnteredFormat.numberFormat" } },
