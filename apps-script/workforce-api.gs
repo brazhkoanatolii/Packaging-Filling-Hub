@@ -76,37 +76,133 @@ function wfSetCurrentAttendanceViewV5_(book) {
   return wfSetCurrentAttendanceView_(book);
 }
 
+// Открываем текущий месяц, но оставляем экран в начале листа: так видны
+// компактные строки всех месяцев и раскрытый блок текущего месяца.
+function wfRefreshTimesheetViewV6() {
+  return wfSetCurrentAttendanceViewV6_(SpreadsheetApp.openById(WF_BOOKS.attendance));
+}
+
+function wfSetCurrentAttendanceViewV6_(book) {
+  const result = wfSetCurrentAttendanceView_(book);
+  if (!result || !result.ok) return result;
+  const sheet = book.getSheetByName(String(wfTodayParts_().year));
+  if (!sheet) return result;
+  book.setActiveSheet(sheet);
+  book.setActiveRange(sheet.getRange(1, 1));
+  return result;
+}
+
 function wfSetCurrentAttendanceView_(book) {
   const now = wfTodayParts_();
   const sheet = book.getSheetByName(String(now.year));
   if (!sheet) return { ok: false, message: 'Лист текущего года не найден.' };
-  const row = wfAttendanceMonthFirstRow_(sheet, now.month) || 6;
-  // Сворачиваем все месяцы, кроме текущего. Заголовки месяцев остаются
-  // видимыми с кнопкой "+", а текущий месяц сразу показывает сотрудников.
-  const lastRow = sheet.getLastRow();
-  const monthValues = sheet.getRange(6, 1, Math.max(1, lastRow - 5), 1).getValues().flat();
-  const firstRowsByMonth = new Map();
-  monthValues.forEach((value, index) => {
-    const month = Number(value);
-    if (month >= 1 && month <= 12 && !firstRowsByMonth.has(month)) firstRowsByMonth.set(month, index + 6);
+  const monthRows = wfEnsureTimesheetMonthGroups_(sheet, now.year);
+  const row = monthRows.get(now.month) || 6;
+  monthRows.forEach((groupRow, month) => {
+    const group = sheet.getRowGroup(groupRow, 1);
+    if (group) month === now.month ? group.expand() : group.collapse();
   });
-  firstRowsByMonth.forEach((groupRow, month) => {
-    const depth = sheet.getRowGroupDepth(groupRow);
-    if (!depth) return;
-    const group = sheet.getRowGroup(groupRow, depth);
-    if (!group) return;
-    if (month === now.month) group.expand();
-    else group.collapse();
-  });
-  const currentDepth = sheet.getRowGroupDepth(row);
-  const currentMonthGroup = currentDepth ? sheet.getRowGroup(row, currentDepth) : null;
-  if (currentMonthGroup) currentMonthGroup.expand();
-  const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  const monthNames = wfTimesheetMonthNames_();
   sheet.getRange(4, 1).setValue(`${monthNames[now.month - 1]} ${now.year}`);
   wfApplyTimesheetTodayFormatting_(book);
   book.setActiveSheet(sheet);
-  book.setActiveRange(sheet.getRange(row, now.day + 3));
+  book.setActiveRange(sheet.getRange(1, 1));
   return { ok: true, month: now.month, day: now.day, row };
+}
+
+/**
+ * Создаёт именно такую структуру, как в производственном образце:
+ * отдельная строка «Месяц Год» всегда видна, а строки сотрудников
+ * находятся непосредственно под ней в сворачиваемой группе.
+ *
+ * Процедура рассчитана на уже заполненный табель и идемпотентна:
+ * после первого запуска она лишь управляет состоянием существующих групп.
+ */
+function wfEnsureTimesheetMonthGroups_(sheet, year) {
+  // V8 — идентификатор уже созданной в рабочем табеле структуры.
+  // Благодаря этому повторное открытие не добавляет строки-разделители заново.
+  const propertyKey = `wf-timesheet-month-groups-v8-${year}`;
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(propertyKey) !== 'ready') {
+    wfRemoveTimesheetRowGroups_(sheet);
+    const initialBlocks = wfTimesheetMonthBlocks_(sheet);
+    const monthNames = wfTimesheetMonthNames_();
+
+    // Вставляем снизу вверх, чтобы номера ещё не обработанных строк не менялись.
+    initialBlocks.slice().reverse().forEach(block => {
+      const preceding = sheet.getRange(block.start - 1, 1, 1, 2).getDisplayValues()[0];
+      const expectedTitle = `${monthNames[block.month - 1]} ${year}`;
+      const alreadyHasHeader = !String(preceding[0] || '').trim() && String(preceding[1] || '').trim() === expectedTitle;
+      if (!alreadyHasHeader) {
+        sheet.insertRowsBefore(block.start, 1);
+        wfFormatTimesheetMonthHeader_(sheet, block.start, expectedTitle);
+      } else {
+        wfFormatTimesheetMonthHeader_(sheet, block.start - 1, expectedTitle);
+      }
+    });
+
+    // После вставки строк повторно находим фактические блоки сотрудников.
+    wfTimesheetMonthBlocks_(sheet).forEach(block => {
+      const headerRow = block.start - 1;
+      wfFormatTimesheetMonthHeader_(sheet, headerRow, `${monthNames[block.month - 1]} ${year}`);
+      sheet.getRange(block.start, 1, block.end - block.start + 1, 1).shiftRowGroupDepth(1);
+    });
+    properties.setProperty(propertyKey, 'ready');
+  }
+
+  const rows = new Map();
+  wfTimesheetMonthBlocks_(sheet).forEach(block => rows.set(block.month, block.start));
+  return rows;
+}
+
+function wfTimesheetMonthBlocks_(sheet) {
+  const firstRow = 6;
+  const values = sheet.getRange(firstRow, 1, Math.max(1, sheet.getLastRow() - firstRow + 1), 1).getValues().flat();
+  const blocks = [];
+  let active = null;
+  values.forEach((value, index) => {
+    const row = firstRow + index;
+    const month = Number(value);
+    if (month < 1 || month > 12) {
+      if (active) { active.end = row - 1; blocks.push(active); active = null; }
+      return;
+    }
+    if (!active || active.month !== month) {
+      if (active) { active.end = row - 1; blocks.push(active); }
+      active = { month, start: row, end: row };
+    } else {
+      active.end = row;
+    }
+  });
+  if (active) blocks.push(active);
+  return blocks;
+}
+
+function wfRemoveTimesheetRowGroups_(sheet) {
+  // Старые попытки могли оставить вложенные группы. Удаляем только контуры
+  // строк этого листа, не трогая данные, формулы и формат ячеек.
+  for (let pass = 0; pass < 12; pass += 1) {
+    let removed = false;
+    for (let row = sheet.getLastRow(); row >= 6; row -= 1) {
+      const depth = sheet.getRowGroupDepth(row);
+      if (!depth) continue;
+      const group = sheet.getRowGroup(row, depth);
+      if (group) { group.remove(); removed = true; }
+    }
+    if (!removed) return;
+  }
+}
+
+function wfFormatTimesheetMonthHeader_(sheet, row, title) {
+  const range = sheet.getRange(row, 1, 1, 34);
+  sheet.getRange(row, 1).clearContent();
+  sheet.getRange(row, 2).setValue(title);
+  range.setBackground('#D9EAF7').setFontColor('#174A73').setFontWeight('bold');
+  sheet.setRowHeight(row, 28);
+}
+
+function wfTimesheetMonthNames_() {
+  return ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 }
 
 function wfApplyTimesheetTodayFormatting_(book) {
