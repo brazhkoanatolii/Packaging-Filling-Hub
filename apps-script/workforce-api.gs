@@ -33,7 +33,7 @@ function getWorkforceSnapshot(options) {
     }
   }));
   const book=SpreadsheetApp.openById(WF_BOOKS.vacations);
-  WF_YEARS.forEach(year=>wfRows_(book.getSheetByName(String(year)),13).filter(r=>r.values[8]||r.values[7]).forEach(r=>vacations.push(wfVacation_(r.values,year))));
+  WF_YEARS.forEach(year=>wfRows_(book.getSheetByName(String(year)),13).filter(r=>r.values[8]||r.values[7]).forEach(r=>vacations.push(wfVacation_(r.values,year,people))));
   return {ok:true,ready:true,personnel,shiftTeams:teams.filter(t=>t.id!=='office'),officeSchedule:teams.find(t=>t.id==='office'),attendance,vacations,years:WF_YEARS,timeZone:'Europe/Vilnius'};
 }
 
@@ -133,14 +133,14 @@ function wfSaveVacation_(people,teams,op) {
  if(start&&(String(p.startDate).slice(0,4)!==String(year)||String(p.endDate).slice(0,4)!==String(year)))throw new Error('Период должен находиться в выбранном году. Переходящий отпуск разделите на две записи.');
  if(!start)throw new Error('Укажите даты отпуска');
  const s=SpreadsheetApp.openById(WF_BOOKS.vacations).getSheetByName(String(year)),found=wfRows_(s,13).find(r=>String(r.values[8])===p.id||String(r.values[7])===p.id);
- const current=found?wfVacation_(found.values,year):null;if(!wfMatches_(current,op))return wfConflict_();
+ const current=found?wfVacation_(found.values,year,people):null;if(!wfMatches_(current,op))return wfConflict_();
  if(p.deleted){if(!found)throw new Error('Период отпуска не найден в Google');s.deleteRow(found.row);return {ok:true,record:{id:p.id,deleted:true}};}
  const row=found?found.row:Math.max(6,s.getLastRow()+1),days=start&&end?Math.round((end-start)/86400000)+1:'';
- const values=[person.fullName,WF_ROLES[person.role]||'',teams.find(t=>t.id===person.shiftTeamId)?.name||'',start,end,days,status,wfText_(p.note||''),p.id,p.employeeId,(Number(found?.values[10])||0)+1,new Date(),op.actor.performer];
- s.getRange(row,1,1,13).setValues([values]);s.getRange(row,4,1,2).setNumberFormat('dd.MM.yyyy');
+ const values=[person.fullName,WF_ROLES[person.role]||'',teams.find(t=>t.id===person.shiftTeamId)?.name||'',start,end,days,status,p.id];
+ s.getRange(row,1,1,8).setValues([values]);s.getRange(row,4,1,2).setNumberFormat('dd.MM.yyyy');
  s.getRange(row,6).setFormula('=IF(AND(ISNUMBER(D'+row+'),ISNUMBER(E'+row+')),IF(E'+row+'>=D'+row+',E'+row+'-D'+row+'+1,"Проверьте даты"),"")');
  wfApplyVacationToAttendance_(person,teams.find(t=>t.id===person.shiftTeamId),p.startDate,p.endDate);
- return {ok:true,record:wfVacation_(values,year)};
+ return {ok:true,record:wfVacation_(values,year,people)};
 }
 function wfAttendanceValue_(value){const text=String(value||'').trim();if(WF_ATTENDANCE_CODES.indexOf(text)>=0)return text;const hours=Number(text.replace(',','.'));return isFinite(hours)&&hours>=0.5&&hours<=24&&Math.round(hours*2)===hours*2?String(hours):'';}
 function wfApplyVacationToAttendance_(person,team,startDate,endDate){
@@ -176,7 +176,7 @@ function wfMergeSubstituteNote_(note,day,reason,homeShiftTeamId){
 function wfRows_(sheet,width){if(!sheet)throw new Error('В Google отсутствует нужная вкладка');return sheet.getLastRow()<6?[]:sheet.getRange(6,1,sheet.getLastRow()-5,width).getValues().map((values,i)=>({row:i+6,values}));}
 function wfPerson_(v,teams){return {id:String(v[7]),fullName:String(v[0]),role:Object.keys(WF_ROLES).find(k=>WF_ROLES[k]===v[1])||'',shiftTeamId:teams.find(t=>t.name===v[2])?.id||String(v[11]||''),active:v[5]==='Работает',note:String(v[6]||''),pakNumber:String(v[3]||''),pakCode:String(v[4]||''),birthday:wfDay_(v[12]),hireDate:wfDay_(v[13]),phone:String(v[14]||''),email:String(v[15]||''),revision:wfToken_(v),updatedAt:wfIso_(v[9])};}
 function wfTeam_(v){return {id:String(v[6]),name:String(v[0]),code:v[6]==='shift-team-a'?'A':v[6]==='shift-team-b'?'B':'5/2',anchorDate:wfDay_(v[1]),cycleLengthDays:Number(v[2]),workDayOffsets:String(v[3]).split(',').map(Number),shiftDurationHours:Number(v[4]),accountingHours:Number(v[5]),active:true,revision:wfToken_(v)};}
-function wfVacation_(v,year){const old=String(v[7]||'').indexOf('vacation:')===0&&String(v[8]||'').indexOf('vacation:')!==0,o=old?-1:0;return {id:String(v[8+o]),employeeId:String(v[9+o]),year,startDate:wfDay_(v[3+o]),endDate:wfDay_(v[4+o]),days:typeof v[5+o]==='number'?v[5+o]:null,status:String(v[6+o]),note:String(v[7+o]||''),revision:wfToken_([v[0],v[1+o],v[2+o],wfDay_(v[3+o]),wfDay_(v[4+o]),v[6+o],v[7+o],v[8+o],v[9+o],v[10+o]]),updatedAt:wfIso_(v[11+o]),updatedBy:String(v[12+o]||'')};}
+function wfVacation_(v,year,people){const old=String(v[7]||'').indexOf('vacation:')===0&&String(v[8]||'').indexOf('vacation:')!==0,o=old?-1:0,name=String(v[0]||'').trim(),person=(people||[]).find(item=>String(item.fullName||'').trim()===name);return {id:String(v[8+o]),employeeId:String(v[9+o]||person?.id||''),year,startDate:wfDay_(v[3+o]),endDate:wfDay_(v[4+o]),days:typeof v[5+o]==='number'?v[5+o]:null,status:String(v[6+o]),note:old?'':String(v[7+o]||''),revision:wfToken_([v[0],v[1+o],v[2+o],wfDay_(v[3+o]),wfDay_(v[4+o]),v[6+o],v[7+o],v[8+o],v[9+o],v[10+o]]),updatedAt:wfIso_(v[11+o]),updatedBy:String(v[12+o]||'')};}
 function wfMatches_(current,op){return (current?current.revision:'empty')===op.expectedRevision;}
 function wfConflict_(){return {ok:false,status:409,conflict:true,message:'Эту запись уже изменили. Обновите данные и выберите, какие исправления сохранить.'};}
 function wfToken_(v){return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,JSON.stringify(v),Utilities.Charset.UTF_8));}

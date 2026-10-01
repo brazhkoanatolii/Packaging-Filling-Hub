@@ -801,7 +801,7 @@ async function getWorkforceSnapshot() {
   const teams = (masterRanges[0] ?? []).filter(row => row[6]).map(workforceTeam);
   const personnel = (masterRanges[1] ?? []).filter(row => row[7]).map(row => workforcePerson(row, teams));
   const attendance = workforceAttendance(attendanceRanges[0] ?? [], personnel, teams, year);
-  const vacations = workforceVacations(vacationRanges[0] ?? [], year);
+  const vacations = workforceVacations(vacationRanges[0] ?? [], year, personnel);
   return {
     ok: true, ready: true, personnel, shiftTeams: teams.filter(team => team.id !== "office"),
     officeSchedule: teams.find(team => team.id === "office") ?? null, attendance, vacations,
@@ -816,24 +816,21 @@ async function repairWorkforceGoogleLayouts() {
     getGoogleSheetRanges(workforceSpreadsheetIds.personnel, ["'Персонал'!A6:P"]).then(rows => rows[0] ?? []),
     getGoogleSheetStructure(workforceSpreadsheetIds.vacations, accessToken)
   ]);
-  const roleByEmployee = new Map(personnelRows.map(row => [String(row[7] || ""), String(row[1] || "")]));
+  const personnelByName = new Map(personnelRows.map(row => [String(row[0] || "").trim().toLocaleLowerCase(), { id: String(row[7] || ""), role: String(row[1] || "") }]));
   let migratedVacations = 0;
   for (const year of [2025, 2026, 2027, 2028, 2029]) {
-    const rows = (await getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:M`]))[0] ?? [];
+    const rows = (await getGoogleSheetRanges(workforceSpreadsheetIds.vacations, [`'${year}'!A6:H`]))[0] ?? [];
     const writes = [];
     rows.forEach((row, index) => {
-      // Legacy rows have no role column: their record ID is in H rather than I.
-      if (!String(row[7] || "").startsWith("vacation:") || String(row[8] || "").startsWith("vacation:")) return;
-      const employeeId = String(row[8] || "");
-      writes.push({ range: `'${year}'!A${index + 6}:M${index + 6}`, values: [[
-        row[0] || "", roleByEmployee.get(employeeId) || "", row[1] || "", row[2] || "", row[3] || "", row[4] || "",
-        row[5] || "", row[6] || "", row[7] || "", employeeId, row[9] || "", row[10] || "", row[11] || ""
+      // Older rows did not have the role column: B was shift and H stored the operation ID.
+      // Keep that eight-column Google Table intact and only move visible values into its current schema.
+      if (!String(row[7] || "").startsWith("vacation:") || !/^\s*Смена\s+[AB]\s*$/i.test(String(row[1] || ""))) return;
+      const employee = personnelByName.get(String(row[0] || "").trim().toLocaleLowerCase());
+      writes.push({ range: `'${year}'!A${index + 6}:H${index + 6}`, values: [[
+        row[0] || "", employee?.role || "", row[1] || "", row[2] || "", row[3] || "", row[4] || "", row[5] || "", row[7] || ""
       ]] });
     });
     if (writes.length) { await setGoogleSheetRanges(workforceSpreadsheetIds.vacations, accessToken, writes); migratedVacations += writes.length; }
-    await setGoogleSheetRanges(workforceSpreadsheetIds.vacations, accessToken, [{
-      range: `'${year}'!A5:M5`, values: [["ФИО", "Должность", "Смена", "Начало", "Окончание", "Календарных дней", "Статус", "Примечание", "ID записи", "ID сотрудника", "Версия", "Обновлено", "Кем обновлено"]]
-    }]);
   }
   let groupRequests = [];
   try {
@@ -2356,12 +2353,13 @@ function workforceAttendance(rows, personnel, teams, year) {
   });
 }
 
-function workforceVacations(rows, year) {
+function workforceVacations(rows, year, personnel = []) {
+  const employeeByName = new Map(personnel.map(employee => [String(employee.fullName || "").trim().toLocaleLowerCase(), employee.id]));
   return rows.map(row => {
     const legacy = String(row[7] || "").startsWith("vacation:") && !String(row[8] || "").startsWith("vacation:");
     const offset = legacy ? -1 : 0;
     return {
-      id: String(row[8 + offset] || ""), employeeId: String(row[9 + offset] || ""), year, startDate: googleDate(row[3 + offset]), endDate: googleDate(row[4 + offset]),
+      id: String(row[8 + offset] || ""), employeeId: String(row[9 + offset] || employeeByName.get(String(row[0] || "").trim().toLocaleLowerCase()) || ""), year, startDate: googleDate(row[3 + offset]), endDate: googleDate(row[4 + offset]),
       days: Number.isFinite(googleNumber(row[5 + offset])) ? googleNumber(row[5 + offset]) : null, status: String(row[6 + offset] || ""), note: String(row[7 + offset] || ""),
       revision: workforceVacationRevision(row, offset), updatedAt: googleDate(row[11 + offset]), updatedBy: String(row[12 + offset] || "")
     };
