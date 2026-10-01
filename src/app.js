@@ -785,7 +785,7 @@ async function handleClick(event) {
     }
     if (action === "attendance-view") {
       state.attendanceView = actionElement.dataset.view;
-      render();
+      openAttendanceForCurrentMonth();
       return;
     }
     if (action === "settings-tab") {
@@ -901,7 +901,11 @@ async function handleClick(event) {
 
 async function navigateToPage(page) {
   state.page = page;
-  render();
+  if (page === "attendance") {
+    openAttendanceForCurrentMonth();
+  } else {
+    render();
+  }
   if (page === "maintenance") await refreshMaintenance();
   if (page === "production") await refreshProduction();
   if (page === "packaging") await refreshPackaging();
@@ -1222,6 +1226,23 @@ function render() {
   localizeElement(root, state.language);
   const navigation = root.querySelector(".main-nav");
   if (navigation) navigation.scrollTop = navigationScrollTop;
+}
+
+function openAttendanceForCurrentMonth() {
+  state.attendanceMonth = today().slice(0, 7);
+  render();
+  requestAnimationFrame(revealTodayInAttendanceTables);
+}
+
+function revealTodayInAttendanceTables() {
+  root.querySelectorAll(".attendance-scroll").forEach(scroller => {
+    const todayCell = scroller.querySelector(".attendance-table .today");
+    if (!(todayCell instanceof HTMLElement)) return;
+    const cellRect = todayCell.getBoundingClientRect();
+    const scrollRect = scroller.getBoundingClientRect();
+    const offset = cellRect.left - scrollRect.left - Math.max(18, (scroller.clientWidth - todayCell.offsetWidth) / 2);
+    scroller.scrollLeft = Math.max(0, scroller.scrollLeft + offset);
+  });
 }
 
 function renderLogin() {
@@ -3292,7 +3313,7 @@ function monthParts(value) {
 }
 
 function dayHeader(day) {
-  return `<th class="${day.isToday ? "today" : ""}"><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small></th>`;
+  return `<th class="${day.isToday ? "today" : ""}"${day.isToday ? ' aria-label="Сегодня"' : ""}><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small>${day.isToday ? "<em>Сегодня</em>" : ""}</th>`;
 }
 
 function attendanceTone(value) {

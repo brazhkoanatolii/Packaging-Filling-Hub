@@ -574,7 +574,10 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .attendance-table .attendance-person strong, .attendance-table .attendance-person small { display: block; }
 .attendance-table .attendance-person small { margin-top: 3px; color: var(--ink-500); font-size: .66rem; font-weight: 500; }
 .attendance-table td button { width: 32px; height: 32px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-muted); color: var(--ink-500); }
-.attendance-table .today { background: var(--green-100); box-shadow: inset 0 2px 0 var(--green-600); }
+.attendance-table .today { background: linear-gradient(180deg, color-mix(in srgb, var(--green-100) 90%, #fff), var(--green-100)); box-shadow: inset 3px 0 0 var(--green-600), inset -3px 0 0 var(--green-600); }
+.attendance-table thead th.today { background: linear-gradient(145deg, var(--green-600), var(--green-700)); color: #fff; box-shadow: inset 3px 0 0 color-mix(in srgb, #fff 42%, var(--green-600)), inset -3px 0 0 color-mix(in srgb, #fff 42%, var(--green-600)); }
+.attendance-table thead th.today small { color: color-mix(in srgb, #fff 78%, transparent); }
+.attendance-table thead th.today em { display: inline-block; margin-top: 4px; padding: 2px 5px; border-radius: 5px; background: rgba(255,255,255,.2); color: #fff; font-size: .54rem; font-style: normal; font-weight: 900; letter-spacing: .03em; text-transform: uppercase; }
 .attendance-legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 18px 18px; color: var(--ink-500); font-size: .72rem; }
 .attendance-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend-swatch { width: 12px; height: 12px; border-radius: 4px; background: var(--green-100); }
@@ -954,7 +957,8 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 :root[data-theme="dark"] .field select,
 :root[data-theme="dark"] .field textarea,
 :root[data-theme="dark"] .personnel-search input { background: var(--surface); color: var(--ink-900); }
-:root[data-theme="dark"] .attendance-table .today { background: rgba(72,118,220,.2); }
+:root[data-theme="dark"] .attendance-table .today { background: linear-gradient(180deg, rgba(54,167,111,.33), rgba(54,167,111,.18)); box-shadow: inset 3px 0 0 #56d18b, inset -3px 0 0 #56d18b; }
+:root[data-theme="dark"] .attendance-table thead th.today { background: linear-gradient(145deg, #1c9c62, #12613f); color: #fff; }
 :root[data-theme="dark"] .shift-form-footer { background: var(--surface-muted); }
 :root[data-theme="dark"] .dialog-close,
 :root[data-theme="dark"] .walk-live-result,
