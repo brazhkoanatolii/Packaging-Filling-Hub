@@ -7,6 +7,22 @@ const WF_BOOKS = Object.freeze({
   attendance: '1eJphWAgaxNb5N--tDrwv4uTzmiAs19NOLSAQlSn3dk0',
   vacations: '1zenc0sBGtD8KHQdrBxULsoA9jSaUcZeW83XIiz5YxSo'
 });
+// Дневные журналы, в которых месяц — самостоятельный видимый блок. Не
+// включаем сюда обычные журналы событий: одна колонка даты сама по себе не
+// означает, что пользователю нужно сворачивать историю по месяцам.
+const WF_MONTHLY_JOURNALS = Object.freeze([
+  {
+    spreadsheetId: '1n7OfVi8__XWRJhj5jtlRUbrU6O9wGLmlDDf0e9-UKoI',
+    sheets: [{ name: 'Лист', firstDataRow: 6, dateColumn: 1, columnCount: 12 }]
+  },
+  {
+    spreadsheetId: '1zHYsa1pO7xLuSbBC43J_IPChlVfZaxt4L_rI9MtKwqA',
+    sheets: [
+      { name: 'Учет продукции 1', firstDataRow: 5, dateColumn: 2, columnCount: 18 },
+      { name: 'Учет продукции 2', firstDataRow: 2, dateColumn: 1, columnCount: 18 }
+    ]
+  }
+]);
 const WF_YEARS = [2025, 2026, 2027, 2028, 2029];
 const WF_ROLES = { 'head-of-area':'Администрация', 'production-manager':'Начальник производства', administrator:'Администратор', 'warehouse-manager':'Начальник склада', 'senior-mechanic':'Старший механик', mechanic:'Механик', 'mechanic-operator':'Механик-оператор', packer:'Упаковщик' };
 const WF_STATUSES = ['Не запланирован','Запланирован','Согласован','Использован','Аннулирован'];
@@ -244,6 +260,143 @@ function wfApplyTimesheetTodayFormatting_(book) {
       .build()
   );
   sheet.setConditionalFormatRules(rules);
+}
+
+/**
+ * Один раз устанавливает обработчики открытия для дневных журналов.
+ * При следующем открытии журнала открыт только актуальный месяц; прошлые
+ * месяцы остаются видимыми одной строкой-заголовком с кнопкой «+» слева.
+ */
+function wfInstallMonthlyJournalOpenTriggers() {
+  const ids = new Set(WF_MONTHLY_JOURNALS.map(journal => journal.spreadsheetId));
+  ScriptApp.getProjectTriggers()
+    .filter(trigger => trigger.getHandlerFunction() === 'wfOnMonthlyJournalOpen')
+    .forEach(trigger => ScriptApp.deleteTrigger(trigger));
+  ids.forEach(id => {
+    const book = SpreadsheetApp.openById(id);
+    ScriptApp.newTrigger('wfOnMonthlyJournalOpen').forSpreadsheet(book).onOpen().create();
+    wfRefreshMonthlyJournalView_(book);
+  });
+  return { ok: true, journals: ids.size, message: 'Для дневных журналов установлено сворачивание по месяцам.' };
+}
+
+/** Установочный обработчик: не меняет записи, только структуру показа. */
+function wfOnMonthlyJournalOpen(event) {
+  const book = event && event.source;
+  if (!book || !WF_MONTHLY_JOURNALS.some(journal => journal.spreadsheetId === book.getId())) return;
+  wfRefreshMonthlyJournalView_(book);
+}
+
+/** Ручной запуск для проверки после сохранения скрипта. */
+function wfRefreshMonthlyJournalViews() {
+  return WF_MONTHLY_JOURNALS.map(journal => wfRefreshMonthlyJournalView_(SpreadsheetApp.openById(journal.spreadsheetId)));
+}
+
+function wfRefreshMonthlyJournalView_(book) {
+  const journal = WF_MONTHLY_JOURNALS.find(item => item.spreadsheetId === book.getId());
+  if (!journal) return { ok: false, message: 'Журнал не настроен для месячного представления.' };
+  const currentKey = Utilities.formatDate(new Date(), 'Europe/Vilnius', 'yyyy-MM');
+  const results = journal.sheets.map(config => {
+    const sheet = book.getSheetByName(config.name);
+    if (!sheet) return { sheet: config.name, ok: false, message: 'Лист не найден.' };
+    const blocks = wfEnsureMonthlyJournalGroups_(sheet, config);
+    blocks.forEach(block => {
+      const group = sheet.getRowGroup(block.start, 1);
+      if (group) block.key === currentKey ? group.expand() : group.collapse();
+    });
+    return { sheet: config.name, ok: true, months: blocks.length, currentMonth: currentKey };
+  });
+  return { ok: true, results };
+}
+
+/**
+ * Ставит перед каждым непрерывным блоком дат отдельную синюю строку месяца
+ * и группирует только следующие строки данных. Заголовки не объединяются,
+ * поэтому чтение и запись программы по датам продолжают работать.
+ */
+function wfEnsureMonthlyJournalGroups_(sheet, config) {
+  // Каждый запуск проверяет и новые месяцы. Поэтому первая запись октября
+  // получает свой заголовок автоматически, а не ждёт ручной настройки.
+  wfMonthlyJournalBlocks_(sheet, config).slice().reverse().forEach(block => {
+    const existingHeaderRow = wfExistingMonthHeaderRow_(sheet, block.start, block.key, config.dateColumn);
+    if (existingHeaderRow) return;
+    sheet.insertRowsBefore(block.start, 1);
+    wfFormatJournalMonthHeader_(sheet, block.start, wfJournalMonthTitle_(block.key), config);
+  });
+
+  // После вставки находим реальные строки ещё раз и создаём только
+  // отсутствующие группы. Уже существующие группы не вкладываются повторно.
+  wfMonthlyJournalBlocks_(sheet, config).forEach(block => {
+    const headerRow = wfExistingMonthHeaderRow_(sheet, block.start, block.key, config.dateColumn) || block.start - 1;
+    wfFormatJournalMonthHeader_(sheet, headerRow, wfJournalMonthTitle_(block.key), config);
+    if (!sheet.getRowGroup(block.start, 1)) sheet.getRange(block.start, 1, block.end - block.start + 1, 1).shiftRowGroupDepth(1);
+  });
+  return wfMonthlyJournalBlocks_(sheet, config);
+}
+
+function wfMonthlyJournalBlocks_(sheet, config) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < config.firstDataRow) return [];
+  const values = sheet.getRange(config.firstDataRow, config.dateColumn, lastRow - config.firstDataRow + 1, 1).getValues().flat();
+  const blocks = [];
+  let current = null;
+  values.forEach((value, index) => {
+    const row = config.firstDataRow + index;
+    const key = wfJournalMonthKey_(value);
+    if (!key) return;
+    if (!current || current.key !== key) {
+      if (current) blocks.push(current);
+      current = { key, start: row, end: row };
+    } else {
+      current.end = row;
+    }
+  });
+  if (current) blocks.push(current);
+  return blocks;
+}
+
+function wfExistingMonthHeaderRow_(sheet, dataRow, key, dateColumn) {
+  // В старых журналах уже есть строка «Месяц: ...» прямо над первой
+  // записью или через один пустой разделитель. Используем её, не создавая
+  // дубликат и не сдвигая исторические расчёты.
+  for (let row = Math.max(1, dataRow - 2); row < dataRow; row += 1) {
+    const label = String(sheet.getRange(row, dateColumn).getDisplayValue() || '').trim();
+    if (wfJournalMonthKeyFromLabel_(label) === key) return row;
+  }
+  return 0;
+}
+
+function wfFormatJournalMonthHeader_(sheet, row, title, config) {
+  const range = sheet.getRange(row, 1, 1, config.columnCount);
+  range.setBackground('#D9EAF7').setFontColor('#174A73').setFontWeight('bold');
+  sheet.getRange(row, config.dateColumn).setValue(title);
+  sheet.setRowHeight(row, 28);
+}
+
+function wfJournalMonthKey_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return Utilities.formatDate(value, 'Europe/Vilnius', 'yyyy-MM');
+  const source = String(value || '').trim();
+  let match = source.match(/^(\d{4})-(\d{1,2})-\d{1,2}$/);
+  if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}`;
+  match = source.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  return match ? `${match[3]}-${String(Number(match[2])).padStart(2, '0')}` : '';
+}
+
+function wfJournalMonthKeyFromLabel_(label) {
+  const source = String(label || '').trim();
+  const match = source.match(/(?:Месяц:\s*)?([А-Яа-яЁё]+)\s+(\d{4})$/);
+  if (!match) return '';
+  const month = wfJournalMonthNames_().map(name => name.toLowerCase()).indexOf(match[1].toLowerCase()) + 1;
+  return month ? `${match[2]}-${String(month).padStart(2, '0')}` : '';
+}
+
+function wfJournalMonthTitle_(key) {
+  const [year, month] = String(key).split('-').map(Number);
+  return `${wfJournalMonthNames_()[month - 1]} ${year}`;
+}
+
+function wfJournalMonthNames_() {
+  return ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 }
 
 function wfAttendanceMonthFirstRow_(sheet, month) {
