@@ -13,6 +13,80 @@ const WF_STATUSES = ['Не запланирован','Запланирован',
 const WF_ABSENCE_CODES = ['A','L','NS','N','MA','NA','PA','G','AV','PV','M','TN','D','SK','VV','PB','ND','NP','NN'];
 const WF_ATTENDANCE_CODES = ['K'].concat(WF_ABSENCE_CODES);
 
+/**
+ * Запускается один раз владельцем скрипта после публикации новой версии.
+ * Устанавливает только триггер открытия табеля и динамическое оформление
+ * текущего дня. Данные, формулы и существующие правила таблицы не меняет.
+ */
+function wfInstallTimesheetOpenTrigger() {
+  const book = SpreadsheetApp.openById(WF_BOOKS.attendance);
+  ScriptApp.getProjectTriggers()
+    .filter(trigger => trigger.getHandlerFunction() === 'wfOnTimesheetOpen')
+    .forEach(trigger => ScriptApp.deleteTrigger(trigger));
+  ScriptApp.newTrigger('wfOnTimesheetOpen').forSpreadsheet(book).onOpen().create();
+  wfApplyTimesheetTodayFormatting_(book);
+  return { ok: true, message: 'Триггер табеля установлен. При открытии будет показан текущий месяц и день.' };
+}
+
+/** Установочный триггер Google Sheets: показываем актуальный месяц и день. */
+function wfOnTimesheetOpen(event) {
+  const book = event && event.source;
+  if (!book || book.getId() !== WF_BOOKS.attendance) return;
+  wfApplyTimesheetTodayFormatting_(book);
+  const now = wfTodayParts_();
+  const sheet = book.getSheetByName(String(now.year));
+  if (!sheet) return;
+  const row = wfAttendanceMonthFirstRow_(sheet, now.month) || 6;
+  book.setActiveSheet(sheet);
+  book.setActiveRange(sheet.getRange(row, now.day + 3));
+}
+
+function wfApplyTimesheetTodayFormatting_(book) {
+  const now = wfTodayParts_();
+  const sheet = book.getSheetByName(String(now.year));
+  if (!sheet) return;
+  const firstDayColumn = 4, lastDayColumn = 34;
+  const dataRange = sheet.getRange(6, firstDayColumn, Math.max(1, sheet.getMaxRows() - 5), lastDayColumn - firstDayColumn + 1);
+  const headerRange = sheet.getRange(5, firstDayColumn, 1, lastDayColumn - firstDayColumn + 1);
+  const dataFormula = '=AND($A6=MONTH(TODAY()),D$5=DAY(TODAY()))';
+  const headerFormula = '=D$5=DAY(TODAY())';
+  const isTimesheetTodayRule = rule => {
+    const condition = rule.getBooleanCondition();
+    if (!condition || condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) return false;
+    const formula = String(condition.getCriteriaValues()[0] || '');
+    return formula === dataFormula || formula === headerFormula;
+  };
+  const rules = sheet.getConditionalFormatRules().filter(rule => !isTimesheetTodayRule(rule));
+  rules.push(
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(dataFormula)
+      .setBackground('#D9EAD3')
+      .setFontColor('#0B5E20')
+      .setRanges([dataRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(headerFormula)
+      .setBackground('#188038')
+      .setFontColor('#FFFFFF')
+      .setBold(true)
+      .setRanges([headerRange])
+      .build()
+  );
+  sheet.setConditionalFormatRules(rules);
+}
+
+function wfAttendanceMonthFirstRow_(sheet, month) {
+  const count = Math.max(0, sheet.getLastRow() - 5);
+  if (!count) return 0;
+  return sheet.getRange(6, 1, count, 1).getValues()
+    .findIndex(row => Number(row[0]) === month) + 6;
+}
+
+function wfTodayParts_() {
+  const parts = Utilities.formatDate(new Date(), 'Europe/Vilnius', 'yyyy-MM-dd').split('-').map(Number);
+  return { year: parts[0], month: parts[1], day: parts[2] };
+}
+
 function getWorkforceSnapshot(options) {
   const master = SpreadsheetApp.openById(WF_BOOKS.personnel);
   const teams = wfRows_(master.getSheetByName('Смены'), 8).filter(r=>r.values[6]).map(r=>wfTeam_(r.values));
