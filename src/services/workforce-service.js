@@ -1,4 +1,5 @@
 import { ATTENDANCE_CODES, SHIFT_TEAMS, SUBSTITUTE_ONLY_EMPLOYEE_IDS, WORKFORCE_PERSONNEL } from "../config/workforce-config.js";
+import { lithuanianCalendarDay } from "../domain/lithuanian-calendar.js";
 
 const PERSONNEL_KEY = "workforcePersonnel";
 const PERSONNEL_SOURCE_VERSION_KEY = "workforcePersonnelSourceVersion";
@@ -179,11 +180,17 @@ export function getScheduleDay(team, value) {
   const cycleLength = Math.max(1, Number(team.cycleLengthDays) || 4);
   const offset = ((difference % cycleLength) + cycleLength) % cycleLength;
   const scheduled = (team.workDayOffsets ?? [0, 1]).map(Number).includes(offset);
+  const calendar = lithuanianCalendarDay(dateKey(date));
+  // The one-hour reduction applies to a scheduled pre-holiday shift. A holiday
+  // itself remains on the production cycle; its actual work is not erased.
+  const accountingHours = scheduled ? Math.max(0, Number(team.accountingHours) - (calendar.isPreholiday ? 1 : 0)) : 0;
+  const shiftDurationHours = scheduled ? Math.max(0, Number(team.shiftDurationHours) - (calendar.isPreholiday ? 1 : 0)) : 0;
   return {
     date: dateKey(date),
     scheduled,
-    accountingHours: scheduled ? Number(team.accountingHours) : 0,
-    shiftDurationHours: scheduled ? Number(team.shiftDurationHours) : 0
+    accountingHours,
+    shiftDurationHours,
+    ...calendar
   };
 }
 
@@ -229,3 +236,4 @@ function numberBetween(value, minimum, maximum, message) {
   if (!Number.isFinite(number) || number < minimum || number > maximum) throw new Error(message);
   return number;
 }
+

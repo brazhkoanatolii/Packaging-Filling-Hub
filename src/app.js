@@ -3,6 +3,7 @@ import { ATTENDANCE_CODES, OFFICE_SCHEDULE, ROLE_LABELS, SUBSTITUTE_ONLY_EMPLOYE
 import { calculateResult, formatDate as formatJournalDate, formatDateTime as formatJournalDateTime } from "./domain/scale-check.js";
 import { formatPersonnelAge, formatPersonnelExperience } from "./domain/personnel-dates.js";
 import { getScaleControlReminder } from "./domain/scale-control-reminder.js";
+import { lithuanianCalendarDay } from "./domain/lithuanian-calendar.js";
 import { distributePersonnel } from "./domain/personnel-distribution.js";
 import { IndexedDbDataProvider } from "./providers/indexed-db-data-provider.js";
 import { GoogleSheetsGatewayProvider } from "./providers/google-sheets-gateway-provider.js";
@@ -1860,7 +1861,8 @@ function renderScheduleView() {
       ${teams.map(team => {
         const schedule = getScheduleMonth(team, ...monthParts(state.attendanceMonth));
         const workDays = schedule.filter(day => day.scheduled).length;
-        return `<article class="schedule-summary-card card"><span class="team-orb">${team.code}</span><div><strong>${escapeHtml(team.name)}</strong><small>2 рабочих / 2 выходных</small></div><dl><div><dt>Смен</dt><dd>${workDays}</dd></div><div><dt>Часов</dt><dd>${workDays * team.accountingHours}</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === team.id).length}</dd></div></dl></article>`;
+        const workHours = schedule.reduce((sum, day) => sum + day.accountingHours, 0);
+        return `<article class="schedule-summary-card card"><span class="team-orb">${team.code}</span><div><strong>${escapeHtml(team.name)}</strong><small>2 рабочих / 2 выходных · предпраздничная смена −1 ч</small></div><dl><div><dt>Смен</dt><dd>${workDays}</dd></div><div><dt>Часов</dt><dd>${workHours}</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === team.id).length}</dd></div></dl></article>`;
       }).join("")}
       <article class="schedule-summary-card office card"><span class="team-orb">5/2</span><div><strong>${OFFICE_SCHEDULE.name}</strong><small>Пн–Пт · праздничные дни нерабочие</small></div><dl><div><dt>День</dt><dd>8 ч</dd></div><div><dt>Состав</dt><dd>${activePersonnel().filter(employee => employee.shiftTeamId === "office").length}</dd></div></dl></article>
     </section>
@@ -1871,9 +1873,10 @@ function renderScheduleTeam(team, days) {
   const schedule = new Map(getScheduleMonth(team, ...monthParts(state.attendanceMonth)).map(day => [day.date, day]));
   const members = activePersonnel().filter(employee => employee.shiftTeamId === team.id).sort(comparePersonnel);
   const scheduledDays = [...schedule.values()].filter(day => day.scheduled).length;
+  const scheduledHours = [...schedule.values()].reduce((sum, day) => sum + day.accountingHours, 0);
   return `<section class="card schedule-team-card">
-    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>${team.shiftDurationHours} часов · к учёту ${team.accountingHours}</small></span></div><div><b>${scheduledDays}</b><small>рабочих смен</small></div></header>
-    <div class="attendance-scroll"><table class="attendance-table schedule-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Итого</th></tr></thead><tbody>${members.map(employee => `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${days.map(day => `<td class="${day.isToday ? "today" : ""} ${schedule.get(day.date)?.scheduled ? "is-scheduled" : "is-rest"}"><span>${schedule.get(day.date)?.scheduled ? team.code : "·"}</span></td>`).join("")}<td class="total-column"><strong>${scheduledDays * team.accountingHours}</strong></td></tr>`).join("")}</tbody></table></div>
+    <header><div><span class="team-orb">${team.code}</span><span><strong>${escapeHtml(team.name)}</strong><small>${team.shiftDurationHours} часов · к учёту ${team.accountingHours} · перед праздником −1 ч</small></span></div><div><b>${scheduledDays}</b><small>${scheduledHours} учётных ч</small></div></header>
+    <div class="attendance-scroll"><table class="attendance-table schedule-table"><thead><tr><th class="attendance-person">Сотрудник</th>${days.map(day => dayHeader(day)).join("")}<th class="total-column">Итого</th></tr></thead><tbody>${members.map(employee => `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small></th>${days.map(day => { const shiftDay = schedule.get(day.date); return `<td class="${dayClasses(day)} ${shiftDay?.scheduled ? "is-scheduled" : "is-rest"}" title="${attribute(calendarTitle(day))}"><span>${shiftDay?.scheduled ? team.code : "·"}</span>${shiftDay?.scheduled && day.isPreholiday ? '<small class="preholiday-shift">−1 ч</small>' : ""}</td>`; }).join("")}<td class="total-column"><strong>${scheduledHours}</strong></td></tr>`).join("")}</tbody></table></div>
   </section>`;
 }
 
@@ -1918,17 +1921,17 @@ function renderTimesheetRow(employee, team, days, schedule, records) {
     const record = records.get(`${employee.id}:${day.date}`);
     const scheduled = schedule.get(day.date)?.scheduled;
     const future = day.date > today();
-    if (!record && (!scheduled || future)) return `<td class="${day.isToday ? "today" : ""} ${future ? "is-future" : "is-rest"}">·</td>`;
+    if (!record && (!scheduled || future)) return `<td class="${dayClasses(day)} ${future ? "is-future" : "is-rest"}" title="${attribute(calendarTitle(day))}">·</td>`;
     const vacation = vacationForDay(employee.id, day.date);
     // An approved vacation fills the timesheet automatically.  A real
     // attendance record always wins, so an early return to work remains a
     // normal manual correction.
-    const value = record?.value ?? (vacation ? "A" : (workforceRepository ? "" : String(team.accountingHours)));
+    const value = record?.value ?? (vacation ? "A" : (workforceRepository ? "" : String(schedule.get(day.date)?.accountingHours ?? team.accountingHours)));
     const hours = Number(value);
     if (Number.isFinite(hours)) total += hours;
     const canEdit = canEditTimesheetDate(day.date);
     const editNote = canEdit ? "" : " title=\"Прошлые даты может исправлять только Администрация\"";
-    return `<td class="timesheet-cell ${day.isToday ? "today" : ""} ${canEdit ? "" : "is-readonly"} tone-${attendanceTone(value, team.accountingHours)}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}"${editNote} ${canEdit ? "" : "disabled"}>${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
+    return `<td class="timesheet-cell ${dayClasses(day)} ${canEdit ? "" : "is-readonly"} tone-${attendanceTone(value, team.accountingHours)}" title="${attribute(calendarTitle(day))}"><select data-timesheet-cell data-date="${day.date}" data-shift-team-id="${team.id}" data-employee-id="${employee.id}" aria-label="${attribute(`${employee.fullName}, ${day.date}`)}"${editNote} ${canEdit ? "" : "disabled"}>${value === "" ? '<option value="" selected disabled>—</option>' : ""}${timesheetOptions(value, team.accountingHours)}</select></td>`;
   }).join("");
   return `<tr><th class="attendance-person"><strong>${escapeHtml(employee.fullName)}</strong><small>${escapeHtml(roleLabel(employee.role))}</small>${substituteNote}</th>${cells}<td class="total-column"><strong>${total}</strong></td></tr>`;
 }
@@ -3427,7 +3430,18 @@ function monthParts(value) {
 }
 
 function dayHeader(day) {
-  return `<th class="${day.isToday ? "today" : ""}"${day.isToday ? ' aria-label="Сегодня"' : ""}><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small>${day.isToday ? "<em>Сегодня</em>" : ""}</th>`;
+  const marker = day.isHoliday ? "Праздник" : day.isPreholiday ? "−1 ч" : "";
+  return `<th class="${dayClasses(day)}" title="${attribute(calendarTitle(day))}"${day.isToday ? ' aria-label="Сегодня"' : ""}><strong>${day.day}</strong><small>${escapeHtml(day.weekday)}</small>${marker ? `<em>${marker}</em>` : ""}</th>`;
+}
+
+function dayClasses(day) { return [day.isToday ? "today" : "", day.isHoliday ? "holiday" : "", day.isPreholiday ? "preholiday" : ""].filter(Boolean).join(" "); }
+function calendarTitle(day) {
+  const names = day.holidays?.map(item => item.name) ?? [];
+  const preholidayNames = day.preholidayFor?.map(item => item.name) ?? [];
+  if (names.length && preholidayNames.length) return `Праздник: ${names.join(", ")}. Канун: ${preholidayNames.join(", ")} · −1 ч по графику.`;
+  if (names.length) return `Праздник: ${names.join(", ")}`;
+  if (preholidayNames.length) return `Предпраздничный день перед: ${preholidayNames.join(", ")} · −1 ч по графику.`;
+  return "";
 }
 
 function attendanceTone(value) {
@@ -3681,7 +3695,8 @@ function monthDays(value) {
       day,
       date,
       weekday: new Intl.DateTimeFormat(localeCode(), { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day, 12))).replace(".", ""),
-      isToday: date === today()
+      isToday: date === today(),
+      ...lithuanianCalendarDay(date)
     };
   });
 }

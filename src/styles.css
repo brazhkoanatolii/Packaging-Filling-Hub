@@ -581,6 +581,13 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .attendance-table thead th.today { background: linear-gradient(145deg, var(--green-600), var(--green-700)); color: #fff; box-shadow: inset 3px 0 0 color-mix(in srgb, #fff 42%, var(--green-600)), inset -3px 0 0 color-mix(in srgb, #fff 42%, var(--green-600)); }
 .attendance-table thead th.today small { color: color-mix(in srgb, #fff 78%, transparent); }
 .attendance-table thead th.today em { display: inline-block; margin-top: 4px; padding: 2px 5px; border-radius: 5px; background: rgba(255,255,255,.2); color: #fff; font-size: .54rem; font-style: normal; font-weight: 900; letter-spacing: .03em; text-transform: uppercase; }
+.attendance-table .holiday { background: #fee2e2; box-shadow: inset 3px 0 0 #dc2626, inset -3px 0 0 #dc2626; }
+.attendance-table thead th.holiday { background: #b91c1c; color: #fff; }
+.attendance-table thead th.holiday small { color: #fecaca; }
+.attendance-table .preholiday { background: #fef3c7; box-shadow: inset 3px 0 0 #d97706, inset -3px 0 0 #d97706; }
+.attendance-table thead th.preholiday { background: #b45309; color: #fff; }
+.attendance-table thead th.preholiday small { color: #fde68a; }
+.attendance-table thead th.holiday em, .attendance-table thead th.preholiday em { display: inline-block; margin-top: 4px; padding: 2px 5px; border-radius: 5px; background: rgba(255,255,255,.2); color: #fff; font-size: .54rem; font-style: normal; font-weight: 900; letter-spacing: .03em; text-transform: uppercase; }
 .attendance-legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 18px 18px; color: var(--ink-500); font-size: .72rem; }
 .attendance-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend-swatch { width: 12px; height: 12px; border-radius: 4px; background: var(--green-100); }
@@ -816,6 +823,7 @@ td > small { margin-top: 2px; color: var(--ink-500); font-size: .68rem; }
 .schedule-table td > span { display: grid; width: 28px; height: 28px; margin: auto; place-items: center; border-radius: 9px; font-size: .68rem; font-weight: 850; }
 .schedule-table td.is-scheduled > span { background: var(--green-100); color: var(--green-600); }
 .schedule-table td.is-rest > span { color: color-mix(in srgb,var(--ink-500) 45%,transparent); }
+.schedule-table td .preholiday-shift { display: block; margin-top: 2px; color: #9a3412; font-size: .56rem; font-weight: 850; line-height: 1; }
 .attendance-table .total-column { position: sticky; right: 0; z-index: 1; min-width: 62px; background: color-mix(in srgb,var(--surface) 92%,var(--green-100)); }
 .attendance-table thead .total-column { z-index: 3; }
 
