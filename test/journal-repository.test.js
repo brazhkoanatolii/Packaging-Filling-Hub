@@ -23,6 +23,7 @@ test("старые демонстрационные данные сохране�
 class MemoryProvider {
   constructor() {
     this.stores = new Map();
+    this.preferences = new Map();
   }
 
   bucket(name) {
@@ -34,6 +35,8 @@ class MemoryProvider {
   async getAll(name) { return [...this.bucket(name).values()]; }
   async put(name, value) { this.bucket(name).set(value.id, structuredClone(value)); return value; }
   async delete(name, id) { this.bucket(name).delete(id); }
+  async preference(key, fallback = null) { return this.preferences.has(key) ? structuredClone(this.preferences.get(key)) : fallback; }
+  async setPreference(key, value) { this.preferences.set(key, structuredClone(value)); }
 }
 
 class RemoteProvider {
@@ -82,6 +85,22 @@ test("конфликт версий не перезаписывается мол
   assert.equal(result.conflicts, 1);
   assert.equal((await repository.pendingOperations())[0].state, "conflict");
   assert.equal((await repository.get("scale-1")).syncState, "conflict");
+});
+
+test("оставить версию Google снимает конфликт и сохраняет локальный черновик", async () => {
+  const local = new MemoryProvider();
+  const remote = new RemoteProvider({ conflict: true });
+  remote.list = async () => [record({ id: "scale-1", source: "google", version: 7, syncState: "synced" })];
+  const repository = new JournalRepository(local, remote);
+  await repository.save(record({ version: 2 }), { type: "update", expectedVersion: 2, actor: "Тест" });
+  await repository.sync();
+  const [operation] = await repository.pendingOperations();
+
+  await repository.acceptRemoteOperation(operation.id);
+
+  assert.equal((await repository.pendingOperations()).length, 0);
+  assert.equal((await repository.get("scale-1")).version, 7);
+  assert.equal((await local.preference("rejectedJournalDrafts")).length, 1);
 });
 
 test("ошибка сети оставляет операцию в очереди для повторной отправки", async () => {

@@ -90,6 +90,15 @@ export class JournalRepository {
     return result;
   }
 
+  async acceptRemoteOperation(operationId) {
+    const operation = await this.local.get("operations", operationId);
+    if (!operation || operation.state !== "conflict") throw new Error("Для этой записи нет конфликта с Google.");
+    const history = await this.local.preference("rejectedJournalDrafts", []);
+    await this.local.setPreference("rejectedJournalDrafts", [...history, { ...operation, resolvedAt: new Date().toISOString() }]);
+    await this.local.delete("operations", operationId);
+    await this.refresh();
+  }
+
   async refresh() {
     const remoteRecords = await this.remote.list();
     const pendingIds = new Set((await this.pendingOperations()).map(item => item.recordId));

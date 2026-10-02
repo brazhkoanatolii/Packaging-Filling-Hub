@@ -811,6 +811,18 @@ async function handleClick(event) {
       await syncRecords();
       return;
     }
+    if (action === "sync-queue-source") {
+      await syncQueueSource(actionElement.dataset.source);
+      return;
+    }
+    if (action === "queue-accept-remote") {
+      if (!window.confirm("Оставить версию Google? Локальный черновик будет сохранён только в журнале истории этого компьютера.")) return;
+      await repository.acceptRemoteOperation(id);
+      await reloadLocalState();
+      render();
+      toast("Оставлена версия Google. Локальный черновик сохранён в истории.", "success");
+      return;
+    }
     if (action === "attendance-month") {
       state.attendanceMonth = shiftMonth(state.attendanceMonth, Number(actionElement.dataset.offset || 0));
       render();
@@ -1214,6 +1226,30 @@ async function syncRecords({ silent = false } = {}) {
     state.syncing = false;
     state.syncTransfer = { active: false, source: "" };
     if (!(silent && isEditingField())) render();
+  }
+}
+
+async function syncQueueSource(source) {
+  if (!navigator.onLine) {
+    toast("Нет интернета. Запись останется в очереди.", "warning");
+    return;
+  }
+  if (source === "checks") {
+    await syncRecords();
+    return;
+  }
+  try {
+    if (source === "workforce") state.workforce = await syncWorkforce();
+    if (source === "packaging") state.packaging = await packagingService?.sync();
+    if (source === "cyclones") state.cyclones = await cycloneService?.sync();
+    await reloadLocalState();
+    state.lastRefresh = new Date().toISOString();
+    render();
+    toast("Очередь выбранного журнала отправлена в Google.", "success");
+  } catch (error) {
+    await reloadLocalState();
+    render();
+    toast(error.message || "Не удалось отправить очередь.", "warning");
   }
 }
 
@@ -2343,10 +2379,8 @@ function renderCompactRecords(records) {
 }
 
 function renderSyncPage() {
-  const conflicts = state.operations.filter(item => item.state === "conflict");
-  const pending = state.operations.filter(item => item.state === "pending");
-  const workforcePending = state.workforce?.pending ?? [];
-  const workforceConflicts = workforcePending.filter(item => item.status === "conflict" || item.status === "error");
+  const entries = queueEntries();
+  const conflicts = entries.filter(item => item.conflict);
   return `
     <div class="sync-summary card">
       <div class="sync-illustration ${navigator.onLine ? "online" : "offline"}">${syncLargeIcon()}</div>
@@ -2358,14 +2392,52 @@ function renderSyncPage() {
       <button class="primary-button" data-action="sync" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Отправляем…" : "Синхронизировать"}</button>
     </div>
     <div class="metric-grid three">
-       ${metricCard("В очереди", pending.length + workforcePending.length, "Ожидает отправки", pending.length + workforcePending.length ? "warning" : "neutral")}
-       ${metricCard("Конфликты", conflicts.length + workforceConflicts.length, conflicts.length + workforceConflicts.length ? "Нужно выбрать версию" : "Конфликтов нет", conflicts.length + workforceConflicts.length ? "danger" : "success")}
+       ${metricCard("В очереди", entries.length, "Ожидает отправки", entries.length ? "warning" : "neutral")}
+       ${metricCard("Конфликты", conflicts.length, conflicts.length ? "Нужно выбрать версию" : "Конфликтов нет", conflicts.length ? "danger" : "success")}
       ${metricCard("Последнее обновление", state.lastRefresh ? formatDateTime(state.lastRefresh) : "—", "Автоматически каждые 60 секунд", "neutral", true)}
     </div>
     <section class="card queue-card">
       <div class="section-heading"><div><p class="eyebrow">Локальная очередь</p><h2>Неотправленные изменения</h2></div></div>
-       ${state.operations.length || workforcePending.length ? `<div class="queue-list">${state.operations.map(renderOperation).join("")}${workforcePending.map(renderWorkforceOperation).join("")}</div>` : `<div class="empty-state"><span>✓</span><h3>Всё отправлено</h3><p>На этом компьютере нет ожидающих изменений.</p></div>`}
+       ${entries.length ? `<div class="queue-list">${entries.map(renderQueueEntry).join("")}</div>` : `<div class="empty-state"><span>✓</span><h3>Всё отправлено</h3><p>На этом компьютере нет ожидающих изменений.</p></div>`}
     </section>`;
+}
+
+function queueEntries() {
+  const checks = (state.operations ?? []).map(operation => ({
+    source: "checks", id: operation.id, title: `${operation.record?.scaleName || "Контроль весов"} · ${formatNumber(operation.record?.actual)} г`,
+    detail: `${operationLabel(operation.type)} · ${formatDateTime(operation.createdAt)}`,
+    conflict: operation.state === "conflict", error: operation.error, operation
+  }));
+  const labels = { personnel: "Персонал", shiftTeams: "Смены", attendance: "Табель", vacations: "График отпусков" };
+  const workforce = (state.workforce?.pending ?? []).map(operation => ({
+    source: "workforce", id: operation.requestId, title: labels[operation.kind] || "Журнал персонала",
+    detail: `${operation.actor?.performer || "Автор не указан"} · ${formatDateTime(operation.record?.updatedAt || new Date().toISOString())}`,
+    conflict: operation.status === "conflict" || operation.status === "error", error: operation.error, operation
+  }));
+  const packaging = (state.packaging?.operations ?? []).map(operation => ({
+    source: "packaging", id: operation.id, title: "Расход упаковки",
+    detail: `${operation.record?.date || "Дата не указана"} · ${operation.type === "delete" ? "удаление записи" : "сохранение записи"}`,
+    conflict: Boolean(operation.error), error: operation.error, operation
+  }));
+  const cyclones = (state.cyclones?.operations ?? []).map(operation => ({
+    source: "cyclones", id: operation.id, title: "Очистка циклонов",
+    detail: `${operation.record?.date || "Дата не указана"} · ${operation.record?.performer || "исполнитель не указан"}`,
+    conflict: Boolean(operation.error), error: operation.error, operation
+  }));
+  return [...checks, ...workforce, ...packaging, ...cyclones];
+}
+
+function renderQueueEntry(entry) {
+  const status = entry.conflict ? "Конфликт" : "В очереди";
+  const sourceButton = `<button class="small-button" data-action="sync-queue-source" data-source="${entry.source}">Отправить журнал</button>`;
+  let actions = sourceButton;
+  if (entry.source === "checks" && entry.conflict) actions = `<button class="small-button" data-action="queue-accept-remote" data-id="${attribute(entry.id)}">Оставить версию Google</button>`;
+  if (entry.source === "workforce" && entry.conflict) {
+    const retry = entry.operation.kind === "attendance" ? `<button class="small-button" data-action="workforce-retry-missing-attendance" data-id="${attribute(entry.id)}">Отправить, если в Google пусто</button>` : "";
+    const overwrite = entry.operation.kind === "vacations" ? `<button class="small-button" data-action="workforce-overwrite-vacation" data-id="${attribute(entry.id)}">Отправить мою версию</button>` : "";
+    actions = `${retry}${overwrite}<button class="small-button" data-action="workforce-accept-remote" data-id="${attribute(entry.id)}">Оставить версию Google</button>`;
+  }
+  return `<div class="queue-item"><span class="queue-icon ${entry.conflict ? "conflict" : "pending"}">${entry.conflict ? "!" : "↥"}</span><span><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.detail)}${entry.error ? ` · ${escapeHtml(entry.error)}` : ""}</small></span><span class="status-pill ${entry.conflict ? "danger" : "warning"}">${status}</span><span class="queue-actions">${actions}</span></div>`;
 }
 
 function renderOperation(operation) {
@@ -3044,9 +3116,9 @@ function renderPreparationReminder() {
 }
 
 function connectionBadge() {
-  const pending = state.operations.length;
+  const pending = queueEntries().length;
   const network = `<span class="connection-badge ${navigator.onLine ? "online" : "offline"}" title="${navigator.onLine ? "Подключение к сети доступно" : "Нет подключения к сети"}"><i></i>${navigator.onLine ? ui("online") : ui("offline")}</span>`;
-  const queue = pending ? `<span class="queue-badge" title="${pending} записей ожидают отправки в Google"><i>↥</i>Очередь: <b>${pending}</b></span>` : "";
+  const queue = pending ? `<button class="queue-badge" data-action="navigate" data-page="sync" title="${pending} записей ожидают отправки в Google"><i>↥</i>Очередь: <b>${pending}</b></button>` : "";
   return `${network}${queue}`;
 }
 
