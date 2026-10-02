@@ -689,10 +689,14 @@ async function handleClick(event) {
       return;
     }
     if (action === "install-update") {
-      if (!state.update.available || state.update.installing) return;
+      if (state.update.installing) return;
       state.update.installing = true;
       render();
-      const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update`, { method: "POST", headers: { Accept: "application/json" } });
+      const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true })
+      });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.message || "Не удалось запустить обновление");
       toast("Обновление скачивается и проверяется. Ожидаем запуск новой версии…", "success");
@@ -1313,7 +1317,7 @@ function renderApplication() {
             <button class="utility-button language-button" data-action="cycle-language" title="${ui("language")}" aria-label="${ui("language")}"><b>${language.label}</b><span>${language.name}</span></button>
             <button class="icon-button theme-button" data-action="toggle-theme" title="${ui("theme")}" aria-label="${ui("theme")}">${state.theme === "dark" ? sunIcon() : moonIcon()}</button>
             ${connectionBadge()}
-            <button class="utility-button ${state.update.available ? "update-available" : ""}" data-action="${state.update.available ? "install-update" : "check-update"}" title="${escapeHtml(state.update.message || "Проверить обновление программы")}" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Обновляем…" : state.update.available ? `Обновить ${escapeHtml(state.update.version)}` : "Обновить программу"}</button>
+            <button class="utility-button ${state.update.available ? "update-available" : ""}" data-action="install-update" title="${escapeHtml(state.update.message || "Скачать и установить опубликованную версию программы")}" ${state.update.installing ? "disabled" : ""}>${state.update.installing ? "Обновляем…" : state.update.available ? `Обновить ${escapeHtml(state.update.version)}` : "Обновить программу"}</button>
             <button class="icon-button" data-action="refresh-and-reload" title="Обновить данные и экран (как F5)" aria-label="Обновить данные и экран" ${(state.refreshing || state.startupSync.active) ? "disabled" : ""}>${(state.refreshing || state.startupSync.active) ? "…" : refreshIcon()}</button>
           </div>
         </header>

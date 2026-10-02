@@ -227,12 +227,15 @@ createServer(async (request, response) => {
       return sendJson(response, 200, { ok: true, ...updateInstallationSafety() });
     }
     if (url.pathname === "/api/update" && request.method === "POST") {
-      const safety = updateInstallationSafety();
+      const input = await readJsonBody(request);
+      const force = input?.force === true;
+      const safety = updateInstallationSafety({ allowQueuedOperations: force });
       if (!safety.safe) return sendJson(response, 409, { ok: false, message: safety.message });
       const update = await getUpdateStatus();
-      if (!update.available) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
+      if (!update.available && !force) return sendJson(response, 409, { ok: false, message: "Новой версии нет" });
+      if (!update.packageUrl || !update.sha256 || !update.version) return sendJson(response, 503, { ok: false, message: "Не удалось получить проверенный пакет обновления" });
       if (process.platform !== "win32") return sendJson(response, 501, { ok: false, message: "Автообновление доступно только в Windows" });
-      startVerifiedUpdate(update, "ручной запуск");
+      startVerifiedUpdate(update, force ? "принудительный запуск" : "ручной запуск");
       return sendJson(response, 202, { ok: true, version: update.version });
     }
 
@@ -466,7 +469,7 @@ function recordUpdateActivity(input) {
   });
 }
 
-function updateInstallationSafety() {
+function updateInstallationSafety({ allowQueuedOperations = false } = {}) {
   const now = Date.now();
   for (const [sessionId, session] of updateActivitySessions) {
     if (now - session.seenAt > updateActivityTtlMs) updateActivitySessions.delete(sessionId);
@@ -478,7 +481,7 @@ function updateInstallationSafety() {
   // draft, an in-flight save, or a queued operation can put data at risk.
   const blockers = [...updateActivitySessions.values()].filter(session => session.dirty
     || session.submitting
-    || session.pending > 0);
+    || (!allowQueuedOperations && session.pending > 0));
   if (!blockers.length) return { safe: true, message: "Можно устанавливать обновление" };
   const hasDraft = blockers.some(session => session.dirty || session.submitting);
   const hasQueue = blockers.some(session => session.pending > 0);
@@ -574,9 +577,10 @@ async function readFreshUpdateManifest() {
 
 function updateStatusFromManifest(base, manifest) {
   if (!isSafeUpdateManifest(manifest)) return null;
+  const update = { ...base, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256 };
   return compareVersions(manifest.version, appVersion) > 0
-    ? { ...base, available: true, version: manifest.version, packageUrl: manifest.packageUrl, sha256: manifest.sha256, message: `Доступна версия ${manifest.version}` }
-    : base;
+    ? { ...update, available: true, message: `Доступна версия ${manifest.version}` }
+    : { ...update, message: "Установлена актуальная версия" };
 }
 
 function pinUpdatePackageToCommit(manifest, commit) {
