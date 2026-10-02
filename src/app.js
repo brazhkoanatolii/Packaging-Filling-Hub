@@ -3015,7 +3015,10 @@ function renderPreparationReminder() {
 }
 
 function connectionBadge() {
-  return `<span class="connection-badge ${navigator.onLine ? "online" : "offline"}" title="${state.operations.length ? `В очереди: ${state.operations.length}` : "Очередь пуста"}"><i></i>${navigator.onLine ? ui("online") : ui("offline")}${state.operations.length ? `<b>${state.operations.length}</b>` : ""}</span>`;
+  const pending = state.operations.length;
+  const network = `<span class="connection-badge ${navigator.onLine ? "online" : "offline"}" title="${navigator.onLine ? "Подключение к сети доступно" : "Нет подключения к сети"}"><i></i>${navigator.onLine ? ui("online") : ui("offline")}</span>`;
+  const queue = pending ? `<span class="queue-badge" title="${pending} записей ожидают отправки в Google"><i>↥</i>Очередь: <b>${pending}</b></span>` : "";
+  return `${network}${queue}`;
 }
 
 function recordStatus(record) {
