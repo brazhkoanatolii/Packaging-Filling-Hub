@@ -229,6 +229,7 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/update" && request.method === "POST") {
       const input = await readJsonBody(request);
       const force = input?.force === true;
+      recordUpdateActivity(input?.activity);
       const safety = updateInstallationSafety({ allowQueuedOperations: force });
       if (!safety.safe) return sendJson(response, 409, { ok: false, message: safety.message });
       const update = await getUpdateStatus();
@@ -460,6 +461,10 @@ async function runAutomaticUpdate() {
 function recordUpdateActivity(input) {
   const sessionId = String(input?.sessionId || "").trim();
   if (!/^[a-zA-Z0-9-]{16,128}$/.test(sessionId)) return;
+  if (input?.closed === true) {
+    updateActivitySessions.delete(sessionId);
+    return;
+  }
   updateActivitySessions.set(sessionId, {
     dirty: input?.dirty === true,
     submitting: input?.submitting === true,

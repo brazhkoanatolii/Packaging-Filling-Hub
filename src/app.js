@@ -229,6 +229,9 @@ function bindGlobalEvents() {
     if (!document.hidden) noteUpdateInteraction();
     else void sendUpdateSafetyHeartbeat({ keepalive: true });
   });
+  // A page reload or a closed window must not leave a stale "unsaved form"
+  // marker at the local gateway for the next five minutes.
+  window.addEventListener("pagehide", () => clearUpdateSafetySession());
   window.addEventListener("keydown", event => {
     if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "F5") {
       event.preventDefault();
@@ -275,12 +278,35 @@ function pendingUpdateOperations() {
 function updateSafetyPayload() {
   return {
     sessionId: updateActivity.sessionId,
-    dirty: Boolean(document.querySelector("form[data-update-dirty='true']")),
+    dirty: hasUnsavedUpdateForm(),
     submitting: Date.now() < updateActivity.submittingUntil,
     pending: pendingUpdateOperations(),
     lastInteractionAt: updateActivity.lastInteractionAt,
     visible: !document.hidden
   };
+}
+
+function hasUnsavedUpdateForm() {
+  return [...document.querySelectorAll("form[data-update-dirty='true']")].some(form => {
+    const dialog = form.closest("dialog");
+    return !dialog || dialog.open;
+  });
+}
+
+function clearUpdateSafetySession() {
+  if (!state.account || !navigator.onLine) return;
+  const payload = JSON.stringify({ sessionId: updateActivity.sessionId, closed: true });
+  const url = `${APP_CONFIG.integration.gatewayBaseUrl}/api/update-activity`;
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(url, new Blob([payload], { type: "application/json" }));
+    return;
+  }
+  void fetch(url, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: payload,
+    keepalive: true
+  });
 }
 
 async function sendUpdateSafetyHeartbeat({ keepalive = false } = {}) {
@@ -692,10 +718,13 @@ async function handleClick(event) {
       if (state.update.installing) return;
       state.update.installing = true;
       render();
+      // Send the exact state of this screen first. It prevents an old value
+      // from a just-closed dialogue from blocking the requested update.
+      await sendUpdateSafetyHeartbeat();
       const response = await fetch(`${APP_CONFIG.integration.gatewayBaseUrl}/api/update`, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ force: true })
+        body: JSON.stringify({ force: true, activity: updateSafetyPayload() })
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.message || "Не удалось запустить обновление");
