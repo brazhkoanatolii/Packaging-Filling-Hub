@@ -224,7 +224,8 @@ createServer(async (request, response) => {
       return sendJson(response, 200, { ok: true, ...updateInstallationSafety() });
     }
     if (url.pathname === "/api/update-safety" && request.method === "GET") {
-      return sendJson(response, 200, { ok: true, ...updateInstallationSafety() });
+      const allowQueuedOperations = url.searchParams.get("allowQueuedOperations") === "true";
+      return sendJson(response, 200, { ok: true, ...updateInstallationSafety({ allowQueuedOperations }) });
     }
     if (url.pathname === "/api/update" && request.method === "POST") {
       const input = await readJsonBody(request);
@@ -447,7 +448,9 @@ createServer(async (request, response) => {
 async function runAutomaticUpdate() {
   if (automaticUpdateRunning || Date.now() - automaticUpdateAttemptAt < 55_000) return;
   automaticUpdateAttemptAt = Date.now();
-  const safety = updateInstallationSafety();
+  // The installer preserves IndexedDB and .runtime, so a local retry queue
+  // survives an update. A queued Google operation must never block a release.
+  const safety = updateInstallationSafety({ allowQueuedOperations: true });
   if (!safety.safe) return;
   const update = await getUpdateStatus();
   if (!update.available) return;

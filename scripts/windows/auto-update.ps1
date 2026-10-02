@@ -66,7 +66,9 @@ function Get-UpdateSafety {
   $port = Get-EnvironmentValue -Path $environmentPath -Name "PORT"
   if (-not $port) { $port = "4173" }
   try {
-    $status = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/update-safety" -TimeoutSec 8 -UseBasicParsing
+    # Local retry queues are preserved by the installer. Only an unfinished
+    # form or an active save may postpone an automatic program update.
+    $status = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/update-safety?allowQueuedOperations=true" -TimeoutSec 8 -UseBasicParsing
     if ($status.ok -and $status.safe) { return @{ Safe = $true; Message = [string]$status.message } }
     $message = [string]$status.message
     if (-not $message) { $message = "Безопасность обновления не подтверждена" }
