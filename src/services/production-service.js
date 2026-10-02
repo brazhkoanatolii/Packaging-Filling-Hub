@@ -121,11 +121,18 @@ function validateProductionRecord(input, { packers, operators }) {
   const seniorMechanic = String(input.leadership?.seniorMechanic || "").trim();
   const mechanic = String(input.leadership?.mechanic || "").trim();
   if (!seniorMechanic) throw new Error("Выберите старшего механика из текущей смены");
+  const quantity = numeric("quantity", "Количество готовой продукции", true);
+  const scrapKg = numeric("scrapKg", "Брак продукции");
+  const rawScrapPercent = input.scrapPercent;
+  const scrapPercent = rawScrapPercent === null || rawScrapPercent === undefined || rawScrapPercent === ""
+    ? null
+    : numeric("scrapPercent", "Процент брака");
+  if (scrapPercent !== null && scrapPercent >= 1) throw new Error("Процент брака должен быть меньше 100%");
   return {
     requestId: String(input.requestId || makeId("production-request")), date, startTime, time,
     product: text("product", "Продукт"), strength: numeric("strength", "Крепость", true),
     catalogLine: text("catalogLine", "Линейка продукта"),
-    quantity: numeric("quantity", "Количество готовой продукции", true), scrapKg: numeric("scrapKg", "Брак продукции"),
+    quantity, scrapKg, scrapPercent,
     canScrapKg: numeric("canScrapKg", "Вес бракованных банок"), packer,
     operator: [operator, operatorSecond].filter(Boolean).join(PARTICIPANT_SEPARATOR), machineLine: line, shift,
     seniorMechanic, mechanic, note

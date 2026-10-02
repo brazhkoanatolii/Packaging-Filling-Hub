@@ -1378,10 +1378,12 @@ async function writeProductionRecord(accessToken, record, leaders, firstRowNumbe
   await setGoogleSheetRanges(productionSpreadsheetId, accessToken, [
     { range: `'Учет продукции 1'!B${firstRowNumber}:H${firstRowNumber}`, values: [first.beforeBoxes] },
     { range: `'Учет продукции 1'!J${firstRowNumber}:J${firstRowNumber}`, values: [[first.scrapKg]] },
+    { range: `'Учет продукции 1'!K${firstRowNumber}:K${firstRowNumber}`, values: [[record.scrapPercent ?? ""]] },
     { range: `'Учет продукции 1'!L${firstRowNumber}:L${firstRowNumber}`, values: [[first.canScrapKg]] },
     { range: `'Учет продукции 1'!M${firstRowNumber}:R${firstRowNumber}`, values: [first.afterBoxes] },
     { range: `'Учет продукции 2'!A${secondRowNumber}:G${secondRowNumber}`, values: [second.beforeBoxes] },
     { range: `'Учет продукции 2'!I${secondRowNumber}:I${secondRowNumber}`, values: [[second.scrapKg]] },
+    { range: `'Учет продукции 2'!J${secondRowNumber}:J${secondRowNumber}`, values: [[record.scrapPercent ?? ""]] },
     { range: `'Учет продукции 2'!K${secondRowNumber}:R${secondRowNumber}`, values: [second.afterBoxes] }
   ]);
 }
@@ -1491,6 +1493,7 @@ async function sortProductionDaysByLine(accessToken, dates) {
       ranges.push(
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!B${start}:H${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!J${start}:J${end}`, values: first.map(row => [row.scrapKg]) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!K${start}:K${end}`, values: first.map(row => [row.scrapPercent ?? ""]) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!L${start}:L${end}`, values: first.map(row => [row.canScrapKg]) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 1'!M${start}:R${end}`, values: first.map(row => productionFirstValues({ ...row, machineLine: row.line }, row).afterBoxes) }
       );
@@ -1501,6 +1504,7 @@ async function sortProductionDaysByLine(accessToken, dates) {
       ranges.push(
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!A${start}:G${end}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).beforeBoxes) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!I${start}:I${end}`, values: second.map(row => [row.scrapKg]) },
+        { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!J${start}:J${end}`, values: second.map(row => [row.scrapPercent ?? ""]) },
         { range: `'\u0423\u0447\u0435\u0442 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438 2'!K${start}:R${end}`, values: second.map(row => productionSecondValues({ ...row, machineLine: row.line }, row).afterBoxes) }
       );
     }
@@ -1863,11 +1867,18 @@ function validateGatewayProductionRecord(input) {
   if (!['A', 'B'].includes(shift)) throw new Error("Смена должна быть определена из табеля");
   const requestId = text("requestId", "Идентификатор запроса", 160);
   if (!/^[a-zA-Z0-9_-]{8,160}$/.test(requestId)) throw new Error("Некорректный идентификатор запроса");
+  const quantity = decimal("quantity", "\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0433\u043e\u0442\u043e\u0432\u043e\u0439 \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438", true);
+  const scrapKg = decimal("scrapKg", "\u0411\u0440\u0430\u043a \u043f\u0440\u043e\u0434\u0443\u043a\u0446\u0438\u0438");
+  const rawScrapPercent = input?.scrapPercent;
+  const scrapPercent = rawScrapPercent === null || rawScrapPercent === undefined || rawScrapPercent === ""
+    ? null
+    : decimal("scrapPercent", "\u041f\u0440\u043e\u0446\u0435\u043d\u0442 \u0431\u0440\u0430\u043a\u0430");
+  if (scrapPercent !== null && scrapPercent >= 1) throw new Error("\u041f\u0440\u043e\u0446\u0435\u043d\u0442 \u0431\u0440\u0430\u043a\u0430 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u043c\u0435\u043d\u044c\u0448\u0435 100%");
   return {
     requestId,
     date, startTime, time, catalogLine: text("catalogLine", "Линейка продукта", 180), product: text("product", "Продукт", 180),
-    strength: decimal("strength", "Крепость", true), quantity: decimal("quantity", "Количество готовой продукции", true),
-    scrapKg: decimal("scrapKg", "Брак продукции"), canScrapKg: decimal("canScrapKg", "Вес бракованных банок"),
+    strength: decimal("strength", "Крепость", true), quantity,
+    scrapKg, scrapPercent, canScrapKg: decimal("canScrapKg", "Вес бракованных банок"),
     packer: text("packer", "Упаковщик", 180), operator: text("operator", "Механик-оператор", 360), machineLine, shift,
     note: String(input?.note || "").trim().slice(0, 5000)
   };
@@ -2251,7 +2262,7 @@ async function getSheetId(spreadsheetId, sheetName, accessToken) {
 function packagingRecordFromRow(row, rowNumber, note) {
   if (!row?.some(value => value !== "" && value !== undefined)) return null;
   const date = googleSheetDate(row[0]);
-  if (!date && /^(Год|Месяц):/.test(String(row[0] || "").trim())) return null;
+  if (!date && row.slice(1).every(value => String(value ?? "").trim() === "")) return null;
   if (!date) throw new Error(`Проверьте строку ${rowNumber} журнала расхода упаковки`);
   let receipt = {};
   if (String(note).startsWith(packagingReceiptPrefix)) { try { receipt = JSON.parse(String(note).slice(packagingReceiptPrefix.length)); } catch { throw new Error(`Повреждена служебная отметка в строке ${rowNumber}`); } }

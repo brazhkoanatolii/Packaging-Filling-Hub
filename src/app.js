@@ -2132,8 +2132,14 @@ function openProductionDialog(record = null) {
     try {
       const people = { packers: packerNames, operators: operatorNames };
       const leadership = activeShiftLeadership();
-      if (record) await productionService.update(record.id, { ...data, leadership }, people);
-      else await productionService.create({ ...data, leadership, requestId: createRequestId }, people);
+      const finishedMassKg = productionFinishedMassKg(data, state.specifications.specifications);
+      const scrapKg = Number(String(data.scrapKg ?? "").replace(",", "."));
+      const scrapPercent = finishedMassKg > 0 && Number.isFinite(scrapKg)
+        ? scrapKg / (finishedMassKg + scrapKg)
+        : null;
+      const productionInput = { ...data, leadership, scrapPercent };
+      if (record) await productionService.update(record.id, productionInput, people);
+      else await productionService.create({ ...productionInput, requestId: createRequestId }, people);
       dialog.close(); await refreshProduction(); render(); toast(record ? "Исправления сохранены в обоих листах журнала." : "Запись сохранена в оба листа журнала.", "success");
     } catch (error) { showFormError(form, error); submit.disabled = false; }
   });
